@@ -165,6 +165,13 @@ texts the description provides.
   first deployment, the person's storage on the data partition, the device data from the
   device's list, and the GlassineOS recovery; where the plan keeps another system, its
   recovery stays reachable as the secondary.
+- **FR-012a**: Where the installer makes the partitions (a PC), it gives each the standard
+  partition type for its role, records each one's unique partition ID in the installation
+  record, and writes the system partition's and userdata's IDs into the boot entry's
+  command line as the identity keys of [boot 001](https://github.com/GlassineOS/boot/blob/main/specs/001-deployments/spec.md)
+  (FR-020). No disk goes into a base's or a deployment's file system table. Where a
+  device's partitions have fixed names, its description names them instead and no keys
+  are written. The recovery rebuilds a lost boot entry from the installation record.
 - **FR-013**: The installation is complete only when the device has booted the first
   deployment and it has been accepted (boot 001). Until then, the installer shows the
   installation as unfinished.
