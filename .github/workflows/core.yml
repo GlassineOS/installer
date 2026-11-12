@@ -1,0 +1,30 @@
+name: core
+# the core's tests, lints, every build target, and the description checks
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: tests, lints, descriptions and the schema
+        run: make docker-check
+      - name: Linux, Windows, arm64 and WebAssembly builds
+        run: make docker-targets
+      - name: a pinned copy for every description its repository now holds
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          docker run --rm -u "$(id -u):$(id -g)" -e CARGO_HOME=/w/.cargo-home -v "$PWD":/w -w /w glassine-installer-ci \
+            cargo run -q -p glassine-install -- lock-unpinned devices/lock.toml > unpinned.txt
+          status=0
+          while read -r repo path; do
+            if gh api "repos/$repo/contents/$path" --silent 2>/dev/null; then
+              echo "::error::$repo now has $path: pin its version in devices/lock.toml"
+              status=1
+            else
+              echo "$repo has no $path yet: the copy stays unpinned"
+            fi
+          done < unpinned.txt
+          exit $status
