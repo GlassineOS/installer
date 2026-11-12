@@ -17,33 +17,33 @@ pub struct Snapshot {
     pub mode: String,
     /// Where the installer ran and which of the device's connections it could
     /// use from there (001 FR-019).
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runs_on: Option<RunsOn>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usb: Option<UsbFacts>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fastboot: Option<VarFacts>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub android: Option<PropFacts>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub storage: Option<Storage>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub firmware: Option<Firmware>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cpu: Option<Cpu>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub board: Option<Board>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub network: Option<Network>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hostname: Option<String>,
     /// Operating systems inspecting found.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub systems: Vec<SystemFound>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub glassine: Option<GlassineFacts>,
     /// The installer's own records on the computer for this device.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub installer: Option<InstallerFacts>,
 }
 
@@ -62,7 +62,7 @@ pub struct UsbFacts {
     pub product_id: String,
     #[serde(default)]
     pub interfaces: Vec<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub serial: Option<String>,
 }
 
