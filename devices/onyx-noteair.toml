@@ -19,7 +19,7 @@ device_data = ["gpu-firmware", "sensor-calibration", "modem-firmware", "wifi-fir
 key = "fastboot.var.variant"
 equals = "SDM EMMC"
 required = true
-untried = "the stock boot loader answered this in development notes; not a recorded run, and the GlassineOS boot loader's answer isn't recorded"
+untried = "the stock boot loader answered getvar all with it in development (2026-03-17); not a recorded run, and the GlassineOS boot loader's answer isn't recorded"
 
 [[identity]]
 key = "storage.partition.onyxconfig.size"
@@ -31,7 +31,7 @@ untried = "the Onyx settings partition, 32 MiB, in every layout (device page, pa
 key = "fastboot.var.hw-revision"
 equals = "10000"
 required = false
-untried = "the stock boot loader answered this in development notes; not a recorded run"
+untried = "the stock boot loader answered getvar all with it in development (2026-03-17); not a recorded run"
 
 # ---- install states -----------------------------------------------------------
 # Fastboot can't tell prepared from installed (both have the GlassineOS boot
@@ -43,7 +43,7 @@ id = "stock"
 key = "fastboot.var.product"
 equals = "sdm660"
 mode = "fastboot-stock"
-untried = "the stock boot loader answered this in development notes; not a recorded run"
+untried = "the stock boot loader answered getvar all with it in development (2026-03-17); not a recorded run"
 
 [[states]]
 id = "prepared"
@@ -76,19 +76,15 @@ mode = "glassine"
 id = "fastboot-stock"
 kind = "fastboot"
 usb = { vendor_id = "18d1", product_id = "d00d", interface = "ff-42-03" }
-can = ["identify", "read", "write"]
-restarts_into = ["android", "fastboot"]
-untried = "development notes show it answering getvar; flash hangs there with plain framing, and equal-length framing, reading partitions back and whether its graphical menu lets USB through are not tried"
+can = ["identify", "write"]
+restarts_into = ["android", "fastboot", "ram"]
+untried = "it answered getvar all in development (2026-03-17); flash and boot hang there with plain framing, and the equal-length framing that fixes them on the GlassineOS boot loader is not tried on it"
 
 [[modes.departures]]
 kind = "equal-length-transfers"
 params = { length = 65535, warm-up = "short-command-then-dummy" }
 told_by = { key = "fastboot.var.product", equals = "sdm660" }
-untried = "assumed from the same transfer hang as the GlassineOS boot loader's; not tried on the stock one"
-
-[[modes.departures]]
-kind = "single-variables-only"
-untried = "the GlassineOS boot loader needs it; the stock one answered getvar all once in development notes"
+untried = "flash and boot hang with plain framing as on the GlassineOS boot loader; assumed to work the same way, not tried on the stock one"
 
 # The GlassineOS boot loader's fastboot.
 [[modes]]
@@ -117,6 +113,16 @@ untried = "the device page says getvar works for single variables, not all; not 
 kind = "never-use"
 params = { operation = "boot-image", reason = "booting an image from fastboot rewrites the slot flags on an A/B layout" }
 untried = "seen in development; not a recorded run"
+
+# A GlassineOS environment the stock boot loader starts from memory, for the
+# backup. On the single-slot stock layout booting an image doesn't touch slot
+# flags, so reaching it writes nothing.
+[[modes]]
+id = "ram"
+kind = "glassine-ram"
+can = ["identify", "read"]
+restarts_into = ["fastboot-stock", "android"]
+untried = "the RAM environment isn't built yet"
 
 [[modes]]
 id = "android"
@@ -161,6 +167,27 @@ from = "fastboot-stock"
 to = "android"
 by = "installer"
 untried = "a fastboot reboot of the stock boot loader; not a recorded run"
+
+[[transitions]]
+id = "fastboot-stock-to-ram"
+from = "fastboot-stock"
+to = "ram"
+by = "installer"
+untried = "boots the ram-environment artifact from the stock boot loader; needs the untried equal-length framing, and that boot leaves the single-slot layout's flags alone is read from the boot loader's source, not tried"
+
+[[transitions]]
+id = "ram-to-fastboot-stock"
+from = "ram"
+to = "fastboot-stock"
+by = "installer"
+untried = "the RAM environment isn't built yet"
+
+[[transitions]]
+id = "ram-to-android"
+from = "ram"
+to = "android"
+by = "installer"
+untried = "the RAM environment isn't built yet"
 
 [[transitions]]
 id = "fastboot-stock-to-fastboot"
@@ -221,22 +248,22 @@ class = "never-write"
 [[partitions]]
 select = { name = "abl" }
 class = "replace"
-back_up = { mode = "fastboot-stock", means = "fastboot-fetch", check = "read-back-compare", size = 1048576 }
+back_up = { mode = "ram", means = "glassine-read", check = "read-back-compare", size = 1048576 }
 
 [[partitions]]
 select = { role = "partition-table" }
 class = "replace"
-back_up = { mode = "fastboot-stock", means = "fastboot-fetch", check = "read-back-compare", size = "unknown" }
+back_up = { mode = "ram", means = "glassine-read", check = "read-back-compare", size = "unknown" }
 
 [[partitions]]
 select = { name = "recovery" }
 class = "replace"
-back_up = { mode = "fastboot-stock", means = "fastboot-fetch", check = "read-back-compare", size = 67108864 }
+back_up = { mode = "ram", means = "glassine-read", check = "read-back-compare", size = 67108864 }
 
 [[partitions]]
 select = { names = ["boot", "system", "vendor", "vbmeta", "misc", "boot_a", "system_a", "vendor_a"] }
 class = "back-up"
-back_up = { mode = "fastboot-stock", means = "fastboot-fetch", check = "read-back-compare" }
+back_up = { mode = "ram", means = "glassine-read", check = "read-back-compare" }
 
 [[partitions]]
 select = { names = ["boot_b", "system_b", "vendor_b"] }
@@ -258,6 +285,10 @@ kind = "slot-flags"
 back_up = { with = "role:partition-table" }
 
 # ---- what an installation does ------------------------------------------------
+
+[[artifacts]]
+role = "ram-environment"
+size = "unknown"
 
 [[artifacts]]
 role = "boot-loader"
@@ -339,15 +370,15 @@ states = ["stock", "prepared"]
 id = "back-up"
 job = "install"
 kind = "back-up"
-mode = "fastboot-stock"
+mode = "ram"
 backs_up = ["abl", "role:partition-table", "boot", "recovery", "system", "vendor", "vbmeta", "misc"]
 boot_settings = ["boot-loader", "slot-flags"]
 done = [{ key = "installer.backup-verified", present = true, mode = "installer" }]
-escape.failure = { leaves = "previous-system-starts", way_out = { transition = "fastboot-stock-to-android" } }
-escape.interruption = { leaves = "previous-system-starts", way_out = { transition = "fastboot-stock-to-android" } }
+escape.failure = { leaves = "previous-system-starts", way_out = { transition = "ram-to-android" } }
+escape.interruption = { leaves = "previous-system-starts", way_out = { transition = "ram-to-android" } }
 point_of_no_return = false
 safe_stop = true
-untried = "reading partitions back from the stock boot loader is not tried; if it can't, the backup needs another way"
+untried = "the RAM environment that reads the partitions isn't built yet"
 
 [[steps]]
 id = "replace-boot-loader"
@@ -467,6 +498,7 @@ fastboot-stock = "No way by hand is known for the stock boot loader. Leave the d
 fastboot = "Close the cover, then press the power button and hold it for about 3 seconds while the cover stays closed."
 android = "Start the device normally. To let the installer in, turn on USB debugging in the developer settings."
 emergency = "Needs the emergency-mode cable: let the battery run empty, then connect the cable and start the device."
+ram = "The installer starts this itself from the boot loader; there is no way by hand."
 glassine = "Start the device normally."
 
 [texts.transitions]

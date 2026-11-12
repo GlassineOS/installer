@@ -52,10 +52,10 @@ Afterwards the device:
   needs choose-at-start (a way to pick a slot at start-up, which isn't decided) [untried]
 
 Steps:
-  1. back-up (back-up, in fastboot-stock) [safe stop]
+  1. back-up (back-up, in ram) [safe stop]
      Back up the boot loader, the partition table, the boot, recovery, system and vendor partitions and the boot settings to this computer, and check the backup.
-     if it fails: previous-system-starts via transition fastboot-stock-to-android
-     if cut off after it: previous-system-starts via transition fastboot-stock-to-android
+     if it fails: previous-system-starts via transition ram-to-android
+     if cut off after it: previous-system-starts via transition ram-to-android
   2. replace-boot-loader (write-boot-loader, in fastboot-stock) [untried, point of no return, safe stop]
      Replace the boot loader with GlassineOS's. From here there is no way back without the backup, and if this step fails only the emergency-mode cable helps.
      if it fails: special-hardware (emergency-cable) via transition cable-to-emergency

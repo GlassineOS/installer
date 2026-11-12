@@ -288,7 +288,7 @@
     {
       "id": "back-up",
       "kind": "back-up",
-      "mode": "fastboot-stock",
+      "mode": "ram",
       "done": "false",
       "writes": false,
       "tried": false,
@@ -297,12 +297,12 @@
       "on_failure": {
         "leaves": "previous-system-starts",
         "hardware": null,
-        "way_out": "transition fastboot-stock-to-android"
+        "way_out": "transition ram-to-android"
       },
       "on_interruption": {
         "leaves": "previous-system-starts",
         "hardware": null,
-        "way_out": "transition fastboot-stock-to-android"
+        "way_out": "transition ram-to-android"
       }
     },
     {

@@ -96,7 +96,7 @@ fn one_test_per_condition() {
 #[test]
 fn verified_or_untried() {
     na(
-        "required = false\nuntried = \"the stock boot loader answered this in development notes; not a recorded run\"",
+        "required = false\nuntried = \"the stock boot loader answered getvar all with it in development (2026-03-17); not a recorded run\"",
         "required = false",
         "identity[2]",
     );
@@ -150,7 +150,7 @@ fn mode_kind_the_backend_lacks() {
     na(
         "id = \"glassine\"\nkind = \"glassine-usb\"",
         "id = \"glassine\"\nkind = \"local\"",
-        "modes[4].kind",
+        "modes[5].kind",
     );
 }
 
@@ -177,7 +177,7 @@ fn departure_for_another_mode_kind() {
     na(
         "can = [\"identify\"]\nrestarts_into = [\"fastboot-stock\", \"emergency\"]",
         "can = [\"identify\"]\nrestarts_into = [\"fastboot-stock\", \"emergency\"]\ndepartures = [{ kind = \"fresh-boot-only\", untried = \"x\" }]",
-        "modes[2].departures[0].kind",
+        "modes[3].departures[0].kind",
     );
 }
 
@@ -198,8 +198,8 @@ fn unknown_role() {
 #[test]
 fn backup_means_of_another_mode() {
     na(
-        "back_up = { mode = \"fastboot-stock\", means = \"fastboot-fetch\", check = \"read-back-compare\", size = 1048576 }",
-        "back_up = { mode = \"fastboot-stock\", means = \"block-read\", check = \"read-back-compare\", size = 1048576 }",
+        "back_up = { mode = \"ram\", means = \"glassine-read\", check = \"read-back-compare\", size = 1048576 }",
+        "back_up = { mode = \"ram\", means = \"block-read\", check = \"read-back-compare\", size = 1048576 }",
         "partitions[1].back_up.means",
     );
 }
@@ -297,7 +297,7 @@ fn installer_transition_needs_a_restart() {
     na(
         "restarts_into = [\"glassine\", \"android\", \"emergency\"]",
         "restarts_into = [\"glassine\", \"emergency\"]",
-        "transitions[5].by",
+        "transitions[8].by",
     );
 }
 
@@ -320,7 +320,7 @@ fn resize_says_whether_it_destroys() {
 #[test]
 fn replace_names_its_backup() {
     na(
-        "class = \"replace\"\nback_up = { mode = \"fastboot-stock\", means = \"fastboot-fetch\", check = \"read-back-compare\", size = 1048576 }",
+        "class = \"replace\"\nback_up = { mode = \"ram\", means = \"glassine-read\", check = \"read-back-compare\", size = 1048576 }",
         "class = \"replace\"",
         "partitions[1].back_up",
     );
@@ -329,8 +329,8 @@ fn replace_names_its_backup() {
 #[test]
 fn backup_mode_exists() {
     na(
-        "back_up = { mode = \"fastboot-stock\", means = \"fastboot-fetch\", check = \"read-back-compare\", size = 67108864 }",
-        "back_up = { mode = \"edl\", means = \"fastboot-fetch\", check = \"read-back-compare\", size = 67108864 }",
+        "back_up = { mode = \"ram\", means = \"glassine-read\", check = \"read-back-compare\", size = 67108864 }",
+        "back_up = { mode = \"edl\", means = \"glassine-read\", check = \"read-back-compare\", size = 67108864 }",
         "partitions[3].back_up.mode",
     );
 }
@@ -338,6 +338,17 @@ fn backup_mode_exists() {
 #[test]
 fn step_beyond_its_rule() {
     na("writes = [\"boot_b\"]", "writes = [\"persist\"]", "steps[3].writes[0]");
+}
+
+/// A full backup reads every partition: never-write forbids writing, not reading.
+#[test]
+fn never_write_partitions_may_be_backed_up() {
+    let t = mutate(
+        &noteair(),
+        "backs_up = [\"abl\", \"role:partition-table\",",
+        "backs_up = [\"xbl\", \"modemst1\", \"abl\", \"role:partition-table\",",
+    );
+    valid(&t);
 }
 
 #[test]
