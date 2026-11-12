@@ -1,0 +1,79 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-or-later
+# web/tools/vendor: the pages' vendored files, kept byte for byte as their source has them.
+#
+#   web/tools/vendor check              every vendored file against its SHA256SUMS (offline; make web-vendor-check)
+#   web/tools/vendor libs               fetch Preact and htm at the pinned versions (npm pack, tarballs checked)
+#   web/tools/vendor interleaf UI_DIR   copy the Interleaf web form from a GlassineOS/ui checkout (its web/)
+#
+# After libs or interleaf, review the diff and commit SHA256SUMS and SOURCE with the files.
+set -eu
+WEB=$(cd "$(dirname "$0")/.." && pwd)
+
+# Pinned: name, version, sha256 of the npm tarball, the files taken from it (tarball path=vendored name).
+PREACT_VERSION=10.29.8
+PREACT_TGZ=b18cb0a457f3d43c7bb30391a74ade7d13e03bc6e77915e061c70c0fe1123299
+HTM_VERSION=3.1.1
+HTM_TGZ=2425b9bee11409177bcabc7f32e319926fc6690c1701c0b257c88bdff2d5ba90
+
+sums() { (cd "$1" && find . -type f ! -name SHA256SUMS | LC_ALL=C sort | sed 's|^\./||' | xargs sha256sum) > "$1/SHA256SUMS"; }
+
+check() {
+	for d in vendor interleaf; do
+		(cd "$WEB/$d" && sha256sum -c SHA256SUMS >/dev/null) || { echo "web/$d: a file differs from SHA256SUMS" >&2; exit 1; }
+		listed=$(cut -c67- "$WEB/$d/SHA256SUMS" | LC_ALL=C sort)
+		present=$(cd "$WEB/$d" && find . -type f ! -name SHA256SUMS | sed 's|^\./||' | LC_ALL=C sort)
+		[ "$listed" = "$present" ] || { echo "web/$d: files not in SHA256SUMS, or listed and missing" >&2; exit 1; }
+	done
+	echo "web/vendor, web/interleaf: as recorded"
+}
+
+fetch() { # NAME VERSION SHA256 DIR
+	(cd "$4" && npm pack --silent "$1@$2" >/dev/null)
+	echo "$3  $4/$1-$2.tgz" | sha256sum -c >/dev/null
+	mkdir "$4/$1" && tar xzf "$4/$1-$2.tgz" -C "$4/$1"
+}
+
+libs() {
+	tmp=$(mktemp -d)
+	trap 'rm -rf "$tmp"' EXIT
+	fetch preact "$PREACT_VERSION" "$PREACT_TGZ" "$tmp"
+	fetch htm "$HTM_VERSION" "$HTM_TGZ" "$tmp"
+	out=$WEB/vendor
+	find "$out" -type f -delete
+	cp "$tmp/preact/package/dist/preact.module.js" "$out/preact.module.js"
+	cp "$tmp/preact/package/hooks/dist/hooks.module.js" "$out/hooks.module.js"
+	cp "$tmp/preact/package/LICENSE" "$out/LICENSE.preact"
+	cp "$tmp/htm/package/dist/htm.module.js" "$out/htm.module.js"
+	cp "$tmp/htm/package/LICENSE" "$out/LICENSE.htm"
+	cat > "$out/SOURCE" <<EOF
+preact $PREACT_VERSION (npm, MIT, LICENSE.preact): dist/preact.module.js, hooks/dist/hooks.module.js
+  tarball sha256 $PREACT_TGZ
+htm $HTM_VERSION (npm, Apache-2.0, LICENSE.htm): dist/htm.module.js
+  tarball sha256 $HTM_TGZ
+Written by web/tools/vendor libs; the files are as the tarballs have them.
+EOF
+	sums "$out"
+}
+
+interleaf() {
+	ui=$(cd "$1" && pwd)
+	[ -f "$ui/web/tokens.css" ] && [ -f "$ui/web/bundle.css" ] || { echo "$ui has no web/ form" >&2; exit 1; }
+	commit=$(git -C "$ui" rev-parse HEAD)
+	[ -z "$(git -C "$ui" status --porcelain -- web)" ] || { echo "$ui/web has changes not in $commit" >&2; exit 1; }
+	out=$WEB/interleaf
+	find "$out" -mindepth 1 -delete
+	cp -r "$ui/web/." "$out/"
+	cat > "$out/SOURCE" <<EOF
+GlassineOS/ui $commit, web/ (the Interleaf web form, contract version 1), copied whole.
+Fonts: SIL Open Font License 1.1, each folder's OFL.txt. Written by web/tools/vendor interleaf.
+EOF
+	sums "$out"
+}
+
+case "${1:-}" in
+	check) check ;;
+	libs) libs ;;
+	interleaf) [ $# -eq 2 ] || { echo "usage: web/tools/vendor interleaf UI_DIR" >&2; exit 2; }; interleaf "$2" ;;
+	*) sed -n '3,9p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
+esac

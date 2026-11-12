@@ -1,0 +1,3 @@
+# vendored files stay byte for byte (web/tools/vendor check)
+web/interleaf/** -text
+web/vendor/** -text

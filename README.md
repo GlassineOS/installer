@@ -31,6 +31,21 @@ spec is [`specs/001-install-from-stock`](specs/001-install-from-stock/spec.md).
 For devices: on a computer connected to them, from Linux, Windows or a browser. For a PC:
 on the PC itself, started from removable media.
 
+## The screens
+
+`web/` holds the installer's screens as static pages (decision 0015): Preact and htm as plain
+modules (`web/vendor/`), the Interleaf web form from GlassineOS/ui (`web/interleaf/`, its source
+commit in `SOURCE`), no build step, Chromium only. The design they follow is
+`designs/installer/` in GlassineOS/ui. They read the core's records through one module,
+`web/records/index.js`; today that is the core's own output for its test facts (the plan golden
+files and `web/fixtures/reports/`). They write nothing to any machine yet.
+
+```
+node web/test/serve.js          # http://127.0.0.1:8790/web/  (#/plan?plan=noteair-cable-yes)
+make docker-web-check           # every screen with every record, in headless Chromium
+web/tools/vendor check|libs|interleaf UI_DIR
+```
+
 ## License
 
 GPL-2.0-or-later (`LICENSE`).
