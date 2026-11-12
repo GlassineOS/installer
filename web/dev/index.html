@@ -1,0 +1,65 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: GPL-2.0-or-later -->
+<!-- A developer's page to drive the browser build by hand: inspect over WebUSB,
+     then check and plan from the facts. Not the installer's screens.
+     Build: make web-dev; serve: python3 -m http.server -d web/dev 8000;
+     open http://localhost:8000 in a Chromium-based browser. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Installer core (dev)</title>
+<style>
+  body { font: 15px/1.4 system-ui, sans-serif; margin: 16px; max-width: 60rem; background: #fff; color: #000; }
+  textarea, pre { width: 100%; box-sizing: border-box; font: 13px ui-monospace, monospace; }
+  textarea { height: 12rem; }
+  pre { white-space: pre-wrap; border: 1px solid #000; padding: 8px; min-height: 4rem; }
+  button { font: inherit; padding: 6px 12px; margin: 4px 4px 4px 0; }
+</style>
+</head>
+<body>
+<h1>Installer core (dev)</h1>
+<p>Inspect reads only (getvar) and needs the device in a fresh start of its boot loader's
+fastboot mode. Only with the device owner's go.</p>
+<p>
+  <label><input type="checkbox" id="reboot"> restart the device at the end</label><br>
+  <button id="inspect">Inspect over USB</button>
+  <button id="check">Check</button>
+  <button id="plan">Plan (dry run)</button>
+</p>
+<h2>Facts</h2>
+<textarea id="facts" spellcheck="false" placeholder="facts snapshot JSON: inspect, or paste one"></textarea>
+<h2>Plan answers</h2>
+<textarea id="answers" spellcheck="false">{"choices": {}, "hardware": {}, "developer": false}</textarea>
+<h2>Record</h2>
+<pre id="out"></pre>
+<script type="module">
+  import init, { inspect, check, plan } from "./pkg/glassine_installer_web.js";
+  await init();
+  const $ = (id) => document.getElementById(id);
+  const show = (text, ms) => {
+    let shown = text;
+    try { shown = JSON.stringify(JSON.parse(text), null, 1); } catch (_) {}
+    $("out").textContent = (ms === undefined ? "" : `(${ms.toFixed(0)} ms)\n`) + shown;
+  };
+  const run = async (f) => {
+    const t0 = performance.now();
+    try { return [await f(), performance.now() - t0]; }
+    catch (e) { show(String(e), performance.now() - t0); return [null]; }
+  };
+  $("inspect").onclick = async () => {
+    show("choose the device ...");
+    const [facts, ms] = await run(() => inspect($("reboot").checked));
+    if (facts) { $("facts").value = JSON.stringify(JSON.parse(facts), null, 1); show(facts, ms); }
+  };
+  $("check").onclick = async () => {
+    const [r, ms] = await run(() => check($("facts").value));
+    if (r) show(r, ms);
+  };
+  $("plan").onclick = async () => {
+    const [r, ms] = await run(() => plan($("facts").value, $("answers").value));
+    if (r) show(r, ms);
+  };
+</script>
+</body>
+</html>

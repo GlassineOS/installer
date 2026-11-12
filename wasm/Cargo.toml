@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+[package]
+name = "glassine-installer-web"
+description = "The GlassineOS installer in the browser: inspect over WebUSB, check and plan, as versioned JSON records"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+# The same embedding of the shipped description copies as the command line's.
+build = "../cli/build.rs"
+
+[dependencies]
+glassine-installer = { path = "../core" }
+serde_json = "1"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+glassine-installer-usb = { path = "../usb" }
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
