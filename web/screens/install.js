@@ -15,6 +15,7 @@ export function Install({ s, state }) {
   const ponrAt = views.findIndex((v) => v.ponr);
   const dflt = st === 'ponr' && ponrAt >= 0 ? ponrAt : Math.min(Math.max(1, Math.floor(n / 2)), n - 1);
   const stopped = st === 'stopped';
+  const undo = p.backup.choice !== 'off';
   let at = Math.min(Math.max(s.num('at', dflt), stopped ? 1 : 0), stopped ? n : n - 1);
   // A stopped installation stopped after a step the plan names a safe stop.
   if (stopped && !p.steps[at - 1].safe_stop) at = p.steps.findIndex((x, i) => i >= at - 1 && x.safe_stop) + 1 || n;
@@ -35,14 +36,14 @@ export function Install({ s, state }) {
         <span class="il-label">Stopped at a safe point</span>
         <span class="ins-card__title">Stopped after step ${at}, ${title(cur)}</span>
         <p>${p.steps[at - 1].on_interruption ? stepViews(s)[at - 1].interruption : ''}</p>
-        <p class="ins-small ins-soft">Resume carries on with the next step. Undo puts the backup back. Close leaves it as it is: the next time you start the installer, it offers both again.</p>
+        <p class="ins-small ins-soft">Resume carries on with the next step. ${undo ? 'Undo puts the backup back. ' : 'There is no undo: the backup is off. '}Close leaves it as it is: the next time you start the installer, it offers ${undo ? 'both' : 'to resume'} again.</p>
       </div>`}
     <${Steps} views=${views} mode="progress" at=${at} pct=${pct} stopped=${stopped} />
     <${Actions}
-      next=${stopped ? (nxt ? `Your choice: resume with step ${at + 1}, ${title(nxt)}, or undo.` : 'Your choice: resume, or undo.') : nxt ? `Step ${at + 2}: ${title(nxt)}.` : 'The restart into GlassineOS.'}
-      out=${stopped ? `Undo puts the backup back: ${s.m.the} is as it was before the installation.` : st === 'stopping' ? `The installer stops ${afterSafe}, then offers to resume or undo.` : `Stop at the next safe point: ${afterSafe}. Then resume or undo.`}
+      next=${stopped ? (nxt ? `Your choice: resume with step ${at + 1}, ${title(nxt)}${undo ? ', or undo' : ''}.` : `Your choice: resume${undo ? ', or undo' : ''}.`) : nxt ? `Step ${at + 2}: ${title(nxt)}.` : 'The restart into GlassineOS.'}
+      out=${stopped ? (undo ? `Undo puts the backup back: ${s.m.the} is as it was before the installation.` : 'Close the installer: it offers to resume the next time. The backup is off, so there is no undo.') : st === 'stopping' ? `The installer stops ${afterSafe}, then offers to resume${undo ? ' or undo' : ''}.` : `Stop at the next safe point: ${afterSafe}. Then resume${undo ? ' or undo' : ''}.`}
       buttons=${stopped
-        ? [{ label: 'Resume', href: s.link('install', { state: 'midway', at }), primary: true }, { label: 'Undo: put the backup back', href: s.link('done', { state: 'stock' }) }, { label: 'Close', href: s.link('resume', { at }), push: true }]
+        ? [{ label: 'Resume', href: s.link('install', { state: 'midway', at }), primary: true }, ...(undo ? [{ label: 'Undo: put the backup back', href: s.link('done', { state: 'stock' }) }] : []), { label: 'Close', href: s.link('resume', { at }), push: true }]
         : [{ label: st === 'stopping' ? `Stopping ${afterSafe}…` : 'Stop at the next safe point', href: st === 'stopping' ? undefined : s.link('install', { state: 'stopping', at }), disabled: st === 'stopping', id: 'stop' },
           ...(nxt ? [] : [{ label: 'Continue', href: s.link('verify'), primary: true }])]} />
   </${Page}>`;

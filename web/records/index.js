@@ -26,12 +26,16 @@ export const GOLDEN_PLANS = {
   'noteair-cable-no': { machine: 'noteair-stock-fastboot', input: { hardware: { 'emergency-cable': false }, developer: true } },
   'pc-windows-keep': { machine: 'pc-windows', input: {} },
   'pc-windows-replace': { machine: 'pc-windows', input: { choices: { 'systems.1': 'replace' }, developer: true } },
+  'noteair-no-backup': { machine: 'noteair-stock-fastboot', input: { choices: { backup: 'off' }, hardware: { 'emergency-cable': true }, developer: true } },
+  'pc-windows-replace-no-backup': { machine: 'pc-windows', input: { choices: { 'systems.1': 'replace', backup: 'off' }, developer: true } },
+  'pc-two-disks-first': { machine: 'pc-two-disks', input: { developer: true } },
+  'pc-two-disks-second': { machine: 'pc-two-disks', input: { choices: { 'target-disk': 'disk1' }, developer: true } },
 };
 
 // The check reports there are records of (one per facts snapshot of the core's tests).
 export const REPORTS = [
   'noteair-stock-fastboot', 'noteair-stock-adb', 'noteair-prepared-fastboot', 'noteair-conflict-fastboot',
-  'unknown-fastboot', 'pc-windows', 'pc-windows-other-model',
+  'unknown-fastboot', 'pc-windows', 'pc-windows-other-model', 'pc-two-disks',
 ];
 
 const cache = new Map();
@@ -50,10 +54,12 @@ export function normalInput(input = {}) {
   return { choices: { ...(input.choices || {}) }, hardware: { ...(input.hardware || {}) }, developer: !!input.developer };
 }
 
-// A choice left at its default is the same input as the choice not given.
-async function defaults() {
+// A choice left at its default is the same input as the choice not given. Defaults are per
+// machine: the backup's place, for one, is the stick on a PC and this computer for a device.
+async function defaults(machine) {
   const d = {};
-  for (const name of Object.keys(GOLDEN_PLANS)) {
+  for (const [name, g] of Object.entries(GOLDEN_PLANS)) {
+    if (g.machine !== machine) continue;
     for (const c of (await golden(name)).choices) if (c.default) d[c.choice] = c.value;
   }
   return d;
@@ -73,7 +79,7 @@ export async function inspect(machine) {
 }
 
 export async function plan(machine, input) {
-  const want = normalInput(input), dflt = await defaults();
+  const want = normalInput(input), dflt = await defaults(machine);
   for (const [name, g] of Object.entries(GOLDEN_PLANS)) {
     if (g.machine === machine && sameInput(normalInput(g.input), want, dflt)) return golden(name);
   }

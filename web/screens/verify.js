@@ -9,7 +9,7 @@ import { html, Admonition, Actions, Page, Owed, Tick } from '../lib/parts.js';
 export function Verify({ s, state }) {
   const p = s.plan;
   if (!p) return html`<${Page} s=${s} step="verify" eyebrow="Verify" title="No plan"><p><a class="il-link" href=${s.link('plan')}>Back to the plan</a></p></${Page}>`;
-  const failed = state === 'notaccepted', pc = s.m.kind === 'pc';
+  const failed = state === 'notaccepted', pc = s.m.kind === 'pc', undo = p.backup.choice !== 'off';
   const has = (id) => p.capabilities.some((c) => c.id === id && c.status === 'have');
   const fallback = has('fallback-boot'), trial = has('trial-boot');
   const back = fallback ? `${s.m.the.charAt(0).toUpperCase() + s.m.the.slice(1)} went back by itself to the start it had before.` : null;
@@ -24,8 +24,8 @@ export function Verify({ s, state }) {
       lead=${failed ? 'The installation isn’t done: GlassineOS is written, but its first start wasn’t accepted.' : 'GlassineOS is written. The installation counts as done only once its first start has been accepted.'}>
     <div class="ins-row"><span class="ins-tag ins-tag--dashed">Not finished yet</span><span class="ins-small ins-soft">${pc ? 'This screen comes back on GlassineOS’s first start and follows it there.' : `Keep ${s.m.the} connected. This page follows its start.`}</span></div>
     ${failed ? html`<${Admonition} kind="warning" seal="G" label="Not accepted" title="GlassineOS didn’t start properly" id="notaccepted">
-      <p>${back || html`<${Owed}>Where it is now: the plan doesn’t say how a start that isn’t accepted ends</${Owed}>`} Nothing is lost: the backup and the written GlassineOS are still there.</p>
-      <p><strong>Way out:</strong> try again, or undo the installation.</p>
+      <p>${back || html`<${Owed}>Where it is now: the plan doesn’t say how a start that isn’t accepted ends</${Owed}>`} Nothing is lost: ${undo ? 'the backup and ' : ''}the written GlassineOS ${undo ? 'are' : 'is'} still there.</p>
+      <p><strong>Way out:</strong> try again${undo ? ', or undo the installation' : ''}.</p>
     </${Admonition}>` : null}
     <ol class="ins-plan" aria-label="The first start">${P.map((ph, i) => {
       const st = i < at ? 'done' : i === at ? 'current' : 'todo';
@@ -35,9 +35,9 @@ export function Verify({ s, state }) {
     })}</ol>
     <${Actions}
       next=${failed ? 'Try again restarts into GlassineOS once more.' : 'Once the start is accepted: done.'}
-      out=${failed ? `Undo puts the backup back: ${s.m.the} is as it was before the installation.` : fallback ? `If the start isn’t accepted, ${s.m.the} goes back by itself; this page then offers to try again or undo.` : 'If the start isn’t accepted, this page offers to try again or undo.'}
+      out=${failed ? (undo ? `Undo puts the backup back: ${s.m.the} is as it was before the installation.` : 'Close the installer: GlassineOS stays written. The backup was off, so there is no undo.') : fallback ? `If the start isn’t accepted, ${s.m.the} goes back by itself; this page then offers to try again${undo ? ' or undo' : ''}.` : `If the start isn’t accepted, this page offers to try again${undo ? ' or undo' : ''}.`}
       buttons=${failed
-        ? [{ label: 'Try again', href: s.link('verify'), primary: true }, { label: 'Undo the installation', href: s.link('done', { state: 'stock' }) }]
+        ? [{ label: 'Try again', href: s.link('verify'), primary: true }, ...(undo ? [{ label: 'Undo the installation', href: s.link('done', { state: 'stock' }) }] : [])]
         : []} />
   </${Page}>`;
 }

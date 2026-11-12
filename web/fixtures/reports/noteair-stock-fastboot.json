@@ -131,14 +131,7 @@
       "stock system"
     ],
     "backs_up": [
-      "abl",
-      "partition table",
-      "boot",
-      "recovery",
-      "system",
-      "vendor",
-      "vbmeta",
-      "misc"
+      "disk 0 (whole disk)"
     ],
     "replaces": [
       "abl",
@@ -153,8 +146,10 @@
     "loses_files": [
       "userdata"
     ],
-    "untouched_partitions": 40,
-    "space_at_least": 4196466688,
+    "untouched_partitions": 0,
+    "imaged_partitions": 45,
+    "backup_off": false,
+    "space_at_least": 8600000000,
     "space_exact": false
   }
 }

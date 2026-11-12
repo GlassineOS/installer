@@ -29,7 +29,7 @@ export function Fate({ f }) {
 
 export const PartitionDetails = ({ plan }) => html`<details class="il-details"><summary>Every part of the storage the plan names</summary>
   <${Table} mono rows=${plan.partitions.map((x) => [x.partition, `${x.class}: ${x.actions.join(', ')}${x.size !== null ? ' · ' + human(x.size) : ''}${x.loses_files ? ' · files lost' : ''}`])} />
-  <p class="ins-small ins-soft">${plan.untouched_partitions} other partitions are not touched.</p>
+  <p class="ins-small ins-soft">${plan.imaged_partitions ? `${plan.imaged_partitions} other partitions are only read, into the backup; ` : ''}${plan.untouched_partitions} ${plan.imaged_partitions ? '' : 'other partitions '}are not touched.</p>
 </details>`;
 
 export function EraseNote({ s, e, extra, children }) {
@@ -45,8 +45,10 @@ export function EraseNote({ s, e, extra, children }) {
 function fateOfSummary(s) {
   const p = s.report.plan;
   return {
-    keep: [...p.keeps.map((x) => `${systemView(x).display}: kept, and it still starts`), `${p.untouched_partitions} other parts of the storage, not touched`],
-    backup: [`${p.backs_up.length} parts of the storage`],
+    keep: [...p.keeps.map((x) => `${systemView(x).display}: kept, and it still starts`),
+      ...(p.imaged_partitions && !p.backup_off ? [`${p.imaged_partitions} other parts of the storage: only read, into the backup`] : []),
+      ...(p.untouched_partitions ? [`${p.untouched_partitions} other parts of the storage, not touched`] : [])],
+    backup: p.backup_off ? ['No disk: the backup is off'] : p.backs_up.map((x) => cap(x.replace(/ \(whole disk\)$/, ', whole'))),
     replace: p.replaces.length ? [`${p.replaces.length} parts of the storage, written anew`] : ['Nothing'],
     create: ['GlassineOS', `${p.creates.length} new parts of the storage`],
   };
