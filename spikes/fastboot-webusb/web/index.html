@@ -1,0 +1,22 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>fastboot over WebUSB (spike)</title>
+<style>body{font:16px/1.5 system-ui,sans-serif;max-width:40rem;margin:2rem auto;padding:0 1rem}pre{background:#eee;padding:1rem;white-space:pre-wrap}</style>
+<h1>fastboot over WebUSB</h1>
+<p>Spike: reads fastboot variables with the Rust core compiled to WebAssembly. Read-only: it only sends <code>getvar</code>.</p>
+<p><input id="vars" value="product version-bootloader current-slot unlocked serialno" size="50"></p>
+<p><button id="go">Choose a fastboot device and read</button></p>
+<pre id="out">(nothing yet)</pre>
+<script type="module">
+import init, { read_vars } from "./pkg/fbspike.js";
+await init();
+const out = document.getElementById("out");
+out.textContent = navigator.usb ? "ready (core loaded, WebUSB present)" : "This browser has no WebUSB (use a Chromium-based browser over https or localhost).";
+document.getElementById("go").onclick = async () => {
+  out.textContent = "…";
+  const t0 = performance.now();
+  try { out.textContent = await read_vars(document.getElementById("vars").value) + `\n(${Math.round(performance.now()-t0)} ms)`; }
+  catch (e) { out.textContent = "error: " + e; }
+};
+</script>

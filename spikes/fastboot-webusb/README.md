@@ -1,0 +1,69 @@
+# Spike: fastboot over WebUSB from one Rust core
+
+Decision [0015](https://docs.glassine.org/decisions/0015-installer-stack/) owes two spikes
+before the core is built on them. This directory holds the first one and the notes of the
+second. Throwaway code: it proves the stack, it is not the installer.
+
+**Read-only by construction:** the only fastboot command is `getvar`. A variable name with
+`:`, white space or control characters is refused before anything is sent (tested).
+
+## What it is
+
+- `src/lib.rs`: the fastboot reply parser, `getvar`, a `Transport` trait, and one nusb
+  transport used both natively and in the browser. A `read_vars` entry point for the
+  browser (wasm-bindgen).
+- `src/main.rs`: `fbspike VAR...`, the native tool.
+- `web/index.html`: one button (WebUSB needs a user gesture), the variables, the result
+  and the time it took.
+- `Dockerfile`: the toolchain (Rust with the Windows, arm64-musl and wasm targets,
+  wasm-bindgen-cli matching `Cargo.lock`).
+
+## Build
+
+```sh
+docker build -t glassine-installer-spike:fastboot .
+docker run --rm -u 0 -v "$PWD":/w -w /w glassine-installer-spike:fastboot sh -c '
+  apk add -q mingw-w64-gcc
+  cargo test
+  cargo build --release --bin fbspike                                  # Linux, static
+  cargo build --release --bin fbspike --target x86_64-pc-windows-gnu   # fbspike.exe
+  cargo build --release --lib --target wasm32-unknown-unknown
+  wasm-bindgen --target web --out-dir web/pkg target/wasm32-unknown-unknown/release/fbspike.wasm'
+python3 -m http.server -d web 8000    # then http://localhost:8000 in a Chromium-based browser
+```
+
+## Results
+
+| Check | Result |
+|---|---|
+| Protocol tests (fake transport: OKAY, INFO/TEXT then OKAY, FAIL, refusals, malformed) | 5/5 pass |
+| Same source compiles for Linux x86-64 musl, Windows x86-64, arm64 musl, wasm32 | yes, no target-specific code but the entry points |
+| Linux binary | static, 634 KB; on a host with no fastboot device it enumerates and says so (exit 2) |
+| Windows binary | 466 KB, cross-built; not run (no Windows machine) |
+| Browser | wasm 222 KB; headless Chromium 156 loads the core and finds `navigator.usb` |
+| A real fastboot device, native and in the browser | **owed**: needs a device in fastboot mode |
+
+What the API costs: on wasm only the async calls exist, and web-sys's WebUSB bindings need
+`--cfg=web_sys_unstable_apis` (`.cargo/config.toml`). Natively the same async code runs
+under a trivial executor (`pollster`), and opening uses the blocking calls. Neither leaks
+into the protocol code.
+
+## Spike 2: Windows USB drivers (notes; needs a Windows machine)
+
+WebUSB and the native tool on Windows both need the device's interface bound to WinUSB.
+Windows binds it on its own only when the device says it is WinUSB-compatible through
+Microsoft OS descriptors; otherwise the person needs a driver (Windows Update's "Android
+bootloader interface", or a vendor's). A wrong driver (libusb/libwdi) blocks WebUSB.
+
+- **Our own USB functions** (the GlassineOS recovery, developer mode, any installer
+  endpoint on the device) are Linux gadgets, and configfs gadgets can send OS descriptors
+  with a compatible id (`os_desc`, `compatible_id`; [kernel ABI][cfs]). So those can be
+  driver-free on Windows by design.
+- **Vendor boot loaders** (fastboot in the Note Air's ABL) send what they send. Whether
+  Windows binds WinUSB to the Note Air's fastboot without a driver is the test to run.
+  If not, the installer has to detect the missing driver and explain it.
+
+To run on Windows: `fbspike.exe product version-bootloader` with the device in fastboot
+mode, before and after installing the driver; and the web page in Edge or Chrome.
+
+[cfs]: https://kernel.org/doc/Documentation/ABI/testing/configfs-usb-gadget
