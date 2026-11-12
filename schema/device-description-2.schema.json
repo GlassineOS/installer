@@ -1036,8 +1036,6 @@
             "description": "the most any job may do",
             "enum": [
               "never-write",
-              "read",
-              "back-up",
               "replace",
               "create",
               "resize",
@@ -3115,14 +3113,6 @@
       {
         "doc": "never written; steps may read it and back it up",
         "id": "never-write"
-      },
-      {
-        "doc": "steps may read it and back it up",
-        "id": "read"
-      },
-      {
-        "doc": "steps may read it and back it up",
-        "id": "back-up"
       },
       {
         "doc": "steps may back it up and write it",
