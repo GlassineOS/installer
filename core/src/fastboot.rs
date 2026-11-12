@@ -49,6 +49,9 @@ pub enum FbError {
     /// started (a departure's fresh-boot condition), or the answers stopped
     /// agreeing during the session.
     NotFresh(String),
+    /// With plain framing, the device's answers don't agree with each other,
+    /// and no description says how else to talk to it.
+    Disagree(String),
 }
 
 impl fmt::Display for FbError {
@@ -60,6 +63,7 @@ impl fmt::Display for FbError {
             FbError::Malformed(b) => write!(f, "malformed reply: {b:02x?}"),
             FbError::Refused(v) => write!(f, "refused before sending: {v:?} is not a plain read"),
             FbError::NotFresh(why) => write!(f, "not a fresh start of the mode ({why})"),
+            FbError::Disagree(why) => write!(f, "its answers don't agree ({why}), and no device description says how to talk to it"),
         }
     }
 }
@@ -197,8 +201,17 @@ impl<T: Transport> Session<T> {
     pub async fn check_product(&mut self, when: &str) -> Result<(), FbError> {
         match self.getvar("product").await {
             Ok(p) if p == self.product => Ok(()),
-            Err(FbError::Timeout(e)) => Err(FbError::Timeout(e)),
-            r => Err(FbError::NotFresh(format!("{when}: product read {r:?}, the opening said {:?}", self.product))),
+            Err(e) => Err(e),
+            // After a warm-up, a different answer means the device wasn't in
+            // the state the warm-up needs. With plain framing there was no
+            // warm-up to judge: its answers just don't agree.
+            Ok(p) => {
+                let why = format!("{when}: product read {p:?}, the opening said {:?}", self.product);
+                Err(match self.framing {
+                    Framing::EqualLength { .. } => FbError::NotFresh(why),
+                    Framing::Plain => FbError::Disagree(why),
+                })
+            }
         }
     }
 

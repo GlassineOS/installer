@@ -238,6 +238,12 @@ fn the_glassine_boot_loader_gets_equal_length_framing_too() {
     covers_fixture(&got, "noteair-prepared-fastboot");
     no_serial(&got);
     only_reads(&sim.log, false);
+    let ds = descriptions();
+    let refs: Vec<&Description> = ds.iter().collect();
+    let live = serde_json::to_value(recognize(&refs, &got.snapshot).outcome).unwrap();
+    let fixture = serde_json::to_value(recognize(&refs, &facts("noteair-prepared-fastboot")).outcome).unwrap();
+    assert_eq!(live, fixture);
+    assert_eq!(live["result"], "match", "{live}");
 }
 
 #[test]
@@ -249,8 +255,8 @@ fn plain_framing_would_have_failed_on_the_note_air() {
     sim.vars.insert("product".into(), "some-board".into());
     let got = run(&mut sim);
     // `product` read a second time plain is misread as `getvar` and FAILs:
-    // refused, no snapshot.
-    assert!(matches!(got, Err(InspectError::NotFresh(_))), "{got:?}");
+    // refused, no snapshot, and not called "not fresh" (there was no warm-up).
+    assert!(matches!(&got, Err(InspectError::Device(w)) if w.contains("don't agree")), "{got:?}");
 }
 
 #[test]
