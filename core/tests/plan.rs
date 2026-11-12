@@ -153,7 +153,7 @@ fn the_plan_checks_each_partition_against_its_rule() {
     let p = plan(&refs, &f, &recognize(&refs, &f), &input(&[("systems.1", "replace")], &[], true));
     assert_eq!(p.status, Status::Refused);
     assert!(
-        p.reasons.iter().any(|r| r.contains("disk 0 partition 1") && r.contains("back-up")),
+        p.reasons.iter().any(|r| r.contains("disk 0 partition 1") && r.contains("never-write")),
         "{:?}",
         p.reasons
     );

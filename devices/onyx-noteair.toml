@@ -259,7 +259,7 @@ class = "replace"
 
 [[partitions]]
 select = { names = ["boot", "system", "vendor", "vbmeta", "misc", "boot_a", "system_a", "vendor_a"] }
-class = "back-up"
+class = "never-write"
 
 [[partitions]]
 select = { names = ["boot_b", "system_b", "vendor_b"] }
@@ -274,7 +274,7 @@ destroys = true
 # partition table and every partition as one image, about 8.6 GB compressed.
 [[partitions]]
 select = { role = "disk" }
-class = "back-up"
+class = "never-write"
 back_up = { mode = "ram", means = "glassine-read", check = "read-back-compare", size = 8600000000 }
 
 [[boot_settings]]

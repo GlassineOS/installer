@@ -63,7 +63,7 @@ untried = "the PC backend isn't built yet"
 # The EFI system partition is shared by every system: never removed with one.
 [[partitions]]
 select = { role = "esp" }
-class = "back-up"
+class = "never-write"
 
 # An operating system's partitions: replaced only where the person chose so.
 [[partitions]]
@@ -90,9 +90,10 @@ class = "create"
 
 # Every disk the installation writes to is backed up whole first: its
 # partition table and every partition, as one image (installer 001 FR-009).
+# The disk as one object is never written; its partitions' rules decide.
 [[partitions]]
 select = { role = "disk" }
-class = "back-up"
+class = "never-write"
 back_up = { mode = "local", means = "block-read", check = "read-back-compare" }
 
 [[boot_settings]]

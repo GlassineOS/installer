@@ -338,6 +338,12 @@ fn resize_says_whether_it_destroys() {
     na("class = \"resize\"\ndestroys = true", "class = \"resize\"", "partitions[6].destroys");
 }
 
+/// Format 2 has one class for "only read": never-write.
+#[test]
+fn format_2_has_no_back_up_class() {
+    na("class = \"resize\"\ndestroys = true", "class = \"back-up\"", "partitions[6].class");
+}
+
 /// Format 1: a replace rule names its own backup.
 #[test]
 fn replace_names_its_backup_in_format_1() {
@@ -379,7 +385,7 @@ fn every_write_comes_after_the_disk_backup() {
 #[test]
 fn a_description_has_a_rule_for_the_whole_disk() {
     pcm(
-        "[[partitions]]\nselect = { role = \"disk\" }\nclass = \"back-up\"\nback_up = { mode = \"local\", means = \"block-read\", check = \"read-back-compare\" }\n",
+        "[[partitions]]\nselect = { role = \"disk\" }\nclass = \"never-write\"\nback_up = { mode = \"local\", means = \"block-read\", check = \"read-back-compare\" }\n",
         "",
         "partitions",
     );
