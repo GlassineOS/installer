@@ -37,23 +37,23 @@ pub fn load(text: &str) -> Loaded {
         return Loaded::TooNew { format };
     }
     let mut out = Vec::new();
-    if format < 1 {
+    if format < format1::FIRST_FORMAT {
         out.push(problem("format", format!("unknown format {format}")));
         return Loaded::Invalid(out);
     }
     if tab.keys().next().map(String::as_str) != Some("format") {
         out.push(problem("format", "must be the first key"));
     }
-    format1::shape().walk(&tab, "", &mut out);
+    format1::shape_for(format).walk(&tab, "", &mut out);
     // The rules beyond the structure run whenever the tree still reads as
-    // format 1 (an unknown value or a missing parameter does), so a person
+    // its format (an unknown value or a missing parameter does), so a person
     // sees every problem at once; an unknown key or a wrong type stops them.
     let structural = !out.is_empty();
     let d: Option<Description> = toml::Value::Table(tab).try_into().ok();
     match &d {
         Some(d) => out.extend(check(d)),
         None if structural => {}
-        None => out.push(problem("", "does not read as format 1")),
+        None => out.push(problem("", format!("does not read as format {format}"))),
     }
     out.extend(never_holds(text));
     match d {
@@ -233,7 +233,8 @@ pub fn check(d: &Description) -> Vec<Problem> {
             (false, Some(_)) => ck.p(format!("{path}.destroys"), "only a resize or remove destroys"),
             _ => {}
         }
-        if matches!(r.class.as_str(), "back-up" | "replace") && r.back_up.is_none() {
+        // From format 2 the whole-disk image backs up every partition (001 FR-009).
+        if d.format < 2 && matches!(r.class.as_str(), "back-up" | "replace") && r.back_up.is_none() {
             ck.p(format!("{path}.back_up"), format!("a {} rule names how the backup is read (FR-016a)", r.class));
         }
         if r.class == "create" && r.back_up.is_some() {
@@ -241,6 +242,15 @@ pub fn check(d: &Description) -> Vec<Problem> {
         }
         if let Some(b) = &r.back_up {
             check_back_up(&mut ck, b, &format!("{path}.back_up"));
+        }
+        if r.select.role.as_deref() == Some("disk") {
+            match &r.back_up {
+                Some(b) if b.with.is_none() => {}
+                _ => ck.p(format!("{path}.back_up"), "a whole disk names how its image is read: mode, means and check"),
+            }
+            if r.when.is_some() {
+                ck.p(format!("{path}.when"), "the whole-disk backup is the flow's choice, never a description's");
+            }
         }
         if let Some(w) = &r.when
             && !choice_ok(w)
@@ -308,6 +318,12 @@ pub fn check(d: &Description) -> Vec<Problem> {
         .collect();
     for (i, c) in d.choices.iter().enumerate() {
         let path = format!("choices[{i}]");
+        if crate::plan::RESERVED_CHOICES.contains(&c.id.as_str()) {
+            ck.p(
+                format!("{path}.id"),
+                format!("{:?} is the flow's own choice (the backup, 001 FR-009a), never a description's", c.id),
+            );
+        }
         match c.source.as_str() {
             "fixed" => {
                 if c.options.len() < 2 {
@@ -360,6 +376,9 @@ pub fn check(d: &Description) -> Vec<Problem> {
     }
     check_order(&mut ck);
     check_backed_up_first(&mut ck);
+    if d.format >= 2 {
+        check_disk_backup_first(&mut ck);
+    }
 
     // Texts (FR-026).
     if d.texts.name.trim().is_empty() {
@@ -630,7 +649,7 @@ fn check_step(ck: &mut Ck, i: usize, s: &Step) {
         for (j, r) in list.iter().enumerate() {
             let rp = format!("{path}.{action}[{j}]");
             if let Some(role) = r.strip_prefix("role:")
-                && !vocab::ids(vocab::ROLES).contains(&role)
+                && !vocab::ids_in(vocab::ROLES, d.format).contains(&role)
             {
                 ck.p(&rp, format!("unknown role {role:?}"));
                 continue;
@@ -712,22 +731,67 @@ fn check_order(ck: &mut Ck) {
     }
 }
 
+/// The steps a step comes after, directly or through others.
+fn steps_before(d: &Description, s: &Step) -> BTreeSet<String> {
+    let mut seen = BTreeSet::new();
+    let mut todo: Vec<&str> = s.after.iter().map(String::as_str).collect();
+    while let Some(a) = todo.pop() {
+        if seen.insert(a.to_string())
+            && let Some(x) = d.step(a)
+        {
+            todo.extend(x.after.iter().map(String::as_str));
+        }
+    }
+    seen
+}
+
+/// From format 2: every job that writes has a back-up step that images
+/// whole disks (`backs_up = ["role:disk"]`, 001 FR-009), and every step that
+/// writes comes after it. The plan leaves it out only when the person
+/// switches the backup off (FR-009a), never because a description does.
+fn check_disk_backup_first(ck: &mut Ck) {
+    let d = ck.d;
+    let images = |s: &Step| s.kind == "back-up" && s.backs_up.iter().any(|r| r == "role:disk") && s.when.is_empty();
+    let has_rule = d
+        .partitions
+        .iter()
+        .any(|r| r.select.role.as_deref() == Some("disk") && r.back_up.as_ref().is_some_and(|b| b.with.is_none()));
+    for j in &d.jobs {
+        let writing: Vec<(usize, &Step)> = d.steps.iter().enumerate().filter(|(_, s)| s.job == j.id && s.writes_anything()).collect();
+        if writing.is_empty() {
+            continue;
+        }
+        if !has_rule {
+            ck.p(
+                "partitions",
+                "a description whose jobs write has a rule for role disk that says how a whole disk is read (001 FR-009)",
+            );
+        }
+        let imaging: Vec<&str> = d.steps.iter().filter(|s| s.job == j.id && images(s)).map(|s| s.id.as_str()).collect();
+        if imaging.is_empty() {
+            ck.p(
+                "steps",
+                format!("job {:?} writes, but no back-up step of it backs up role:disk first (001 FR-009)", j.id),
+            );
+            continue;
+        }
+        for (i, s) in writing {
+            let earlier = steps_before(d, s);
+            if !imaging.iter().any(|x| earlier.contains(*x)) {
+                ck.p(
+                    format!("steps[{i}].after"),
+                    format!("{:?} writes before the whole-disk backup ({})", s.id, imaging.join(", ")),
+                );
+            }
+        }
+    }
+}
+
 /// Everything a step replaces (and each boot setting it changes) is backed up
 /// by an earlier step of the same job (001 FR-009).
 fn check_backed_up_first(ck: &mut Ck) {
     let d = ck.d;
-    let before = |s: &Step| -> BTreeSet<String> {
-        let mut seen = BTreeSet::new();
-        let mut todo: Vec<&str> = s.after.iter().map(String::as_str).collect();
-        while let Some(a) = todo.pop() {
-            if seen.insert(a.to_string())
-                && let Some(x) = d.step(a)
-            {
-                todo.extend(x.after.iter().map(String::as_str));
-            }
-        }
-        seen
-    };
+    let before = |s: &Step| steps_before(d, s);
     let backup_of = |r: &str| -> String {
         d.partitions
             .iter()
@@ -749,7 +813,11 @@ fn check_backed_up_first(ck: &mut Ck) {
             if s.creates.contains(w) || d.steps.iter().any(|x| earlier.contains(&x.id) && x.creates.contains(w)) {
                 continue;
             }
-            if deciding_classes(d, w, &s.when).iter().all(|c| c != "create") && !backed.contains(w.as_str()) && !backed.contains(backup_of(w).as_str()) {
+            if deciding_classes(d, w, &s.when).iter().all(|c| c != "create")
+                && !backed.contains(w.as_str())
+                && !backed.contains(backup_of(w).as_str())
+                && !backed.contains("role:disk")
+            {
                 ck.p(
                     format!("steps[{i}].writes[{j}]"),
                     format!("{w:?} is replaced before an earlier step backs it up"),
