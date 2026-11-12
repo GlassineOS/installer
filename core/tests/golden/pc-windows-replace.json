@@ -1,0 +1,327 @@
+{
+  "plan_format": 1,
+  "description": "uefi-pc",
+  "device": "PC",
+  "mode": "local",
+  "state": "stock",
+  "job": "install",
+  "status": "ready",
+  "reasons": [],
+  "questions": [],
+  "choices": [
+    {
+      "choice": "target-disk",
+      "value": "first",
+      "default": true
+    },
+    {
+      "choice": "systems.1",
+      "value": "replace",
+      "default": false
+    }
+  ],
+  "systems": [
+    {
+      "system": "system 1 (windows)",
+      "outcome": "replaced"
+    }
+  ],
+  "partitions": [
+    {
+      "partition": "disk 0 partition 1",
+      "class": "back-up",
+      "actions": [
+        "backs-up"
+      ],
+      "size": 104857600,
+      "loses_files": false,
+      "steps": [
+        "back-up"
+      ]
+    },
+    {
+      "partition": "partition table",
+      "class": "replace",
+      "actions": [
+        "backs-up",
+        "writes"
+      ],
+      "size": null,
+      "loses_files": false,
+      "steps": [
+        "back-up",
+        "remove-system.1",
+        "create-partitions"
+      ]
+    },
+    {
+      "partition": "disk 0 partition 2",
+      "class": "remove",
+      "actions": [
+        "removes"
+      ],
+      "size": 16777216,
+      "loses_files": true,
+      "steps": [
+        "remove-system.1"
+      ]
+    },
+    {
+      "partition": "disk 0 partition 3",
+      "class": "remove",
+      "actions": [
+        "removes"
+      ],
+      "size": 322122547200,
+      "loses_files": true,
+      "steps": [
+        "remove-system.1"
+      ]
+    },
+    {
+      "partition": "disk 0 partition 4",
+      "class": "remove",
+      "actions": [
+        "removes"
+      ],
+      "size": 734003200,
+      "loses_files": true,
+      "steps": [
+        "remove-system.1"
+      ]
+    },
+    {
+      "partition": "disk 0 free space",
+      "class": "create",
+      "actions": [
+        "creates"
+      ],
+      "size": 214748364800,
+      "loses_files": false,
+      "steps": [
+        "create-partitions"
+      ]
+    },
+    {
+      "partition": "glassine-boot",
+      "class": "create",
+      "actions": [
+        "creates",
+        "writes"
+      ],
+      "size": null,
+      "loses_files": false,
+      "steps": [
+        "create-partitions",
+        "write-boot",
+        "add-boot-entry"
+      ]
+    },
+    {
+      "partition": "glassine-system",
+      "class": "create",
+      "actions": [
+        "creates",
+        "writes"
+      ],
+      "size": null,
+      "loses_files": false,
+      "steps": [
+        "create-partitions",
+        "write-base"
+      ]
+    }
+  ],
+  "untouched_partitions": 1,
+  "boot_settings": [
+    {
+      "id": "boot-entries",
+      "kind": "firmware-boot-entry",
+      "actions": [
+        "back-up",
+        "change"
+      ],
+      "steps": [
+        "back-up",
+        "add-boot-entry"
+      ]
+    },
+    {
+      "id": "boot-order",
+      "kind": "firmware-boot-order",
+      "actions": [
+        "back-up",
+        "change"
+      ],
+      "steps": [
+        "back-up",
+        "add-boot-entry"
+      ]
+    }
+  ],
+  "keeps": {
+    "unit_values": [],
+    "device_files": [],
+    "device_data": []
+  },
+  "space": {
+    "backup_bytes": 105971712,
+    "backup_unknown": [],
+    "artifact_bytes": 0,
+    "artifacts_unknown": [
+      "base",
+      "kernel"
+    ],
+    "total_at_least": 105971712,
+    "exact": false
+  },
+  "capabilities": [
+    {
+      "id": "start-kernel",
+      "status": "have",
+      "with": null,
+      "tried": false
+    },
+    {
+      "id": "recovery",
+      "status": "lack",
+      "with": null,
+      "tried": false
+    },
+    {
+      "id": "choose-at-start",
+      "status": "have",
+      "with": null,
+      "tried": false
+    }
+  ],
+  "steps": [
+    {
+      "id": "back-up",
+      "kind": "back-up",
+      "mode": "local",
+      "done": "false",
+      "writes": false,
+      "tried": false,
+      "point_of_no_return": false,
+      "safe_stop": true,
+      "on_failure": {
+        "leaves": "previous-system-starts",
+        "hardware": null,
+        "way_out": "step back-up"
+      },
+      "on_interruption": {
+        "leaves": "previous-system-starts",
+        "hardware": null,
+        "way_out": "step back-up"
+      }
+    },
+    {
+      "id": "remove-system.1",
+      "kind": "remove-partitions",
+      "mode": "local",
+      "done": "false",
+      "writes": true,
+      "tried": false,
+      "point_of_no_return": true,
+      "safe_stop": false,
+      "on_failure": {
+        "leaves": "installer-can-undo",
+        "hardware": null,
+        "way_out": "step back-up"
+      },
+      "on_interruption": {
+        "leaves": "installer-can-finish",
+        "hardware": null,
+        "way_out": "step create-partitions"
+      }
+    },
+    {
+      "id": "create-partitions",
+      "kind": "create-partitions",
+      "mode": "local",
+      "done": "false",
+      "writes": true,
+      "tried": false,
+      "point_of_no_return": false,
+      "safe_stop": true,
+      "on_failure": {
+        "leaves": "previous-system-starts",
+        "hardware": null,
+        "way_out": "step back-up"
+      },
+      "on_interruption": {
+        "leaves": "installer-can-finish",
+        "hardware": null,
+        "way_out": "step write-base"
+      }
+    },
+    {
+      "id": "write-base",
+      "kind": "write-base",
+      "mode": "local",
+      "done": "false",
+      "writes": true,
+      "tried": false,
+      "point_of_no_return": false,
+      "safe_stop": true,
+      "on_failure": {
+        "leaves": "previous-system-starts",
+        "hardware": null,
+        "way_out": "step write-base"
+      },
+      "on_interruption": {
+        "leaves": "previous-system-starts",
+        "hardware": null,
+        "way_out": "step write-boot"
+      }
+    },
+    {
+      "id": "write-boot",
+      "kind": "write-boot-files",
+      "mode": "local",
+      "done": "false",
+      "writes": true,
+      "tried": false,
+      "point_of_no_return": false,
+      "safe_stop": true,
+      "on_failure": {
+        "leaves": "previous-system-starts",
+        "hardware": null,
+        "way_out": "step write-boot"
+      },
+      "on_interruption": {
+        "leaves": "previous-system-starts",
+        "hardware": null,
+        "way_out": "step add-boot-entry"
+      }
+    },
+    {
+      "id": "add-boot-entry",
+      "kind": "add-boot-entry",
+      "mode": "local",
+      "done": "false",
+      "writes": true,
+      "tried": false,
+      "point_of_no_return": false,
+      "safe_stop": true,
+      "on_failure": {
+        "leaves": "previous-system-starts",
+        "hardware": null,
+        "way_out": "step add-boot-entry"
+      },
+      "on_interruption": {
+        "leaves": "glassine-starts",
+        "hardware": null,
+        "way_out": "step add-boot-entry"
+      }
+    }
+  ],
+  "untried_steps": [
+    "remove-system.1",
+    "create-partitions",
+    "write-base",
+    "write-boot",
+    "add-boot-entry"
+  ]
+}

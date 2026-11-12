@@ -1,0 +1,64 @@
+Plan (dry run) for PC
+State: stock. Job: install.
+Status: ready
+
+Choices:
+  target-disk = first (default)
+  systems.1 = replace
+
+Systems:
+  system 1 (windows): replaced
+
+Partitions:
+  disk 0 partition 1 (back-up, 100.0 MiB): backs-up
+  partition table (replace): backs-up, writes
+  disk 0 partition 2 (remove, 16.0 MiB): removes
+    Everything on it is deleted: files on it are lost.
+  disk 0 partition 3 (remove, 300.0 GiB): removes
+    Everything on it is deleted: files on it are lost.
+  disk 0 partition 4 (remove, 700.0 MiB): removes
+    Everything on it is deleted: files on it are lost.
+  disk 0 free space (create, 200.0 GiB): creates
+  glassine-boot (create): creates, writes
+  glassine-system (create): creates, writes
+  1 other partitions are not touched.
+
+How the machine starts:
+  boot-entries (firmware-boot-entry): back-up, change
+  boot-order (firmware-boot-order): back-up, change
+
+Space on the computer:
+  backup 101.1 MiB
+  artifacts 0 B plus base, kernel of unknown size
+  at least 101.1 MiB
+
+Afterwards the device:
+  have start-kernel [untried]
+  lack recovery [untried]
+  have choose-at-start [untried]
+
+Steps:
+  1. back-up (back-up, in local) [safe stop]
+     Back up the partition table, the EFI system partition and the firmware's boot entries to the installer's stick.
+     if it fails: previous-system-starts via step back-up
+     if cut off after it: previous-system-starts via step back-up
+  2. remove-system.1 (remove-partitions, in local) [untried, point of no return]
+     Delete the operating system you chose to replace.
+     if it fails: installer-can-undo via step back-up
+     if cut off after it: installer-can-finish via step create-partitions
+  3. create-partitions (create-partitions, in local) [untried, safe stop]
+     Make room for GlassineOS in the free space.
+     if it fails: previous-system-starts via step back-up
+     if cut off after it: installer-can-finish via step write-base
+  4. write-base (write-base, in local) [untried, safe stop]
+     Put GlassineOS on its new partition.
+     if it fails: previous-system-starts via step write-base
+     if cut off after it: previous-system-starts via step write-boot
+  5. write-boot (write-boot-files, in local) [untried, safe stop]
+     Put the GlassineOS kernel and boot loader on its boot partition.
+     if it fails: previous-system-starts via step write-boot
+     if cut off after it: previous-system-starts via step add-boot-entry
+  6. add-boot-entry (add-boot-entry, in local) [untried, safe stop]
+     Add GlassineOS to the firmware's boot menu and start it first.
+     if it fails: previous-system-starts via step add-boot-entry
+     if cut off after it: glassine-starts via step add-boot-entry
