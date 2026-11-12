@@ -56,7 +56,9 @@ python3 -m http.server -d web 8000    # then http://localhost:8000 in a Chromium
 | Note Air (bootloader fastboot), native Linux binary, first command of a boot | `product: NoteAir`, 151 ms, same as the stock `fastboot` tool |
 | Note Air, browser (Chrome, WebUSB, the same core as wasm), first command of a boot | `product: NoteAir` (2.7 s from the click, including the device chooser) |
 | Note Air, any later command of the same boot, plain framing | fails, for the stock tool as for this one ([GlassineOS/abl#1](https://github.com/GlassineOS/abl/issues/1)) |
-| Note Air, equal-length framing, this core | not run yet (the same sequence from a separate trace tool worked: many commands, 1 MiB into RAM at ~40 MB/s, reboot) |
+| Note Air, equal-length framing, native Linux binary | one fastboot boot: warm-up accepted, 5 variables, 16 MiB into RAM in 390 ms (43 MB/s), reboot; back in GlassineOS, nothing changed |
+| Note Air, equal-length framing, browser (Chrome, WebUSB) | one fastboot boot: warm-up accepted, 3 variables, 16 MiB into RAM in 554 ms, reboot; 2.7 s from the click including the device chooser |
+| Claiming the interface right after the device appears (native, Linux) | "interface is busy" for the first one or two tries, then works; the installer has to retry |
 
 What the API costs: on wasm only the async calls exist, and web-sys's WebUSB bindings need
 `--cfg=web_sys_unstable_apis` (`.cargo/config.toml`). Natively the same async code runs
