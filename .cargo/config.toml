@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# arm64 musl (the recovery) links with the linker Rust ships, so no cross gcc is needed.
+[target.aarch64-unknown-linux-musl]
+linker = "rust-lld"

@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+[package]
+name = "glassine-install"
+description = "The GlassineOS installer's command line: validate descriptions, check a machine, plan a dry run"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "glassine-install"
+path = "src/main.rs"
+
+[dependencies]
+glassine-installer = { path = "../core" }
+serde_json = "1"

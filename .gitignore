@@ -1,2 +1,4 @@
 /specs/*/*
 !/specs/*/spec.md
+/target
+/.cargo-home
