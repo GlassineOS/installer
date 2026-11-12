@@ -35,6 +35,7 @@ const stepIndex = (plan, id) => plan.steps.findIndex((x) => x.id === id);
 
 // One escape (on_failure or on_interruption) in words.
 export function escapeWords(s, e, i) {
+  if (e.leaves === 'installer-can-undo' && s.plan.backup.choice === 'off') return 'The installer can’t undo it: the backup is off.';
   const words = (LEAVES[e.leaves] || (() => e.leaves))(s.m.the, e.hardware);
   const [how, target] = (e.way_out || '').split(' ');
   if (how === 'transition') {
@@ -49,11 +50,63 @@ export function escapeWords(s, e, i) {
   return words;
 }
 
+// The plan's backup (spec 001 FR-009, FR-009a): on (one image of each disk the plan writes to)
+// or off by the person's choice, where it goes, and what going without it costs.
+export function backupView(s) {
+  const p = s.plan, b = p.backup;
+  const size = (i) => {
+    const n = human(i.estimate_bytes);
+    if (i.estimate === 'about' && n) return `about ${n}`;
+    if (i.estimate === 'at-most' && n) return i.estimate_bytes === i.disk_size ? `at most ${n}, the disk’s size` : `at most ${n}`;
+    return n || 'size not known yet';
+  };
+  const images = b.images.map((i) => ({
+    index: i.index,
+    title: `${cap(i.disk)}${i.kind ? ', ' + i.kind.toUpperCase() : ''}${i.disk_size && i.estimate_bytes !== i.disk_size ? ', ' + human(i.disk_size) : ''}`,
+    holds: i.holds, stored: i.stored, size: size(i), atMost: i.estimate === 'at-most',
+    tech: `${i.disk}: ${i.means}, ${i.check}, in ${i.mode}`,
+  }));
+  const atMost = images.some((i) => i.atMost);
+  const total = images.length === 1 ? images[0].size
+    : `${human(p.space.backup_bytes)}${p.space.backup_at_most ? ', and at most ' + human(p.space.backup_at_most) + ' more' : ''}`;
+  return {
+    on: b.choice !== 'off', dflt: b.default, images, total, atMost,
+    settings: p.boot_settings.filter((x) => x.actions.includes('back-up')),
+    target: targetView(s, b.target), consequence: b.consequence,
+    lost: b.escapes_lost.map((id) => stepIndex(p, id) + 1).filter((n) => n > 0),
+  };
+}
+
+// Where the backup can go: the plan's place, and each other disk of the machine the plan doesn't
+// image (the core refuses a disk it images). `value` is the input of the backup-to choice.
+export function targetView(s, t) {
+  if (t.kind === 'disk') return { value: `disk${t.disk}`, title: `Disk ${t.disk}`, body: diskWords(s, t.disk) };
+  if (t.kind === 'installer-media') return { value: 'installer-media', title: 'The installer’s USB stick', body: 'The stick this installer started from.' };
+  return { value: 'computer', title: 'This computer', body: 'A folder on this computer or on a disk connected to it: your browser asks for it when the backup starts.' };
+}
+
+const diskWords = (s, i) => {
+  const d = s.report && s.report.machine.disks[i];
+  return d ? `${d.kind.toUpperCase()}, ${human(d.size)}${d.removable ? ', removable' : ''}.${d.free ? ' ' + human(d.free) + ' free.' : ''}` : '';
+};
+
+export function targetOptions(s) {
+  const b = s.plan.backup;
+  // The place the core picks when the choice isn't made: the stick on a PC, else this computer.
+  const first = s.m.kind === 'pc' ? 'installer-media' : 'computer';
+  const imaged = new Set(b.images.map((i) => i.index));
+  const disks = (s.report ? s.report.machine.disks : []).map((d, i) => i).filter((i) => !imaged.has(i));
+  return [targetView(s, { kind: first }), ...disks.map((i) => targetView(s, { kind: 'disk', disk: i }))];
+}
+
 export function stepViews(s) {
   const p = s.plan;
+  const off = p.backup.choice === 'off';
   return p.steps.map((st, i) => {
     const base = st.id.split('.')[0];
-    const text = s.desc && s.desc.texts.steps[base];
+    const text = st.kind === 'back-up' && off
+      ? 'Read what is kept outside the disks. The backup is off: no disk is imaged; only the firmware’s boot settings and the values unique to the device are read.'
+      : s.desc && s.desc.texts.steps[base];
     const [title, body] = splitSentence(text);
     const parts = p.partitions.filter((x) => x.steps.includes(st.id));
     const settings = p.boot_settings.filter((b) => b.steps.includes(st.id));
@@ -88,11 +141,11 @@ export function fate(s) {
   const keep = keptSystems(p).map((x) => `${x.display}: kept, and it still starts`);
   if (p.keeps.device_data.length) keep.push(`Its device data: ${list(p.keeps.device_data.map((d) => DEVICE_DATA[d] || d.replace(/-/g, ' ')))}`);
   if (p.keeps.unit_values.length) keep.push(`Values unique to ${s.m.the}: ${p.keeps.unit_values.length}`);
+  if (p.imaged_partitions && p.backup.choice !== 'off') keep.push(`${p.imaged_partitions} other ${parts(p.imaged_partitions)} of the storage: only read, into the backup`);
   if (p.untouched_partitions) keep.push(`${p.untouched_partitions} other ${parts(p.untouched_partitions)} of the storage, not touched`);
-  const backed = by((x) => x.actions.includes('backs-up'));
-  const backup = [];
-  if (backed.length) backup.push(`${backed.length} ${parts(backed.length)} of the storage: ${sizeOf(backed)}`);
-  for (const b of p.boot_settings.filter((b) => b.actions.includes('back-up'))) backup.push(BOOT_SETTING[b.kind] || b.kind);
+  const bv = backupView(s);
+  const backup = bv.on ? bv.images.map((i) => `${i.title}, whole: ${i.size}`) : ['No disk: the backup is off'];
+  for (const b of bv.settings) backup.push(BOOT_SETTING[b.kind] || b.kind);
   const replace = [];
   const repl = by((x) => x.class === 'replace');
   if (repl.length) replace.push(`${repl.length} ${parts(repl.length)} of the storage, written anew`);
@@ -118,7 +171,8 @@ export function erase(s) {
     parts: lost, steps, size: total.length ? human(sum(total)) : null,
     // removed with a system the person chose to replace: confirmed by typing its name instead
     withSystem: lost.every((x) => x.class === 'remove'),
-    inBackup: lost.every((x) => x.actions.includes('backs-up')),
+    // The backup images every disk the plan writes to, so any lost files are in it.
+    inBackup: p.backup.choice !== 'off' && p.backup.images.length > 0,
   };
 }
 
@@ -129,9 +183,11 @@ export function stepList(ns) {
 export function spaceRows(s) {
   const sp = s.plan.space;
   const rows = [];
-  rows.push(['For the backup', `${human(sp.backup_bytes)}${sp.backup_unknown.length ? ', plus ' + list(sp.backup_unknown.map((x) => 'the ' + x)) + ', of a size not known yet' : ''}`]);
+  const bv = backupView(s);
+  rows.push(['For the backup', !bv.on ? 'Nothing: the backup is off'
+    : `${human(sp.backup_bytes)}${sp.backup_at_most ? (sp.backup_bytes ? ', and ' : '') + 'up to ' + human(sp.backup_at_most) + ' for the disk images (the used part is known once a disk is read)' : ''}${sp.backup_unknown.length ? ', plus ' + list(sp.backup_unknown.map((x) => 'the ' + x)) + ', of a size not known yet' : ''}`]);
   rows.push(['For what the installer downloads', sp.artifacts_unknown.length && !sp.artifact_bytes ? 'Not known yet' : human(sp.artifact_bytes) + (sp.artifacts_unknown.length ? ' and more' : '')]);
-  rows.push(['On this computer, in all', `${sp.exact ? '' : 'At least '}${human(sp.total_at_least)}`]);
+  rows.push([s.m.kind === 'pc' ? 'In all' : 'On this computer, in all', `${sp.exact ? '' : 'At least '}${human(sp.total_at_least)}`]);
   return rows;
 }
 

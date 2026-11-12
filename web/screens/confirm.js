@@ -2,10 +2,12 @@
 // Confirm: the whole plan once more, one confirmation (spec 001 FR-006): a tick for files that
 // are erased, a replaced system confirmed by typing its name, and where the backup goes.
 // state: noroom (the place chosen for the backup has no room; there is no record of it yet).
+// The place is the plan's backup-to choice: changing it asks for the plan of that input.
 
 import { useState } from 'preact/hooks';
-import { html, Admonition, Actions, Page, Owed, Steps } from '../lib/parts.js';
-import { stepViews, erase, fate, keptSystems, goneSystems } from '../lib/model.js';
+import { html, Admonition, Actions, Page, Steps } from '../lib/parts.js';
+import { list } from '../lib/words.js';
+import { stepViews, erase, fate, keptSystems, goneSystems, backupView, targetOptions } from '../lib/model.js';
 import { EraseNote } from './check.js';
 import { NoRecord } from './plan.js';
 
@@ -27,13 +29,16 @@ export function Confirm({ s, state }) {
   const ready = p.status === 'ready';
   const ok = ready && (!needAck || ack) && typedOk && !noRoom;
   const pc = s.m.kind === 'pc';
+  const b = backupView(s);
+  const place = (v) => s.withInput({ ...s.input, choices: { ...s.input.choices, 'backup-to': v } });
   const next = !ready ? 'Nothing: this plan can’t be carried out as it is. Go back to the plan.'
     : needAck && !ack ? 'Tick the box under “Erases your files” to install.'
     : !typedOk ? `Type the name of the system that is replaced to install.`
     : noRoom ? 'Nothing, until there is a place with room for the backup.'
-    : `The backup starts. It is checked by reading it back before anything on ${s.m.the} is written.`;
+    : b.on ? `The backup starts. It is checked by reading it back before anything on ${s.m.the} is written.`
+    : `The installation starts, without a backup: first the values unique to ${s.m.the} are read.`;
   return html`<${Page} s=${s} step="confirm" eyebrow="Confirm · one confirmation for the whole plan" title="Confirm the plan"
-      lead=${`This is everything the installer will do on ${s.m.the}. When you confirm, it starts: first the backup, then the steps below, and nothing else.`}>
+      lead=${`This is everything the installer will do on ${s.m.the}. When you confirm, it starts: ${b.on ? 'first the backup, then ' : ''}the steps below, and nothing else.`}>
     ${!ready ? html`<${Admonition} kind="warning" seal="G" label="Can’t be confirmed" title="This plan isn’t ready"><p>The plan says: ${p.status.replace(/-/g, ' ')}. <a class="il-link" href=${s.link('plan')}>Back to the plan</a>.</p></${Admonition}>` : null}
     <section class="ins-stack">
       <h2 class="ins-h2">What happens, in order</h2>
@@ -41,20 +46,23 @@ export function Confirm({ s, state }) {
     </section>
     <div class="ins-grid">
       <section class="ins-card"><span class="il-label">Kept</span><ul class="ins-stack ins-small">${fate(s).keep.map((k) => html`<li>${k}</li>`)}</ul></section>
-      <section class="ins-card"><span class="il-label">Systems replaced</span><p class="ins-small">${gone.length ? gone.map((g) => `${g.display}: ${g.outcome}.`).join(' ') : `None. ${kept.map((k) => k.display).join(', ') || 'Nothing'} is kept and still starts.`}</p></section>
+      <section class="ins-card"><span class="il-label">Systems replaced</span><p class="ins-small">${gone.length ? gone.map((g) => `${g.display}: ${g.outcome}.`).join(' ') : `None. ${list(kept.map((k) => k.display)) || 'Nothing'} ${kept.length > 1 ? 'are kept and still start' : 'is kept and still starts'}.`}</p></section>
     </div>
     ${needAck ? html`<${EraseNote} s=${s} e=${e}>
       <label class="ins-check"><input type="checkbox" id="erase-ack" checked=${ack} onChange=${(ev) => setAck(ev.target.checked)} /><span>I know that the files on ${s.m.the} that this plan erases will be gone${e.inBackup ? ', apart from the backup' : ''}.</span></label>
       <p><strong>Way out:</strong> go back to the plan or stop here. Nothing has changed yet.</p>
     </${EraseNote}>` : null}
-    <section class="ins-stack">
+    <section class="ins-stack" id="backup-place">
       <h2 class="ins-h2">Where the backup goes</h2>
-      <div class=${noRoom ? 'ins-card ins-card--warn' : 'ins-card ins-card--strong'}>
-        <span class="il-label">${pc ? 'The GlassineOS USB stick, or another disk' : 'A folder on this computer or on an external disk'}</span>
-        <div class="ins-row"><span class="ins-card__title"><${Owed}>Not chosen yet: choosing a place comes with the backup step</${Owed}></span><button type="button" class="il-btn" disabled aria-disabled="true">${pc ? 'Choose another disk…' : 'Choose a folder…'}</button></div>
-        <p class="ins-small ins-soft">${pc ? '' : 'Your browser asks to let the installer save there. '}If the place is too small, the installer says so and you choose another.</p>
+      ${b.on ? html`<fieldset class="ins-stack" style="border:0;margin:0;padding:0" data-choice="backup-to">
+        <legend class="il-label" style="margin-bottom:8px">${b.total} · read back before the first write</legend>
+        ${targetOptions(s).map((t) => html`<label class=${'ins-choice' + (noRoom && t.value === b.target.value ? ' ins-card--warn' : '')}><input type="radio" name="backup-to" value=${t.value} checked=${t.value === b.target.value} onChange=${() => place(t.value)} />
+          <span class="ins-choice__body"><span class="ins-choice__title">${t.title}</span><span class="ins-small">${t.body}</span></span></label>`)}
+        <p class="ins-small ins-soft">${pc ? 'Disks GlassineOS goes on aren’t offered: a backup never goes to a disk it is a copy of.' : 'Your browser asks to let the installer save there.'} If the place is too small, the installer says so and you choose another.</p>
         ${noRoom ? html`<p class="ins-small"><strong>The backup doesn’t fit there.</strong> Choose a place with room for it, or go back to the plan.</p>` : null}
-      </div>
+      </fieldset>` : html`<div class="ins-card ins-card--warn" id="backup-off"><span class="il-label">Your choice</span><span class="ins-card__title">No backup</span>
+        <p class="ins-small">${b.consequence}</p>
+        <p class="ins-small ins-soft">To back up after all, go back to the plan.</p></div>`}
     </section>
     ${word ? html`<section class="ins-stack">
       <h2 class="ins-h2">Confirm what is erased</h2>

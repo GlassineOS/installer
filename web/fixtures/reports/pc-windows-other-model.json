@@ -119,8 +119,7 @@
       "system 1 (windows)"
     ],
     "backs_up": [
-      "disk 0 partition 1",
-      "partition table"
+      "disk 0 (whole disk)"
     ],
     "replaces": [
       "partition table"
@@ -131,8 +130,10 @@
       "glassine-system"
     ],
     "loses_files": [],
-    "untouched_partitions": 4,
-    "space_at_least": 105971712,
+    "untouched_partitions": 1,
+    "imaged_partitions": 4,
+    "backup_off": false,
+    "space_at_least": 69632,
     "space_exact": false
   }
 }

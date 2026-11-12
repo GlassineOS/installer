@@ -198,6 +198,63 @@ async function main() {
     assert.match(t, new RegExp(`after step ${i + 2},`));
   });
 
+  const pick = async (name, value, want, rendered) => {
+    await page.evaluate((n, v) => document.querySelector(`input[name="${n}"][value="${v}"]`).click(), name, value);
+    await page.waitForFunction((w) => document.documentElement.dataset.hash.includes(w) && document.documentElement.dataset.hash === location.hash, { timeout: 10000 }, want);
+    await page.waitForSelector(rendered, { timeout: 10000 });
+  };
+
+  await test('the backup: sizes from each disk image', async () => {
+    await go(page, '#/plan?plan=noteair-no-stock-developer');
+    assert.match(await page.$eval('#backup-images', (x) => x.innerText), /Disk 0: about 8\.0 GiB\./);
+    await go(page, '#/plan?plan=pc-two-disks-first');
+    const t = await page.$eval('#backup-images', (x) => x.innerText);
+    assert.match(t, /Disk 0, NVME: at most 512\.0 GiB, the disk’s size\./);
+    assert.ok(!/Disk 1/.test(t), 'images a disk the plan doesn’t write to');
+    await go(page, '#/backup?plan=pc-two-disks-second');
+    assert.match(await page.evaluate(() => document.body.innerText), /Disk 1, SATA, whole/);
+  });
+
+  await test('the backup can be switched off, with its consequence, and on again', async () => {
+    await go(page, '#/plan?plan=pc-windows-replace');
+    assert.strictEqual(await page.$('#backup-off'), null);
+    await pick('backup', 'off', 'choice.backup=off', '#backup-off');
+    const t = await page.evaluate(() => document.body.innerText);
+    assert.match(t, /no way back to the maker’s system|no way back to the maker's system/);
+    assert.match(t, /step 2 can’t be undone/, 'doesn’t name the step whose undo is lost');
+    assert.match(t, /The installer can’t undo it: the backup is off\./);
+    assert.ok(!(await page.$eval('#confirm', (b) => b.disabled)), 'the plan without a backup is ready');
+    await page.click('#confirm');
+    await page.waitForFunction(() => document.documentElement.dataset.hash.startsWith('#/confirm'), { timeout: 10000 });
+    await page.waitForSelector('#backup-off', { timeout: 10000 });
+    assert.strictEqual(await page.$('input[name="backup-to"]'), null, 'offers a place for a backup that is off');
+    await go(page, '#/install?plan=pc-windows-replace-no-backup&state=stopped');
+    assert.ok(!/Undo/.test(await page.evaluate(() => document.body.innerText)), 'offers an undo without a backup');
+    await go(page, '#/plan?plan=pc-windows-replace-no-backup');
+    await pick('backup', 'full', 'choice.backup=full', '#backup-images');
+  });
+
+  await test('the disk GlassineOS goes on: each fixed disk, and the plan of the one chosen', async () => {
+    await go(page, '#/plan?plan=pc-two-disks-first');
+    const disks = () => page.$$eval('input[name="choice-target-disk"]', (xs) => xs.map((x) => x.value + (x.checked ? '*' : '')));
+    assert.deepStrictEqual(await disks(), ['first*', 'disk1']);
+    await pick('choice-target-disk', 'disk1', 'choice.target-disk=disk1', '#backup-images');
+    assert.deepStrictEqual(await disks(), ['first', 'disk1*']);
+    assert.match(await page.$eval('#backup-images', (x) => x.innerText), /Disk 1/);
+  });
+
+  await test('the backup place: the plan’s place and each disk it doesn’t image', async () => {
+    const places = () => page.$$eval('input[name="backup-to"]', (xs) => xs.map((x) => x.value + (x.checked ? '*' : '')));
+    await go(page, '#/confirm?plan=pc-two-disks-first');
+    assert.deepStrictEqual(await places(), ['installer-media*', 'disk1', 'disk2']);
+    await go(page, '#/confirm?plan=pc-two-disks-second');
+    assert.deepStrictEqual(await places(), ['installer-media*', 'disk0', 'disk2']);
+    await go(page, '#/confirm?plan=noteair-no-stock-developer');
+    assert.deepStrictEqual(await places(), ['computer*'], 'offers the device’s own storage for its backup');
+    await go(page, '#/confirm?plan=pc-two-disks-first');
+    await pick('backup-to', 'disk1', 'choice.backup-to=disk1', '#no-record'); // planned by the core's tests, but without a golden file
+  });
+
   await test('the plan’s escapes come with the description’s words', async () => {
     await go(page, '#/plan?plan=noteair-cable-yes');
     const t = await page.evaluate(() => document.querySelector('li[data-step="replace-boot-loader"]').innerText);

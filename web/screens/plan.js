@@ -5,8 +5,11 @@
 
 import { html, Admonition, Actions, Page, Owed, Steps, Table, saveJson } from '../lib/parts.js';
 import { HARDWARE, hardwareName, cap, human, list } from '../lib/words.js';
-import { stepViews, erase, spaceRows, splitSentence, systemView, goneSystems, stepList } from '../lib/model.js';
+import { stepViews, erase, spaceRows, splitSentence, systemView, goneSystems, stepList, backupView } from '../lib/model.js';
 import { EraseNote } from './check.js';
+
+// The flow's own choices (the backup and its place), shown by BackupChoice and on Confirm.
+const FLOW_CHOICES = ['backup', 'backup-to'];
 
 const numbers = (plan, ids) => ids.map((id) => plan.steps.findIndex((x) => x.id === id) + 1).filter((n) => n > 0);
 
@@ -15,8 +18,10 @@ function Choice({ s, c }) {
   const base = c.choice.split('.')[0];
   const sys = base === 'systems' ? s.plan.systems[Number(c.choice.split('.')[1]) - 1] : null;
   const legend = sys ? `${systemView(sys.system).display}, found on ${s.m.the}` : T.choices[base];
-  const opts = Object.keys(T.options).filter((k) => k.startsWith(base + '.')).map((k) => k.slice(base.length + 1));
-  const disk = base === 'target-disk' && s.report.machine.disks[0];
+  let opts = Object.keys(T.options).filter((k) => k.startsWith(base + '.')).map((k) => k.slice(base.length + 1));
+  // The disk GlassineOS goes on: `first` (the core's default, the first fixed disk) or diskN.
+  const disks = base === 'target-disk' ? s.report.machine.disks.map((d, i) => ({ ...d, i })).filter((d) => !d.removable) : [];
+  const diskText = (d) => `${d.i === disks[0].i ? 'The first disk' : 'Disk ' + d.i}: ${human(d.size)}, ${d.kind.toUpperCase()}. ${d.free ? human(d.free) + ' of it is free.' : ''}`;
   const pick = (v) => s.withInput({ ...s.input, choices: { ...s.input.choices, [c.choice]: v } });
   const row = (v, text) => {
     const [title, body] = splitSentence(text);
@@ -26,9 +31,9 @@ function Choice({ s, c }) {
   return html`<fieldset class="ins-stack" style="border:0;margin:0;padding:0" data-choice=${c.choice}>
     <legend class="il-label" style="margin-bottom:8px">${legend || html`<${Owed}>${c.choice}: the description has no text for this choice</${Owed}>`}</legend>
     ${sys && T.choices.systems ? html`<p class="ins-small">${T.choices.systems}</p>` : null}
-    ${opts.length ? opts.map((v) => row(v, T.options[base + '.' + v]))
-      : row(c.value, disk && c.value === 'first' ? `The first disk: ${human(disk.size)}, ${disk.kind.toUpperCase()}. ${disk.free ? human(disk.free) + ' of it is free.' : ''}` : c.value)}
-    ${!opts.length ? html`<p class="ins-small ins-soft">No other ${base === 'target-disk' ? 'disk' : 'option'} was found.</p>` : null}
+    ${disks.length ? disks.map((d, k) => row(k === 0 ? 'first' : `disk${d.i}`, diskText(d)))
+      : opts.length ? opts.map((v) => row(v, T.options[base + '.' + v])) : row(c.value, c.value)}
+    ${disks.length === 1 || (!disks.length && !opts.length) ? html`<p class="ins-small ins-soft">No other ${base === 'target-disk' ? 'disk' : 'option'} was found.</p>` : null}
   </fieldset>`;
 }
 
@@ -53,19 +58,26 @@ function Question({ s, q }) {
 }
 
 export function BackupChoice({ s }) {
-  const sp = s.plan.space;
-  return html`<fieldset class="ins-stack" style="border:0;margin:0;padding:0" id="backup">
+  const b = backupView(s);
+  const pick = (v) => s.withInput({ ...s.input, choices: { ...s.input.choices, backup: v } });
+  return html`<fieldset class="ins-stack" style="border:0;margin:0;padding:0" id="backup" data-choice="backup">
     <legend class="il-label" style="margin-bottom:8px">The backup</legend>
-    <label class="ins-choice"><input type="radio" name="backup" checked /><span class="ins-choice__body">
-      <span class="ins-choice__title">Back up ${s.m.the} <span class="ins-tag ins-tag--soft">Recommended</span></span>
-      <span class="ins-small">Everything the plan replaces or changes, read back to check it before anything is written. With it, the installer can repair damage and undo the installation.</span>
-      <span class="ins-small"><strong>${human(sp.backup_bytes)}${sp.backup_unknown.length ? ' and more' : ''}.</strong> ${sp.backup_unknown.length ? `The size of ${list(sp.backup_unknown.map((x) => 'the ' + x))} isn’t known before it is read.` : ''}</span>
-      <span class="ins-small ins-soft">${s.m.kind === 'pc' ? 'It goes to the USB stick, or to another disk you choose before the installation starts.' : 'It goes to a folder on this computer or on an external disk; you choose it on the next screen.'}</span>
+    <label class="ins-choice"><input type="radio" name="backup" value="full" checked=${b.on} onChange=${() => pick('full')} /><span class="ins-choice__body">
+      <span class="ins-choice__title">Back up ${s.m.the} whole <span class="ins-tag ins-tag--soft">Recommended</span></span>
+      <span class="ins-small">One image of each disk the plan writes to: its partition table and every partition, read back to check it before anything is written. With it, the installer can repair any damage and undo the installation.</span>
+      ${b.on ? html`<ul class="ins-stack ins-small" id="backup-images">${b.images.map((i) => html`<li><strong>${i.title}: ${i.size}.</strong> ${cap(i.holds)}; ${i.stored}.${i.atMost ? ' How much of the disk is used is known only once it is read.' : ''}</li>`)}</ul>` : null}
+      <span class="ins-small ins-soft">It goes to ${b.on ? b.target.title.charAt(0).toLowerCase() + b.target.title.slice(1) : s.m.kind === 'pc' ? 'the installer’s USB stick' : 'this computer'}; ${s.m.kind === 'pc' ? 'you can choose another disk' : 'you choose the folder'} on the next screen.</span>
+      ${b.on && b.dflt ? html`<span class="ins-small ins-soft">The default.</span>` : null}
     </span></label>
-    <label class="ins-choice"><input type="radio" name="backup" disabled /><span class="ins-choice__body">
+    <label class="ins-choice"><input type="radio" name="backup" value="off" checked=${!b.on} onChange=${() => pick('off')} /><span class="ins-choice__body">
       <span class="ins-choice__title">Install without a backup</span>
-      <span class="ins-small"><${Owed}>Not offered yet: the plan records have no backup choice</${Owed}></span>
+      <span class="ins-small">${b.on ? b.consequence : 'No disk is imaged.'}</span>
+      ${b.lost.length ? html`<span class="ins-small"><strong>Without it, ${stepList(b.lost)} can’t be undone.</strong></span>` : null}
     </span></label>
+    ${!b.on ? html`<${Admonition} kind="warning" seal="G" label="Your choice" title="No backup" id="backup-off">
+      <p>${b.consequence}</p>
+      <p><strong>Way out:</strong> choose the backup above. Until you confirm, nothing changes.</p>
+    </${Admonition}>` : null}
   </fieldset>`;
 }
 
@@ -120,7 +132,7 @@ export function Plan({ s }) {
     ${e && !e.withSystem ? html`<${EraseNote} s=${s} e=${e} />` : null}
     <section class="ins-stack ins-stack--wide">
       <h2 class="ins-h2">Your choices</h2>
-      ${p.choices.map((c) => html`<${Choice} s=${s} c=${c} />`)}
+      ${p.choices.filter((c) => !FLOW_CHOICES.includes(c.choice)).map((c) => html`<${Choice} s=${s} c=${c} />`)}
       ${gone.map((g) => html`<${Admonition} kind="danger" seal="!" label="Replaces a system" title=${`${g.display}: ${g.outcome}`}>
         <p>${e && e.withSystem ? `${g.display} and every file in it are erased.` : `${g.display} won’t start any more.`} On the next screen you confirm it by its name.</p>
         <p><strong>Way out:</strong> choose to keep it above. Until you confirm, nothing changes.</p>
@@ -137,7 +149,7 @@ export function Plan({ s }) {
       </section>
       <section class="ins-stack"><${Table} head="Space it needs" rows=${spaceRows(s)} /></section>`}
     <${Actions}
-      next=${refused ? 'Nothing more: the plan can’t go ahead without that step.' : ready ? 'Confirm: you see the whole plan once more and choose where the backup goes. Nothing is written before you confirm.' : p.status === 'needs-answers' ? 'Answer the question, then confirm.' : 'Nothing more: only a developer can go on with this plan.'}
+      next=${refused ? 'Nothing more: the plan can’t go ahead without that step.' : ready ? `Confirm: you see the whole plan once more${backupView(s).on ? ' and choose where the backup goes' : ''}. Nothing is written before you confirm.` : p.status === 'needs-answers' ? 'Answer the question, then confirm.' : 'Nothing more: only a developer can go on with this plan.'}
       out=${'Stop here: a dry run can end with this plan. Nothing was changed; ' + unchanged}
       buttons=${[
         { label: 'Continue to confirm', href: s.link('confirm'), primary: true, disabled: !ready, id: 'confirm' },
