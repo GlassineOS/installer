@@ -4,7 +4,7 @@
 **Created:** 2026-11-12 · **Status:** spec, for review; nothing built
 **Decision:** [docs 0014](https://docs.glassine.org/decisions/0014-installation-and-provisioning/),
 [docs 0015](https://docs.glassine.org/decisions/0015-installer-stack/) · **Builds on:**
-[001](../001-install-from-stock/spec.md) · **Contract:** owned by this repository, format 1
+[001](../001-install-from-stock/spec.md) · **Contract:** owned by this repository, format 2
 
 ## Summary
 
@@ -75,7 +75,7 @@ pinned to,
 ### File and versions
 
 - **FR-001**: A description is one TOML file. Its first key is `format`; this spec is
-  `format = 1`. The format includes its vocabularies: the fact keys signals read, the mode
+  `format = 2`. The format includes its vocabularies: the fact keys signals read, the mode
   kinds, step kinds, boot-setting kinds and capability ids, each with what its parameters
   are.
 - **FR-002**: A reader rejects a description with an unknown key, a missing required key, a
@@ -83,7 +83,12 @@ pinned to,
   key's full path.
 - **FR-003**: Any change to the format raises `format`: a new key, a new value, a new entry
   in a vocabulary. A reader reads its own format and every earlier one, and refuses a later
-  one as in Scenario 2, never as invalid.
+  one as in Scenario 2, never as invalid. The formats:
+
+  | Format | Differs from the one after it |
+  |--------|-------------------------------|
+  | 1      | No `disk` role (FR-016a): each `back-up` and `replace` rule names its own backup, and no job must image whole disks. The classes `read` and `back-up` exist and mean `never-write`. |
+  | 2      | This spec. |
 - **FR-004**: The format, vocabularies included, is also published as a machine-readable
   schema for each `format`, so editors and the device repositories' own checks validate a
   description completely without the installer. The schema names every key of the format;
@@ -170,8 +175,6 @@ pinned to,
   | Class         | reads | backs up | writes | creates | resizes | removes |
   |---------------|:-----:|:--------:|:------:|:-------:|:-------:|:-------:|
   | `never-write` |  yes  |   yes    |        |         |         |         |
-  | `read`        |  yes  |   yes    |        |         |         |         |
-  | `back-up`     |  yes  |   yes    |        |         |         |         |
   | `replace`     |  yes  |   yes    |  yes   |         |         |         |
   | `create`      |       |          |  yes   |   yes   |         |         |
   | `resize`      |  yes  |   yes    |  yes   |         |   yes   |         |
@@ -195,10 +198,19 @@ pinned to,
 
 ### What it keeps
 
-- **FR-016a**: A `back-up` names how the backup is read (the mode and its means), how it is
-  checked (read back and compared), and its size when known. The partition table and the
-  boot settings of FR-016 are backed up the same way. The plan's space (001 FR-003)
-  counts the backup on the computer as well as the artifacts.
+- **FR-016a**: The backup is the whole disk (001 FR-009). A rule selects the role `disk`
+  (a disk the job writes to, as one object: its partition table and every partition) and
+  its `back_up` names how the disk is read (the mode and its means), how the image is
+  checked (read back and compared), and the image's size as stored (compressed) when it is
+  known. Every job that writes has a `back-up` step whose `backs_up` is `role:disk`, and
+  every step that writes comes after it. The plan resolves `role:disk` to each disk its
+  steps write to and to no other. A boot setting of FR-016 that lives on the disk is backed
+  up `with` it; one that doesn't (a firmware variable) names its own `back_up` the same
+  way. The plan's space (001 FR-003) counts the backup as well as the artifacts.
+- **FR-016b**: Whether the backup is made, and where it goes, is the flow's choice, the
+  same on every machine (001 FR-009a): the choices `backup` (`full`, the default, or `off`)
+  and `backup-to`. No description has a choice with these ids, and none switches the
+  backup off.
 
 - **FR-017**: `[[unit_values]]` lists the values unique to the unit that GlassineOS can't read
   itself: what each is, the mode and means of reading it, and where in the installed system
@@ -271,20 +283,20 @@ pinned to,
 
 ## Key entities
 
-- **Description**: one kind of machine, in format 1.
+- **Description**: one kind of machine, in format 2.
 - **Signal**: one test of one fact, required or supporting, verified or not.
 - **State**: an install state and the conditions that tell it, each in the mode it is
   observable in.
 - **Mode**: a way the installer talks to the device, with its departures from the standard.
 - **Transition**: how the device gets from one mode to another, and what that needs.
 - **Partition rule**: a selection and the most any job may do; unselected means never
-  written.
+  written. The rule for the role `disk` says how the whole-disk backup is read.
 - **Step**: a kind from the backend, its parameters, its `done` condition and its escape.
 - **Lock entry**: which version of a device repository's description the installer ships.
 
 ## Success criteria
 
-- **SC-001**: The descriptions of the Note Air and of a UEFI PC are both written in format 1
+- **SC-001**: The descriptions of the Note Air and of a UEFI PC are both written in format 2
   and accepted, and the same installer recognises and plans for both with no device named
   in its code.
 - **SC-002**: For every rule of FR-002 and FR-025 there is a description that breaks it, and
