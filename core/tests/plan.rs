@@ -141,3 +141,20 @@ fn every_interruption_ends_in_one_of_three_states() {
         }
     }
 }
+
+/// A snapshot that lists the shared EFI system partition among Windows's own:
+/// replacing Windows would remove it, which its rule doesn't allow.
+#[test]
+fn the_plan_checks_each_partition_against_its_rule() {
+    let ds = [valid(&pc())];
+    let refs: Vec<&Description> = ds.iter().collect();
+    let mut f = facts("pc-windows");
+    f.systems[0].partitions.insert(0, 1);
+    let p = plan(&refs, &f, &recognize(&refs, &f), &input(&[("systems.1", "replace")], &[], true));
+    assert_eq!(p.status, Status::Refused);
+    assert!(
+        p.reasons.iter().any(|r| r.contains("disk 0 partition 1") && r.contains("back-up")),
+        "{:?}",
+        p.reasons
+    );
+}

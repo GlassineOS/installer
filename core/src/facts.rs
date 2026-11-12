@@ -190,7 +190,9 @@ pub struct SystemFound {
     /// windows, linux, macos, android, other
     pub kind: String,
     pub disk: u32,
-    /// Partition indexes on that disk.
+    /// Indexes of the partitions on that disk that belong to this system.
+    /// Inspect leaves out partitions systems share (the EFI system
+    /// partition); the descriptions' rules protect them anyway.
     pub partitions: Vec<u32>,
     #[serde(default)]
     pub name: Option<String>,

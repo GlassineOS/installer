@@ -155,6 +155,14 @@ fn mode_kind_the_backend_lacks() {
 }
 
 #[test]
+fn step_kind_the_backend_lacks_with_parameters() {
+    // A kind of another backend, with parameters that don't fit it: both are named.
+    let t = mutate(&noteair(), "kind = \"write-base\"", "kind = \"add-boot-entry\"");
+    rejects(&t, "steps[4].kind");
+    rejects(&t, "steps[4].params.artifact");
+}
+
+#[test]
 fn step_kind_the_backend_lacks() {
     na("kind = \"back-up\"", "kind = \"remove-partitions\"", "steps[0].kind");
 }
@@ -365,7 +373,7 @@ fn rule_condition_names_a_real_choice() {
     pcm(
         "when = { choice = \"systems\", equals = \"replace\" }\n\n[[partitions]]",
         "when = { choice = \"systems\", equals = \"wipe\" }\n\n[[partitions]]",
-        "partitions[0].when",
+        "partitions[1].when",
     );
 }
 

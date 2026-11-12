@@ -90,3 +90,19 @@ fn unsupported_machine_report_lists_what_was_seen() {
     assert!(out.contains("some-board") && out.contains("SDM UFS"));
     assert!(out.contains("\"supported\":false"));
 }
+
+/// 001 FR-016: a device lacking what GlassineOS needs to boot safely is
+/// refused, and the report says it isn't supported.
+#[test]
+fn lacking_a_safe_boot_capability_is_unsupported() {
+    let t = mutate(&pc(), "id = \"start-kernel\"\nstatus = \"have\"", "id = \"start-kernel\"\nstatus = \"lack\"");
+    let ds = [valid(&t)];
+    let refs: Vec<&Description> = ds.iter().collect();
+    let f = facts("pc-windows");
+    let rec = recognize(&refs, &f);
+    let p = plan(&refs, &f, &rec, &Input::default());
+    let r = report(&refs, &f, &rec, Some(&p));
+    assert!(!r.supported);
+    assert!(r.reasons.iter().any(|x| x.contains("start-kernel")));
+    assert_eq!(r.plan.unwrap().status, "refused");
+}
