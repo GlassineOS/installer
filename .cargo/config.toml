@@ -2,3 +2,7 @@
 # arm64 musl (the recovery) links with the linker Rust ships, so no cross gcc is needed.
 [target.aarch64-unknown-linux-musl]
 linker = "rust-lld"
+
+# nusb's WebUSB backend uses web-sys's unstable WebUSB bindings.
+[target.wasm32-unknown-unknown]
+rustflags = ["--cfg=web_sys_unstable_apis"]
