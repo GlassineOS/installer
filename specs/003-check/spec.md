@@ -34,7 +34,8 @@ writes.
 **Given** a Note Air with stock Android, connected to the computer,
 **When** the person runs the check,
 **Then** the installer recognises it from its hardware and partition table, and shows:
-the partitions it would never write, back up, replace and create; the vendor files it
+the partitions it would never write, replace and create; the full image of its storage
+it would back up first, with its size and where it goes; the vendor files it
 needs and that each one is present; the values unique to the unit it would capture; what
 happens to stock Android (kept or replaced, as the person chooses); the space it needs and
 has; and each step's escape, including that a failed boot-loader step leaves only the
@@ -47,7 +48,8 @@ another Linux; holding an existing EFI system partition and another system; too 
 **When** the check runs,
 **Then** the general PC description fits; the plan names every disk and every system
 found, proposes where GlassineOS goes (free space, a disk the person picks, or replacing a
-named system), and says what happens to the firmware's boot entries. A disk that is too
+named system), lists a backup image for each disk it would write to and none for the
+others, and says what happens to the firmware's boot entries. A disk that is too
 small is refused with the space it lacks. The disks and the firmware's stored settings are
 unchanged afterwards.
 
