@@ -4,7 +4,7 @@ version = "0.0.0"
 edition = "2024"
 license = "GPL-2.0-or-later"
 publish = false
-description = "Spike: fastboot getvar from one Rust core, native and over WebUSB (read-only)"
+description = "Spike: fastboot from one Rust core, native and over WebUSB (getvar, download to RAM, reboot)"
 
 [lib]
 crate-type = ["rlib", "cdylib"]
@@ -19,6 +19,7 @@ pollster = "0.4"
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 web-sys = { version = "0.3", features = ["console"] }
+js-sys = "0.3"
 
 [profile.release]
 opt-level = "s"

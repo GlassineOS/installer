@@ -50,6 +50,7 @@ dependencies = [
 name = "fbspike"
 version = "0.0.0"
 dependencies = [
+ "js-sys",
  "nusb",
  "pollster",
  "wasm-bindgen",

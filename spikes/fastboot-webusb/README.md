@@ -4,17 +4,29 @@ Decision [0015](https://docs.glassine.org/decisions/0015-installer-stack/) owes 
 before the core is built on them. This directory holds the first one and the notes of the
 second. Throwaway code: it proves the stack, it is not the installer.
 
-**Read-only by construction:** the only fastboot command is `getvar`. A variable name with
+**Writes nothing to the device's storage, by construction:** the only fastboot commands are
+`getvar`, `download` (into the bootloader's RAM) and `reboot`. There is no `flash`, `erase`,
+`boot` (on an A/B device it rewrites the slot flags) or `set_active`. A variable name with
 `:`, white space or control characters is refused before anything is sent (tested).
 
 ## What it is
 
-- `src/lib.rs`: the fastboot reply parser, `getvar`, a `Transport` trait, and one nusb
-  transport used both natively and in the browser. A `read_vars` entry point for the
-  browser (wasm-bindgen).
-- `src/main.rs`: `fbspike VAR...`, the native tool.
-- `web/index.html`: one button (WebUSB needs a user gesture), the variables, the result
-  and the time it took.
+- `src/lib.rs`: the fastboot reply parser, a `Transport` trait, one nusb transport used
+  both natively and in the browser, and a `Session` with its framing: plain, or
+  **equal-length** for bootloaders whose USB driver counts each transfer as the length of
+  the previous one (the Note Air, [GlassineOS/abl#1](https://github.com/GlassineOS/abl/issues/1)).
+  Equal-length framing starts with one short real command and one dummy, then sends every
+  command NUL-padded and all data in chunks of exactly 65535 bytes; it checks the warm-up's
+  answers and refuses a device that isn't in a fresh fastboot boot. A `run` entry point for
+  the browser (wasm-bindgen).
+- `src/main.rs`: `fbspike [--note-air] [--download MIB] [--reboot] [VAR...]`, the native
+  tool.
+- `web/index.html`: one button (WebUSB needs a user gesture), the variables, the framing,
+  a download test into RAM, reboot at the end; the result and the time it took.
+- The tests run the session against a simulated Note Air (its driver's counting and its
+  command buffer, from the abl#1 traces): plain framing fails there at the second command;
+  equal-length framing runs many commands, a download that arrives byte for byte with its
+  zero padding, and a reboot.
 - `Dockerfile`: the toolchain (Rust with the Windows, arm64-musl and wasm targets,
   wasm-bindgen-cli matching `Cargo.lock`).
 
@@ -36,14 +48,15 @@ python3 -m http.server -d web 8000    # then http://localhost:8000 in a Chromium
 
 | Check | Result |
 |---|---|
-| Protocol tests (fake transport: OKAY, INFO/TEXT then OKAY, FAIL, refusals, malformed) | 5/5 pass |
+| Protocol tests (fake transport: OKAY, INFO/TEXT then OKAY, FAIL, refusals, malformed, download size check; simulated Note Air: plain fails, equal-length works, warm device refused or correct) | 10/10 pass |
 | Same source compiles for Linux x86-64 musl, Windows x86-64, arm64 musl, wasm32 | yes, no target-specific code but the entry points |
-| Linux binary | static, 634 KB; on a host with no fastboot device it enumerates and says so (exit 2) |
-| Windows binary | 466 KB, cross-built; not run (no Windows machine) |
-| Browser | wasm 222 KB; headless Chromium 156 loads the core and finds `navigator.usb` |
+| Linux binary | static, 656 KB; on a host with no fastboot device it enumerates and says so (exit 2) |
+| Windows binary | 496 KB, cross-built; not run (no Windows machine) |
+| Browser | wasm 269 KB; headless Chromium 156 loads the core and finds `navigator.usb` |
 | Note Air (bootloader fastboot), native Linux binary, first command of a boot | `product: NoteAir`, 151 ms, same as the stock `fastboot` tool |
 | Note Air, browser (Chrome, WebUSB, the same core as wasm), first command of a boot | `product: NoteAir` (2.7 s from the click, including the device chooser) |
-| Note Air, any later command of the same boot | fails, for the stock tool as for this one: the bootloader answers one command per boot ([GlassineOS/abl#1](https://github.com/GlassineOS/abl/issues/1)) |
+| Note Air, any later command of the same boot, plain framing | fails, for the stock tool as for this one ([GlassineOS/abl#1](https://github.com/GlassineOS/abl/issues/1)) |
+| Note Air, equal-length framing, this core | not run yet (the same sequence from a separate trace tool worked: many commands, 1 MiB into RAM at ~40 MB/s, reboot) |
 
 What the API costs: on wasm only the async calls exist, and web-sys's WebUSB bindings need
 `--cfg=web_sys_unstable_apis` (`.cargo/config.toml`). Natively the same async code runs
@@ -53,8 +66,13 @@ into the protocol code.
 **What the Note Air run means for the installer:** the stack works end to end on a real
 device, natively and in the browser. The Note Air's bootloader only answers the first
 fastboot command of each boot, and its data transfers (`flash`, `boot`) don't work, so on
-this device fastboot can identify, not install. Writes go through another channel (stock
-Android's adb, or GlassineOS's own USB gadget) unless abl#1 gets fixed.
+this device plain fastboot can identify, not install. With equal-length framing the same
+bootloader takes many commands and full downloads, with no change to it. So fastboot can
+install on the Note Air once `flash` is checked; the framing is a property of the device's
+bootloader, so it belongs in the device description. The padding costs one: a download is
+rounded up to whole 65535-byte chunks with zeros, and `flash` writes them, so an image
+needs that much room in its partition (a sparse image, or a raw image smaller than the
+partition by at least 64 KiB).
 
 ## Spike 2: Windows USB drivers (notes; needs a Windows machine)
 
