@@ -15,6 +15,19 @@ use std::collections::{BTreeMap, BTreeSet};
 pub const PLAN_FORMAT: i64 = 1;
 const ESP_TYPE: &str = "c12a7328-f81f-11d2-ba4b-00a0c93ec93b";
 
+/// The flow's own choices, the same on every machine (001 FR-009, FR-009a;
+/// 002 FR-024a): whether the plan makes the full backup, and where it goes.
+/// No description has a choice with these ids.
+pub const BACKUP_CHOICE: &str = "backup";
+pub const BACKUP_TO_CHOICE: &str = "backup-to";
+pub const RESERVED_CHOICES: &[&str] = &[BACKUP_CHOICE, BACKUP_TO_CHOICE];
+/// What switching the backup off costs, as the plan states it (FR-009a).
+pub const BACKUP_OFF_CONSEQUENCE: &str =
+    "Without the backup there is no way back to the maker's system and no repair from the backup. The values unique to the device are still kept.";
+/// What each image holds and how it is stored (001 FR-009).
+pub const IMAGE_HOLDS: &str = "the partition table and every partition";
+pub const IMAGE_STORED: &str = "compressed; only the used blocks where the file system tells them, every block elsewhere";
+
 #[derive(Debug, Clone, Default)]
 pub struct Input {
     /// `choice=option`, and for a template `choice.N=option` (N = the system's number).
@@ -53,8 +66,12 @@ pub struct Plan {
     pub choices: Vec<ChoiceMade>,
     pub systems: Vec<SystemOutcome>,
     pub partitions: Vec<PartitionPlan>,
+    /// Partitions no step names and no backup image holds.
     pub untouched_partitions: usize,
+    /// Partitions no step names that a backup image holds (read, never written).
+    pub imaged_partitions: usize,
     pub boot_settings: Vec<BootSettingPlan>,
+    pub backup: BackupPlan,
     pub keeps: Keeps,
     pub space: Space,
     pub capabilities: Vec<CapabilityPlan>,
@@ -99,6 +116,66 @@ pub struct BootSettingPlan {
     pub kind: String,
     pub actions: Vec<String>,
     pub steps: Vec<String>,
+}
+
+/// The full backup (001 FR-009, FR-009a): one image per disk the plan writes
+/// to, or the person's choice to go without.
+#[derive(Debug, Clone, Serialize)]
+pub struct BackupPlan {
+    /// `full` (the default) or `off`.
+    pub choice: String,
+    pub default: bool,
+    pub images: Vec<DiskImage>,
+    pub target: BackupTarget,
+    /// With the backup off, what that costs.
+    pub consequence: Option<String>,
+    /// With the backup off, the steps whose escape needed it.
+    pub escapes_lost: Vec<String>,
+}
+
+impl Default for BackupPlan {
+    fn default() -> Self {
+        BackupPlan {
+            choice: "full".into(),
+            default: true,
+            images: vec![],
+            target: BackupTarget {
+                kind: "computer".into(),
+                disk: None,
+            },
+            consequence: None,
+            escapes_lost: vec![],
+        }
+    }
+}
+
+/// One whole-disk image.
+#[derive(Debug, Clone, Serialize)]
+pub struct DiskImage {
+    pub disk: String,
+    pub index: u32,
+    /// The disk's kind (nvme, emmc, ...) and size, when inspecting saw them.
+    pub kind: Option<String>,
+    pub disk_size: Option<u64>,
+    pub holds: String,
+    pub stored: String,
+    /// The image's size as stored: `about` (the description's estimate),
+    /// `at-most` (the disk's size; inspecting didn't see the used blocks) or
+    /// `unknown`.
+    pub estimate: String,
+    pub estimate_bytes: Option<u64>,
+    pub mode: String,
+    pub means: String,
+    pub check: String,
+    pub step: String,
+}
+
+/// Where the backup goes: never a disk the plan writes to. `kind` is
+/// `computer`, `installer-media` or `disk` (with its index); never a path.
+#[derive(Debug, Clone, Serialize)]
+pub struct BackupTarget {
+    pub kind: String,
+    pub disk: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
@@ -153,6 +230,8 @@ pub struct StepPlan {
 #[derive(Debug, Clone)]
 struct Part {
     display: String,
+    /// The disk it is on.
+    disk: Option<u32>,
     name: Option<String>,
     size: Option<u64>,
     type_guid: Option<String>,
@@ -174,7 +253,9 @@ fn refused(d: Option<&Description>, facts: &Snapshot, state: Option<String>, rea
         systems: vec![],
         partitions: vec![],
         untouched_partitions: 0,
+        imaged_partitions: 0,
         boot_settings: vec![],
+        backup: BackupPlan::default(),
         keeps: Keeps::default(),
         space: Space::default(),
         capabilities: vec![],
@@ -289,11 +370,33 @@ pub fn plan(ds: &[&Description], facts: &Snapshot, rec: &Recognition, input: &In
             made.push(ChoiceMade { choice: k, value: v, default });
         }
     }
+    // The flow's own choices (FR-009, FR-009a).
+    let backup_to_default = if facts.mode == "local" { "installer-media" } else { "computer" };
+    for (k, default) in [(BACKUP_CHOICE, "full"), (BACKUP_TO_CHOICE, backup_to_default)] {
+        let (v, is_default) = match input.choices.get(k) {
+            Some(v) => (v.clone(), false),
+            None => (default.to_string(), true),
+        };
+        let ok = match k {
+            BACKUP_CHOICE => v == "full" || v == "off",
+            _ => v == backup_to_default || disk_index(&v).is_some_and(|n| facts.storage.as_ref().is_some_and(|s| s.disks.iter().any(|d| d.index == n))),
+        };
+        if !ok {
+            reasons.push(format!("{v:?} is not an option of {k:?}"));
+        }
+        values.insert(k.to_string(), v.clone());
+        made.push(ChoiceMade {
+            choice: k.to_string(),
+            value: v,
+            default: is_default,
+        });
+    }
     for k in input.choices.keys() {
         if !values.contains_key(k) {
             reasons.push(format!("no choice {k:?}"));
         }
     }
+    let backup_on = values.get(BACKUP_CHOICE).map(String::as_str) != Some("off");
     let holds = |w: &When, item: Option<usize>| -> bool {
         let key = match (d.choice(&w.choice).and_then(|c| c.for_each.as_ref()), item) {
             (Some(_), Some(i)) => format!("{}.{}", w.choice, i + 1),
@@ -333,11 +436,16 @@ pub fn plan(ds: &[&Description], facts: &Snapshot, rec: &Recognition, input: &In
 
     // Partitions as the facts show them.
     let parts = parts_of(d, facts, target_disk);
+    // The disk a partition-table write or a new partition lands on: the
+    // system's for a template step, else the target disk, else the first.
+    let first_disk = facts.storage.as_ref().and_then(|s| s.disks.first().map(|d| d.index)).unwrap_or(0);
+    let disk_for = |item: Option<usize>| -> Option<u32> { item.and_then(|i| facts.systems.get(i)).map(|s| s.disk).or(target_disk).or(Some(first_disk)) };
     let resolve = |r: &str, item: Option<usize>, creating: bool| -> Vec<Part> {
         if let Some(role) = r.strip_prefix("role:") {
             return match role {
                 "partition-table" => vec![Part {
                     display: "partition table".into(),
+                    disk: disk_for(item),
                     name: None,
                     size: None,
                     type_guid: None,
@@ -358,6 +466,7 @@ pub fn plan(ds: &[&Description], facts: &Snapshot, rec: &Recognition, input: &In
             Some(p) => vec![p.clone()],
             None if creating => vec![Part {
                 display: r.to_string(),
+                disk: disk_for(item),
                 name: Some(r.to_string()),
                 size: None,
                 type_guid: None,
@@ -365,6 +474,7 @@ pub fn plan(ds: &[&Description], facts: &Snapshot, rec: &Recognition, input: &In
             }],
             None => vec![Part {
                 display: format!("{r} (not found)"),
+                disk: disk_for(item),
                 name: Some(r.to_string()),
                 size: None,
                 type_guid: None,
@@ -408,6 +518,9 @@ pub fn plan(ds: &[&Description], facts: &Snapshot, rec: &Recognition, input: &In
     let mut backup_unknown = BTreeSet::new();
     let mut artifacts_used = BTreeSet::new();
     let mut created: BTreeSet<String> = BTreeSet::new();
+    // The disks the plan writes to, and the step that images them.
+    let mut touched_disks: BTreeSet<u32> = BTreeSet::new();
+    let mut disk_step: Option<String> = None;
     for inst in &insts {
         let s = inst.step;
         created.extend(s.creates.iter().cloned());
@@ -421,6 +534,15 @@ pub fn plan(ds: &[&Description], facts: &Snapshot, rec: &Recognition, input: &In
         }));
         for (action, list) in s.actions() {
             for r in list {
+                if r == "role:disk" {
+                    // Whole disks: which ones is known once every step is seen.
+                    if action == "backs_up" {
+                        disk_step.get_or_insert(inst.id.clone());
+                    } else {
+                        reasons.push(format!("step {:?} {} a whole disk, which no step may", inst.id, action.replace('_', " ")));
+                    }
+                    continue;
+                }
                 for p in resolve(r, inst.item, action == "creates" || s.creates.contains(r) || created.contains(r)) {
                     if p.roles.contains("missing") && action != "creates" {
                         reasons.push(format!(
@@ -463,6 +585,11 @@ pub fn plan(ds: &[&Description], facts: &Snapshot, rec: &Recognition, input: &In
                             steps: vec![],
                         }
                     });
+                    if matches!(action, "writes" | "creates" | "resizes" | "removes")
+                        && let Some(n) = p.disk
+                    {
+                        touched_disks.insert(n);
+                    }
                     let a = action.replace('_', "-");
                     if !e.actions.contains(&a) {
                         e.actions.push(a);
@@ -537,6 +664,76 @@ pub fn plan(ds: &[&Description], facts: &Snapshot, rec: &Recognition, input: &In
         });
     }
 
+    // The full backup (001 FR-009): one image per disk the plan writes to.
+    let mut backup = BackupPlan {
+        choice: values.get(BACKUP_CHOICE).cloned().unwrap_or_else(|| "full".into()),
+        default: !input.choices.contains_key(BACKUP_CHOICE),
+        ..BackupPlan::default()
+    };
+    let to = values.get(BACKUP_TO_CHOICE).cloned().unwrap_or_default();
+    backup.target = match disk_index(&to) {
+        Some(n) => BackupTarget {
+            kind: "disk".into(),
+            disk: Some(n),
+        },
+        None => BackupTarget { kind: to, disk: None },
+    };
+    let disk_rule = d.partitions.iter().find(|r| r.select.role.as_deref() == Some("disk"));
+    let disk_means = disk_rule.and_then(|r| r.back_up.as_ref()).filter(|b| b.means.is_some());
+    if backup_on && !touched_disks.is_empty() {
+        match (disk_means, &disk_step) {
+            (Some(b), Some(step)) => {
+                for n in &touched_disks {
+                    let disk = facts.storage.as_ref().and_then(|s| s.disks.iter().find(|x| x.index == *n));
+                    let (estimate, bytes) = match (&b.size, disk) {
+                        (Some(Scalar::Int(x)), _) => ("about", Some(*x as u64)),
+                        (_, Some(disk)) => ("at-most", Some(disk.size)),
+                        _ => ("unknown", None),
+                    };
+                    match bytes {
+                        Some(x) => backup_bytes += x,
+                        None => {
+                            backup_unknown.insert(format!("disk {n} image"));
+                        }
+                    }
+                    backup.images.push(DiskImage {
+                        disk: format!("disk {n}"),
+                        index: *n,
+                        kind: disk.map(|x| x.kind.clone()),
+                        disk_size: disk.map(|x| x.size),
+                        holds: IMAGE_HOLDS.into(),
+                        stored: IMAGE_STORED.into(),
+                        estimate: estimate.into(),
+                        estimate_bytes: bytes,
+                        mode: b.mode.clone().unwrap_or_default(),
+                        means: b.means.clone().unwrap_or_default(),
+                        check: b.check.clone().unwrap_or_default(),
+                        step: step.clone(),
+                    });
+                }
+                if let Some(n) = backup.target.disk
+                    && touched_disks.contains(&n)
+                {
+                    reasons.push(format!(
+                        "the backup can't go to disk {n}: the plan writes to it; choose another place or switch the backup off"
+                    ));
+                }
+            }
+            _ => reasons.push(
+                "the description doesn't say how to back up a whole disk, so the full backup can't be made; switch the backup off to install without one"
+                    .into(),
+            ),
+        }
+    }
+    if !backup_on {
+        backup.consequence = Some(BACKUP_OFF_CONSEQUENCE.into());
+        backup.escapes_lost = steps
+            .iter()
+            .filter(|s| s.on_failure.leaves == "installer-can-undo" || s.on_interruption.leaves == "installer-can-undo")
+            .map(|s| s.id.clone())
+            .collect();
+    }
+
     // Space (FR-016a: the backup counts, as well as the artifacts).
     let mut artifact_bytes = 0;
     let mut artifacts_unknown = Vec::new();
@@ -549,7 +746,8 @@ pub fn plan(ds: &[&Description], facts: &Snapshot, rec: &Recognition, input: &In
     let backup_unknown: Vec<String> = backup_unknown.into_iter().collect();
     let space = Space {
         backup_bytes,
-        exact: backup_unknown.is_empty() && artifacts_unknown.is_empty(),
+        // An image's size is an estimate until it is made.
+        exact: backup_unknown.is_empty() && artifacts_unknown.is_empty() && backup.images.is_empty(),
         backup_unknown,
         artifact_bytes,
         artifacts_unknown,
@@ -635,7 +833,18 @@ pub fn plan(ds: &[&Description], facts: &Snapshot, rec: &Recognition, input: &In
     }
 
     let touched: BTreeSet<&str> = pplans.keys().map(String::as_str).collect();
-    let untouched = parts.iter().filter(|p| !touched.contains(p.display.as_str())).count();
+    let imaged: BTreeSet<u32> = backup.images.iter().map(|i| i.index).collect();
+    let (mut untouched, mut imaged_parts) = (0, 0);
+    for p in parts.iter().filter(|p| !touched.contains(p.display.as_str())) {
+        match p.disk {
+            Some(n) if imaged.contains(&n) => {
+                if !p.roles.contains("free-space") {
+                    imaged_parts += 1;
+                }
+            }
+            _ => untouched += 1,
+        }
+    }
     Plan {
         plan_format: PLAN_FORMAT,
         description: d.id.clone(),
@@ -650,7 +859,9 @@ pub fn plan(ds: &[&Description], facts: &Snapshot, rec: &Recognition, input: &In
         systems,
         partitions: porder.iter().filter_map(|k| pplans.remove(k)).collect(),
         untouched_partitions: untouched,
+        imaged_partitions: imaged_parts,
         boot_settings: bplans.into_values().collect(),
+        backup,
         keeps: Keeps {
             unit_values: d.unit_values.iter().map(|u| u.what.clone()).collect(),
             device_files: d.device_files.iter().map(|f| f.what.clone()).collect(),
@@ -719,6 +930,7 @@ fn parts_of(d: &Description, facts: &Snapshot, target: Option<u32>) -> Vec<Part>
                 };
                 out.push(Part {
                     display,
+                    disk: Some(disk.index),
                     name: p.name.clone(),
                     size: Some(p.size),
                     type_guid: p.type_guid.clone(),
@@ -729,6 +941,7 @@ fn parts_of(d: &Description, facts: &Snapshot, target: Option<u32>) -> Vec<Part>
                 let free: u64 = disk.free.iter().sum();
                 out.push(Part {
                     display: format!("disk {} free space", disk.index),
+                    disk: Some(disk.index),
                     name: None,
                     size: Some(free),
                     type_guid: None,
@@ -739,8 +952,10 @@ fn parts_of(d: &Description, facts: &Snapshot, target: Option<u32>) -> Vec<Part>
     } else if let Some(fb) = &facts.fastboot {
         for (k, v) in &fb.variables {
             if let (Some(name), Some(v)) = (k.strip_prefix("partition-size:"), v) {
+                // Fixed partitions a boot loader names are on its one disk.
                 out.push(Part {
                     display: name.into(),
+                    disk: Some(0),
                     name: Some(name.into()),
                     size: crate::facts::parse_number(v).map(|n| n as u64),
                     type_guid: None,
@@ -833,7 +1048,55 @@ pub fn render(p: &Plan, d: Option<&Description>) -> String {
                 line(&mut o, "    Everything on it is deleted: files on it are lost.".into());
             }
         }
-        line(&mut o, format!("  {} other partitions are not touched.", p.untouched_partitions));
+        if p.imaged_partitions > 0 {
+            line(
+                &mut o,
+                format!(
+                    "  {} other partitions are only read, into the backup; {} are not touched.",
+                    p.imaged_partitions, p.untouched_partitions
+                ),
+            );
+        } else {
+            line(&mut o, format!("  {} other partitions are not touched.", p.untouched_partitions));
+        }
+    }
+    if p.job.is_some() {
+        let b = &p.backup;
+        let target = match (b.target.kind.as_str(), b.target.disk) {
+            ("disk", Some(n)) => format!("disk {n}"),
+            ("installer-media", _) => "the installer's USB stick".into(),
+            ("computer", _) => "this computer".into(),
+            (k, _) => k.to_string(),
+        };
+        if b.choice == "off" {
+            line(&mut o, "\nBackup: off (your choice).".into());
+            if let Some(c) = &b.consequence {
+                line(&mut o, format!("  {c}"));
+            }
+            if !b.escapes_lost.is_empty() {
+                line(&mut o, format!("  Steps whose way out needed it: {}.", b.escapes_lost.join(", ")));
+            }
+        } else if !b.images.is_empty() {
+            line(
+                &mut o,
+                format!(
+                    "\nBackup{}, to {target}, checked by reading it back before the first write:",
+                    if b.default { " (default)" } else { "" }
+                ),
+            );
+            for i in &b.images {
+                let what = match (&i.kind, i.disk_size) {
+                    (Some(k), Some(n)) => format!(" ({k}, {})", human(n)),
+                    _ => String::new(),
+                };
+                let size = match (i.estimate.as_str(), i.estimate_bytes) {
+                    ("about", Some(n)) => format!("about {}", human(n)),
+                    ("at-most", Some(n)) => format!("at most {}", human(n)),
+                    _ => "size unknown".into(),
+                };
+                line(&mut o, format!("  {}{what}, whole: {}; {size}, stored {}", i.disk, i.holds, i.stored));
+            }
+        }
     }
     if !p.boot_settings.is_empty() {
         line(&mut o, "\nHow the machine starts:".into());
@@ -921,8 +1184,18 @@ pub fn render(p: &Plan, d: Option<&Description>) -> String {
                     e.way_out
                 )
             };
-            line(&mut o, format!("     if it fails: {}", esc(&st.on_failure)));
-            line(&mut o, format!("     if cut off after it: {}", esc(&st.on_interruption)));
+            let lost = |e: &EscapePlan| {
+                if p.backup.choice == "off" && e.leaves == "installer-can-undo" {
+                    " (not possible: the backup is off)"
+                } else {
+                    ""
+                }
+            };
+            line(&mut o, format!("     if it fails: {}{}", esc(&st.on_failure), lost(&st.on_failure)));
+            line(
+                &mut o,
+                format!("     if cut off after it: {}{}", esc(&st.on_interruption), lost(&st.on_interruption)),
+            );
         }
     }
     o

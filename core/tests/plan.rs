@@ -158,3 +158,95 @@ fn the_plan_checks_each_partition_against_its_rule() {
         p.reasons
     );
 }
+
+/// 001 FR-009: one image per disk the plan writes to, and only those. Two
+/// fixed disks, each with a system; GlassineOS goes on one of them.
+#[test]
+fn only_the_disk_written_to_is_imaged() {
+    let p = run("pc-two-disks-first", "pc-two-disks", input(&[], &[], true));
+    let imaged: Vec<u32> = p.backup.images.iter().map(|i| i.index).collect();
+    assert_eq!(imaged, vec![0]);
+    assert_eq!(p.backup.images[0].estimate, "at-most", "inspecting doesn't see used blocks");
+    assert_eq!(p.backup.images[0].estimate_bytes, Some(549755813888));
+    assert_eq!(p.backup.target.kind, "installer-media");
+    assert_eq!(p.status, Status::Ready);
+
+    let p = run("pc-two-disks-second", "pc-two-disks", input(&[("target-disk", "disk1")], &[], true));
+    let imaged: Vec<u32> = p.backup.images.iter().map(|i| i.index).collect();
+    assert_eq!(imaged, vec![1]);
+    // Disk 0's partitions are neither imaged nor written.
+    assert!(p.partitions.iter().all(|x| !x.partition.starts_with("disk 0")), "{:#?}", p.partitions);
+    assert_eq!(p.status, Status::Ready);
+}
+
+/// Replacing the system on the other disk writes that disk too: both are imaged.
+#[test]
+fn every_disk_written_to_is_imaged() {
+    let ds = [valid(&pc())];
+    let refs: Vec<&Description> = ds.iter().collect();
+    let f = facts("pc-two-disks");
+    let p = plan(&refs, &f, &recognize(&refs, &f), &input(&[("systems.2", "replace")], &[], true));
+    let imaged: Vec<u32> = p.backup.images.iter().map(|i| i.index).collect();
+    assert_eq!(imaged, vec![0, 1]);
+}
+
+/// Each image goes somewhere other than the disks being changed.
+#[test]
+fn the_backup_never_goes_to_a_disk_it_images() {
+    let ds = [valid(&pc())];
+    let refs: Vec<&Description> = ds.iter().collect();
+    let f = facts("pc-two-disks");
+    let p = plan(&refs, &f, &recognize(&refs, &f), &input(&[("backup-to", "disk0")], &[], true));
+    assert_eq!(p.status, Status::Refused);
+    assert!(p.reasons.iter().any(|r| r.contains("can't go to disk 0")), "{:?}", p.reasons);
+    let p = plan(&refs, &f, &recognize(&refs, &f), &input(&[("backup-to", "disk1")], &[], true));
+    assert_eq!(p.status, Status::Ready, "{:?}", p.reasons);
+    assert_eq!(p.backup.target.disk, Some(1));
+}
+
+/// FR-009a: switching the backup off is a choice of its own, with its consequence.
+#[test]
+fn the_backup_can_be_switched_off() {
+    let p = run(
+        "pc-windows-replace-no-backup",
+        "pc-windows",
+        input(&[("systems.1", "replace"), ("backup", "off")], &[], true),
+    );
+    assert_eq!(p.status, Status::Ready);
+    assert!(p.backup.images.is_empty());
+    assert!(p.backup.consequence.as_deref().is_some_and(|c| c.contains("no way back")));
+    assert_eq!(p.backup.escapes_lost, vec!["remove-system.1".to_string()]);
+    assert!(p.choices.iter().any(|c| c.choice == "backup" && c.value == "off" && !c.default));
+    let p = run(
+        "noteair-no-backup",
+        "noteair-stock-fastboot",
+        input(&[("backup", "off")], &[("emergency-cable", true)], true),
+    );
+    assert!(p.backup.images.is_empty());
+    assert_eq!(p.space.backup_bytes, 0);
+}
+
+/// The Note Air's image is its whole storage, sized by its description.
+#[test]
+fn note_air_images_its_whole_storage() {
+    let p = run("noteair-keep-stock", "noteair-stock-fastboot", Input::default());
+    assert_eq!(p.backup.images.len(), 1);
+    let i = &p.backup.images[0];
+    assert_eq!((i.estimate.as_str(), i.estimate_bytes), ("about", Some(8_600_000_000)));
+    assert_eq!(p.backup.target.kind, "computer");
+    assert_eq!(p.untouched_partitions, 0);
+}
+
+/// FR-003: a format-1 description says nothing about whole disks, so the
+/// full backup can't be planned for it; with the backup off it can.
+#[test]
+fn a_format_1_description_has_no_full_backup() {
+    let d = valid(&text("core/tests/fixtures/descriptions/uefi-pc-format1.toml"));
+    let refs = [&d];
+    let f = facts("pc-windows");
+    let p = plan(&refs, &f, &recognize(&refs, &f), &input(&[], &[], true));
+    assert_eq!(p.status, Status::Refused);
+    assert!(p.reasons.iter().any(|r| r.contains("whole disk")), "{:?}", p.reasons);
+    let p = plan(&refs, &f, &recognize(&refs, &f), &input(&[("backup", "off")], &[], true));
+    assert_eq!(p.status, Status::Ready, "{:?}", p.reasons);
+}
