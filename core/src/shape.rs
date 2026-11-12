@@ -20,6 +20,10 @@ pub enum Shape {
     Bool {
         doc: String,
     },
+    /// Only `true` (for `present = true`, `absent = true`).
+    True {
+        doc: String,
+    },
     /// A whole number of bytes, or a string with a pattern (sizes, FR-014a).
     IntOrStr {
         pattern: &'static str,
@@ -121,6 +125,8 @@ impl Shape {
                 }
             }
             (Shape::Bool { .. }, Value::Boolean(_)) => {}
+            (Shape::True { .. }, Value::Boolean(true)) => {}
+            (Shape::True { .. }, Value::Boolean(false)) => out.push(problem(path, "write true")),
             (Shape::IntOrStr { .. }, Value::Integer(i)) if *i >= 0 => {}
             (Shape::IntOrStr { pattern, .. }, Value::String(s)) => {
                 if !matches(pattern, s) {
@@ -161,7 +167,7 @@ impl Shape {
         match self {
             Shape::Str { .. } => "a string",
             Shape::Int { .. } => "an integer",
-            Shape::Bool { .. } => "a boolean",
+            Shape::Bool { .. } | Shape::True { .. } => "a boolean",
             Shape::IntOrStr { .. } => "a whole number or a string",
             Shape::Array { .. } => "an array",
             Shape::Table(_) | Shape::Map { .. } => "a table",
@@ -188,6 +194,7 @@ impl Shape {
                 J::Object(m)
             }
             Shape::Bool { doc } => J::Object(obj(&[("type", json!("boolean"))], doc)),
+            Shape::True { doc } => J::Object(obj(&[("const", json!(true))], doc)),
             Shape::IntOrStr { pattern, doc } => J::Object(obj(
                 &[("oneOf", json!([{ "type": "integer", "minimum": 0 }, { "type": "string", "pattern": pattern }]))],
                 doc,
@@ -295,9 +302,13 @@ impl Table {
                 .variants
                 .iter()
                 .map(|(id, v)| {
+                    let mut then = json!({ "properties": { t.sub: v.json_schema() } });
+                    if v.fields.iter().any(|f| f.required) {
+                        then["required"] = json!([t.sub]);
+                    }
                     json!({
                         "if": { "properties": { t.tag: { "const": id } }, "required": [t.tag] },
-                        "then": { "properties": { t.sub: v.json_schema() } }
+                        "then": then
                     })
                 })
                 .collect();

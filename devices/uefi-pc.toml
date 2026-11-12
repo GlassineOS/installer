@@ -60,6 +60,12 @@ untried = "the PC backend isn't built yet"
 
 # ---- what it may write ------------------------------------------------------
 
+# The EFI system partition is shared by every system: never removed with one.
+[[partitions]]
+select = { role = "esp" }
+class = "back-up"
+back_up = { mode = "local", means = "block-read", check = "read-back-compare" }
+
 # An operating system's partitions: replaced only where the person chose so.
 [[partitions]]
 select = { role = "os" }
@@ -70,11 +76,6 @@ when = { choice = "systems", equals = "replace" }
 [[partitions]]
 select = { role = "os" }
 class = "never-write"
-
-[[partitions]]
-select = { role = "esp" }
-class = "back-up"
-back_up = { mode = "local", means = "block-read", check = "read-back-compare" }
 
 [[partitions]]
 select = { role = "partition-table" }

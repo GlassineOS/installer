@@ -45,23 +45,24 @@ pub fn load(text: &str) -> Loaded {
         out.push(problem("format", "must be the first key"));
     }
     format1::shape().walk(&tab, "", &mut out);
-    if !out.is_empty() {
-        out.sort();
-        out.dedup();
-        return Loaded::Invalid(out);
+    // The rules beyond the structure run whenever the tree still reads as
+    // format 1 (an unknown value or a missing parameter does), so a person
+    // sees every problem at once; an unknown key or a wrong type stops them.
+    let structural = !out.is_empty();
+    let d: Option<Description> = toml::Value::Table(tab).try_into().ok();
+    match &d {
+        Some(d) => out.extend(check(d)),
+        None if structural => {}
+        None => out.push(problem("", "does not read as format 1")),
     }
-    let d: Description = match toml::Value::Table(tab).try_into() {
-        Ok(d) => d,
-        Err(e) => return Loaded::Invalid(vec![problem("", format!("does not read as format 1: {}", e.message()))]),
-    };
-    let mut out = check(&d);
     out.extend(never_holds(text));
-    if out.is_empty() {
-        Loaded::Valid(Box::new(d))
-    } else {
-        out.sort();
-        out.dedup();
-        Loaded::Invalid(out)
+    match d {
+        Some(d) if out.is_empty() => Loaded::Valid(Box::new(d)),
+        _ => {
+            out.sort();
+            out.dedup();
+            Loaded::Invalid(out)
+        }
     }
 }
 

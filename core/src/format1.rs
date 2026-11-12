@@ -516,7 +516,7 @@ fn condition(doc: &str, with_mode: bool, identity: bool) -> Shape {
     let mut fields = vec![f("key", sp("^[a-z]+\\.[A-Za-z0-9_.:<>-]+$", "the fact key (see the fact vocabulary)"))];
     for mut t in tests() {
         t.shape = match t.name {
-            "present" | "absent" => Shape::Bool {
+            "present" | "absent" => Shape::True {
                 doc: format!("the fact is {} (write true)", t.name),
             },
             _ => t.shape,

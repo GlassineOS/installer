@@ -333,7 +333,10 @@ pub fn report(ds: &[&Description], facts: &Snapshot, rec: &Recognition, plan: Op
                 .collect::<Vec<_>>()
         };
         PlanSummary {
-            status: format!("{:?}", p.status).to_lowercase(),
+            status: serde_json::to_value(&p.status)
+                .ok()
+                .and_then(|v| v.as_str().map(String::from))
+                .unwrap_or_default(),
             keeps: p.systems.iter().filter(|s| s.outcome.starts_with("kept")).map(|s| s.system.clone()).collect(),
             backs_up: with("backs-up"),
             replaces: with("writes").into_iter().filter(|x| !with("creates").contains(x)).collect(),
@@ -351,7 +354,9 @@ pub fn report(ds: &[&Description], facts: &Snapshot, rec: &Recognition, plan: Op
             }
         }
     }
-    let supported = matches!(rec.outcome, Outcome::Match { .. }) && plan.is_none_or(|p| p.status != crate::plan::Status::Refused || p.job.is_some());
+    // Supported: recognised, and a plan exists that isn't refused (001 FR-016:
+    // a device lacking what GlassineOS needs to boot safely is refused).
+    let supported = matches!(rec.outcome, Outcome::Match { .. }) && plan.is_some_and(|p| p.status != crate::plan::Status::Refused);
     Report {
         report_format: REPORT_FORMAT,
         mode: facts.mode.clone(),
