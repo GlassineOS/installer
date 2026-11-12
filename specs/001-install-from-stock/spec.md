@@ -51,9 +51,14 @@ who add devices. It holds no personal data and no value unique to the unit.
 and GlassineOS can't read),
 **When** it is installed,
 **Then** never-write partitions are only read; each unit-specific value the description
-names is captured before the first write and is in place in the installed system; every
-partition the plan replaces is in a backup on the person's computer, verified before the
-first write; and the plan names the backup's location.
+names is captured before the first write and is in place in the installed system; a full
+backup of the machine's storage (every partition and the partition table, enough to undo
+any damage) is on the person's computer or a disk they chose, verified before the first
+write; and the plan names the backup's location and size.
+**And given** too little room for the backup, or a person who doesn't want one, **when**
+they switch the backup off, **then** the plan says plainly that going back to the maker's
+system and repairing damage from it are then impossible, the switch is its own choice,
+and the unit-specific values are still captured.
 
 ### Scenario 4 – An installation that is cut off (P1)
 
@@ -105,6 +110,8 @@ texts the description provides.
   with which one and why.
 - The computer loses the backup between backup and install (disk full, removed): the
   install doesn't start.
+- Not enough room for the backup where the person chose: the plan offers another place
+  (another disk) or installing without it (FR-009a).
 - The person cancels after confirming: the installer stops at the next point the plan names
   as safe, and offers to resume or undo.
 - A step that only special hardware can escape (an emergency-mode cable): the plan asks
@@ -139,8 +146,14 @@ texts the description provides.
 
 ### Keep what can't be replaced
 
-- **FR-009**: Everything the plan replaces is backed up, and the backup is verified by
-  reading it back before the first write.
+- **FR-009**: By default the plan makes a full backup: every partition of the machine's
+  storage and its partition table, so that any damage can be undone, not only what the plan
+  replaces. It is verified by reading it back before the first write. The plan shows its
+  size (stored compressed) before the person confirms.
+- **FR-009a**: The backup can be switched off, on a PC and on a device, so that an
+  installation also works with little free space. Switching it off is a choice of its own
+  with its consequence stated (no way back to the maker's system, no repair from the
+  backup), never a side effect. The unit-specific values of FR-010 are captured either way.
 - **FR-010**: Unit-specific values the description names are captured before the first
   write and placed into the installed system.
 - **FR-011**: Vendor files are read from the device, used, and deleted from the computer
@@ -199,7 +212,7 @@ texts the description provides.
   comparing the machine before and after.
 - **SC-003**: With an interruption injected after every step of the plan, every run ends
   in one of the three states of Scenario 4.
-- **SC-004**: Going back to stock restores every replaced partition byte-identical to the
+- **SC-004**: Going back to stock restores every partition byte-identical to the full
   backup.
 - **SC-005**: The Note Air and a UEFI PC are installed by the same flow. Neither has a
   screen or check the other lacks, apart from the texts of their descriptions.
