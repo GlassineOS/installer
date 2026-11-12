@@ -5,7 +5,7 @@
 #
 # Nothing here has been tried on real hardware yet.
 
-format = 1
+format = 2
 id = "uefi-pc"
 name = "UEFI PC (x86-64)"
 backend = "uefi-pc"
@@ -63,8 +63,7 @@ untried = "the PC backend isn't built yet"
 # The EFI system partition is shared by every system: never removed with one.
 [[partitions]]
 select = { role = "esp" }
-class = "back-up"
-back_up = { mode = "local", means = "block-read", check = "read-back-compare" }
+class = "never-write"
 
 # An operating system's partitions: replaced only where the person chose so.
 [[partitions]]
@@ -80,7 +79,6 @@ class = "never-write"
 [[partitions]]
 select = { role = "partition-table" }
 class = "replace"
-back_up = { mode = "local", means = "block-read", check = "read-back-compare", size = 1048576 }
 
 [[partitions]]
 select = { role = "free-space" }
@@ -90,6 +88,14 @@ class = "create"
 select = { names = ["glassine-boot", "glassine-system"] }
 class = "create"
 
+# Every disk the installation writes to is backed up whole first: its
+# partition table and every partition, as one image (installer 001 FR-009).
+# The disk as one object is never written; its partitions' rules decide.
+[[partitions]]
+select = { role = "disk" }
+class = "never-write"
+back_up = { mode = "local", means = "block-read", check = "read-back-compare" }
+
 [[boot_settings]]
 id = "boot-entries"
 kind = "firmware-boot-entry"
@@ -98,7 +104,7 @@ back_up = { mode = "local", means = "efi-variables", check = "read-back-compare"
 [[boot_settings]]
 id = "boot-order"
 kind = "firmware-boot-order"
-back_up = { with = "role:partition-table" }
+back_up = { mode = "local", means = "efi-variables", check = "read-back-compare", size = 4096 }
 
 # ---- what an installation does ----------------------------------------------
 
@@ -150,7 +156,7 @@ id = "back-up"
 job = "install"
 kind = "back-up"
 mode = "local"
-backs_up = ["role:esp", "role:partition-table"]
+backs_up = ["role:disk"]
 boot_settings = ["boot-entries", "boot-order"]
 done = [{ key = "installer.backup-verified", present = true, mode = "installer" }]
 escape.failure = { leaves = "previous-system-starts", way_out = { step = "back-up" } }
@@ -256,7 +262,7 @@ systems = "What happens to this operating system."
 "systems.replace" = "Replace it. Everything on it, your files included, is deleted."
 
 [texts.steps]
-back-up = "Back up the partition table, the EFI system partition and the firmware's boot entries to the installer's stick."
+back-up = "Back up every disk GlassineOS changes, whole, and the firmware's boot entries, then check the backup by reading it back."
 remove-system = "Delete the operating system you chose to replace."
 create-partitions = "Make room for GlassineOS in the free space."
 write-base = "Put GlassineOS on its new partition."

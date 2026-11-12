@@ -6,26 +6,31 @@ Status: developers only
 Choices:
   target-disk = first (default)
   systems.1 = keep (default)
+  backup = full (default)
+  backup-to = installer-media (default)
 
 Systems:
   system 1 (windows): kept and still startable
 
 Partitions:
-  disk 0 partition 1 (back-up, 100.0 MiB): backs-up
-  partition table (replace): backs-up, writes
+  partition table (replace): writes
   disk 0 free space (create, 200.0 GiB): creates
   glassine-boot (create): creates, writes
   glassine-system (create): creates, writes
-  4 other partitions are not touched.
+  4 other partitions are only read, into the backup; 1 are not touched.
+
+Backup (default), to the installer's USB stick, checked by reading it back before the first write:
+  disk 0 (nvme, 512.0 GiB), whole: the partition table and every partition; at most 512.0 GiB, stored compressed; only the used blocks where the file system tells them, every block elsewhere
+  You can switch it off (choice backup = off). Without the backup there is no way back to the maker's system and no repair from the backup. The values unique to the device are still kept.
 
 How the machine starts:
   boot-entries (firmware-boot-entry): back-up, change
   boot-order (firmware-boot-order): back-up, change
 
 Space on the computer:
-  backup 101.1 MiB
+  backup 68.0 KiB plus images of at most 512.0 GiB
   artifacts 0 B plus base, kernel of unknown size
-  at least 101.1 MiB
+  at least 68.0 KiB
 
 Afterwards the device:
   have start-kernel [untried]
@@ -34,7 +39,7 @@ Afterwards the device:
 
 Steps:
   1. back-up (back-up, in local) [safe stop]
-     Back up the partition table, the EFI system partition and the firmware's boot entries to the installer's stick.
+     Back up every disk GlassineOS changes, whole, and the firmware's boot entries, then check the backup by reading it back.
      if it fails: previous-system-starts via step back-up
      if cut off after it: previous-system-starts via step back-up
   2. create-partitions (create-partitions, in local) [untried, safe stop]

@@ -1,0 +1,388 @@
+{
+  "plan_format": 1,
+  "description": "onyx-noteair",
+  "device": "Onyx Boox Note Air",
+  "mode": "fastboot",
+  "state": "stock",
+  "job": "install",
+  "status": "ready",
+  "reasons": [],
+  "questions": [
+    {
+      "hardware": "emergency-cable",
+      "steps": [
+        "replace-boot-loader",
+        "partition-table"
+      ],
+      "answer": true
+    }
+  ],
+  "choices": [
+    {
+      "choice": "keep-stock",
+      "value": "yes",
+      "default": true
+    },
+    {
+      "choice": "backup",
+      "value": "off",
+      "default": false
+    },
+    {
+      "choice": "backup-to",
+      "value": "computer",
+      "default": true
+    }
+  ],
+  "systems": [
+    {
+      "system": "stock system",
+      "outcome": "kept and still startable"
+    }
+  ],
+  "partitions": [
+    {
+      "partition": "abl",
+      "class": "replace",
+      "actions": [
+        "writes"
+      ],
+      "size": 1048576,
+      "loses_files": false,
+      "steps": [
+        "replace-boot-loader"
+      ]
+    },
+    {
+      "partition": "partition table",
+      "class": "replace",
+      "actions": [
+        "writes"
+      ],
+      "size": null,
+      "loses_files": false,
+      "steps": [
+        "partition-table"
+      ]
+    },
+    {
+      "partition": "boot_b",
+      "class": "create",
+      "actions": [
+        "creates",
+        "writes"
+      ],
+      "size": null,
+      "loses_files": false,
+      "steps": [
+        "partition-table",
+        "write-kernel"
+      ]
+    },
+    {
+      "partition": "system_b",
+      "class": "create",
+      "actions": [
+        "creates",
+        "writes"
+      ],
+      "size": null,
+      "loses_files": false,
+      "steps": [
+        "partition-table",
+        "write-base"
+      ]
+    },
+    {
+      "partition": "vendor_b",
+      "class": "create",
+      "actions": [
+        "creates"
+      ],
+      "size": null,
+      "loses_files": false,
+      "steps": [
+        "partition-table"
+      ]
+    },
+    {
+      "partition": "userdata",
+      "class": "resize",
+      "actions": [
+        "resizes"
+      ],
+      "size": 25799147008,
+      "loses_files": true,
+      "steps": [
+        "partition-table"
+      ]
+    },
+    {
+      "partition": "recovery",
+      "class": "replace",
+      "actions": [
+        "writes"
+      ],
+      "size": 67108864,
+      "loses_files": false,
+      "steps": [
+        "write-recovery"
+      ]
+    }
+  ],
+  "untouched_partitions": 45,
+  "imaged_partitions": 0,
+  "boot_settings": [
+    {
+      "id": "boot-loader",
+      "kind": "boot-loader",
+      "actions": [
+        "change"
+      ],
+      "steps": [
+        "replace-boot-loader"
+      ]
+    },
+    {
+      "id": "slot-flags",
+      "kind": "slot-flags",
+      "actions": [
+        "change"
+      ],
+      "steps": [
+        "partition-table",
+        "set-slot"
+      ]
+    }
+  ],
+  "backup": {
+    "choice": "off",
+    "default": false,
+    "images": [],
+    "target": {
+      "kind": "computer",
+      "disk": null
+    },
+    "consequence": "Without the backup there is no way back to the maker's system and no repair from the backup. The values unique to the device are still kept.",
+    "escapes_lost": []
+  },
+  "keeps": {
+    "unit_values": [],
+    "device_files": [],
+    "device_data": [
+      "gpu-firmware",
+      "sensor-calibration",
+      "modem-firmware",
+      "wifi-firmware"
+    ]
+  },
+  "space": {
+    "backup_bytes": 0,
+    "backup_at_most": 0,
+    "backup_unknown": [],
+    "artifact_bytes": 0,
+    "artifacts_unknown": [
+      "base",
+      "boot-loader",
+      "kernel",
+      "partition-layout",
+      "recovery"
+    ],
+    "total_at_least": 0,
+    "exact": false
+  },
+  "capabilities": [
+    {
+      "id": "start-kernel",
+      "status": "have",
+      "with": null,
+      "tried": false
+    },
+    {
+      "id": "fallback-boot",
+      "status": "have",
+      "with": null,
+      "tried": false
+    },
+    {
+      "id": "trial-boot",
+      "status": "lack",
+      "with": null,
+      "tried": false
+    },
+    {
+      "id": "recovery",
+      "status": "needs",
+      "with": "the GlassineOS recovery, which isn't built yet",
+      "tried": false
+    },
+    {
+      "id": "keep-stock",
+      "status": "have",
+      "with": null,
+      "tried": false
+    },
+    {
+      "id": "secondary-recovery",
+      "status": "lack",
+      "with": null,
+      "tried": false
+    },
+    {
+      "id": "choose-at-start",
+      "status": "needs",
+      "with": "a way to pick a slot at start-up, which isn't decided",
+      "tried": false
+    }
+  ],
+  "steps": [
+    {
+      "id": "back-up",
+      "kind": "back-up",
+      "mode": "ram",
+      "done": "false",
+      "writes": false,
+      "tried": false,
+      "point_of_no_return": false,
+      "safe_stop": true,
+      "on_failure": {
+        "leaves": "previous-system-starts",
+        "hardware": null,
+        "way_out": "transition ram-to-android"
+      },
+      "on_interruption": {
+        "leaves": "previous-system-starts",
+        "hardware": null,
+        "way_out": "transition ram-to-android"
+      }
+    },
+    {
+      "id": "replace-boot-loader",
+      "kind": "write-boot-loader",
+      "mode": "fastboot-stock",
+      "done": "false",
+      "writes": true,
+      "tried": false,
+      "point_of_no_return": true,
+      "safe_stop": true,
+      "on_failure": {
+        "leaves": "special-hardware",
+        "hardware": "emergency-cable",
+        "way_out": "transition cable-to-emergency"
+      },
+      "on_interruption": {
+        "leaves": "previous-system-starts",
+        "hardware": null,
+        "way_out": "transition fastboot-to-android"
+      }
+    },
+    {
+      "id": "partition-table",
+      "kind": "write-partition-table",
+      "mode": "fastboot",
+      "done": "false",
+      "writes": true,
+      "tried": false,
+      "point_of_no_return": true,
+      "safe_stop": true,
+      "on_failure": {
+        "leaves": "special-hardware",
+        "hardware": "emergency-cable",
+        "way_out": "transition cable-to-emergency"
+      },
+      "on_interruption": {
+        "leaves": "installer-can-finish",
+        "hardware": null,
+        "way_out": "step write-kernel"
+      }
+    },
+    {
+      "id": "write-kernel",
+      "kind": "write-image",
+      "mode": "fastboot",
+      "done": "false",
+      "writes": true,
+      "tried": false,
+      "point_of_no_return": false,
+      "safe_stop": true,
+      "on_failure": {
+        "leaves": "installer-can-finish",
+        "hardware": null,
+        "way_out": "step write-kernel"
+      },
+      "on_interruption": {
+        "leaves": "installer-can-finish",
+        "hardware": null,
+        "way_out": "step write-base"
+      }
+    },
+    {
+      "id": "write-base",
+      "kind": "write-base",
+      "mode": "fastboot",
+      "done": "false",
+      "writes": true,
+      "tried": false,
+      "point_of_no_return": false,
+      "safe_stop": true,
+      "on_failure": {
+        "leaves": "installer-can-finish",
+        "hardware": null,
+        "way_out": "step write-base"
+      },
+      "on_interruption": {
+        "leaves": "installer-can-finish",
+        "hardware": null,
+        "way_out": "step write-recovery"
+      }
+    },
+    {
+      "id": "write-recovery",
+      "kind": "write-image",
+      "mode": "fastboot",
+      "done": "false",
+      "writes": true,
+      "tried": false,
+      "point_of_no_return": false,
+      "safe_stop": true,
+      "on_failure": {
+        "leaves": "installer-can-finish",
+        "hardware": null,
+        "way_out": "step write-recovery"
+      },
+      "on_interruption": {
+        "leaves": "installer-can-finish",
+        "hardware": null,
+        "way_out": "step set-slot"
+      }
+    },
+    {
+      "id": "set-slot",
+      "kind": "set-boot-slot",
+      "mode": "fastboot",
+      "done": "false",
+      "writes": true,
+      "tried": false,
+      "point_of_no_return": false,
+      "safe_stop": true,
+      "on_failure": {
+        "leaves": "installer-can-finish",
+        "hardware": null,
+        "way_out": "step set-slot"
+      },
+      "on_interruption": {
+        "leaves": "glassine-starts",
+        "hardware": null,
+        "way_out": "transition fastboot-to-glassine"
+      }
+    }
+  ],
+  "untried_steps": [
+    "replace-boot-loader",
+    "partition-table",
+    "write-kernel",
+    "write-base",
+    "write-recovery",
+    "set-slot"
+  ]
+}

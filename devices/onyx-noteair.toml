@@ -7,7 +7,7 @@
 # ships a copy (devices/lock.toml). Only what a recorded run shows is
 # `verified`; everything else is `untried`, with what is known in its note.
 
-format = 1
+format = 2
 id = "onyx-noteair"
 name = "Onyx Boox Note Air"
 backend = "android-bootloader"
@@ -248,22 +248,18 @@ class = "never-write"
 [[partitions]]
 select = { name = "abl" }
 class = "replace"
-back_up = { mode = "ram", means = "glassine-read", check = "read-back-compare", size = 1048576 }
 
 [[partitions]]
 select = { role = "partition-table" }
 class = "replace"
-back_up = { mode = "ram", means = "glassine-read", check = "read-back-compare", size = "unknown" }
 
 [[partitions]]
 select = { name = "recovery" }
 class = "replace"
-back_up = { mode = "ram", means = "glassine-read", check = "read-back-compare", size = 67108864 }
 
 [[partitions]]
 select = { names = ["boot", "system", "vendor", "vbmeta", "misc", "boot_a", "system_a", "vendor_a"] }
-class = "back-up"
-back_up = { mode = "ram", means = "glassine-read", check = "read-back-compare" }
+class = "never-write"
 
 [[partitions]]
 select = { names = ["boot_b", "system_b", "vendor_b"] }
@@ -274,15 +270,22 @@ select = { name = "userdata" }
 class = "resize"
 destroys = true
 
+# The backup is the whole eMMC user area, read by the RAM environment: the
+# partition table and every partition as one image, about 9.2 GB (8.5 GiB) compressed.
+[[partitions]]
+select = { role = "disk" }
+class = "never-write"
+back_up = { mode = "ram", means = "glassine-read", check = "read-back-compare", size = 9200000000 }
+
 [[boot_settings]]
 id = "boot-loader"
 kind = "boot-loader"
-back_up = { with = "abl" }
+back_up = { with = "role:disk" }
 
 [[boot_settings]]
 id = "slot-flags"
 kind = "slot-flags"
-back_up = { with = "role:partition-table" }
+back_up = { with = "role:disk" }
 
 # ---- what an installation does ------------------------------------------------
 
@@ -371,7 +374,7 @@ id = "back-up"
 job = "install"
 kind = "back-up"
 mode = "ram"
-backs_up = ["abl", "role:partition-table", "boot", "recovery", "system", "vendor", "vbmeta", "misc"]
+backs_up = ["role:disk"]
 boot_settings = ["boot-loader", "slot-flags"]
 done = [{ key = "installer.backup-verified", present = true, mode = "installer" }]
 escape.failure = { leaves = "previous-system-starts", way_out = { transition = "ram-to-android" } }
@@ -514,7 +517,7 @@ keep-stock = "Keep the stock Android system next to GlassineOS."
 "keep-stock.no" = "Don't keep Android. It is never started again, unless you go back to stock."
 
 [texts.steps]
-back-up = "Back up the boot loader, the partition table, the boot, recovery, system and vendor partitions and the boot settings to this computer, and check the backup."
+back-up = "Back up the device's whole storage, every partition and the partition table, to this computer, and check the backup by reading it back."
 replace-boot-loader = "Replace the boot loader with GlassineOS's. From here there is no way back without the backup, and if this step fails only the emergency-mode cable helps."
 partition-table = "Give the device a second slot for GlassineOS. The data partition is made smaller: everything on it is deleted."
 write-kernel = "Write the GlassineOS kernel to slot B."
