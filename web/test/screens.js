@@ -137,6 +137,8 @@ async function main() {
         const want = rep.supported ? /can run GlassineOS|^This is /m
           : rep.recognition.result === 'none' ? /doesn’t support this device/ : rep.recognition.result === 'conflict' ? /doesn’t match its description/ : /restarted to be recognised|can’t tell/;
         assert.match(got.text, want);
+        // only a description that matched names the machine
+        if (rep.recognition.result !== 'match') for (const d of ['Onyx Boox Note Air']) assert.ok(!got.chip.includes(d) && !got.text.includes('the ' + d), `names ${d}, which it didn’t match`);
       });
     }
   }
@@ -184,6 +186,16 @@ async function main() {
     assert.strictEqual(await page.$('#erase-ack'), null, 'a replaced system’s files are confirmed by its name, not a tick');
     await page.type('#osname', 'Windows');
     await page.waitForFunction(() => document.querySelector('#install').tagName === 'A', { timeout: 5000 });
+  });
+
+  await test('a stop waits for the plan’s next safe stop', async () => {
+    const plan = plans['pc-windows-replace'];
+    const i = plan.steps.findIndex((x) => x.point_of_no_return);
+    assert.strictEqual(plan.steps[i].safe_stop, false, 'the fixture no longer has an unsafe step');
+    await go(page, `#/install?plan=pc-windows-replace&state=ponr`);
+    const t = await page.evaluate(() => document.body.innerText);
+    assert.ok(!/after this step/.test(t), 'offers to stop after a step that isn’t a safe stop');
+    assert.match(t, new RegExp(`after step ${i + 2},`));
   });
 
   await test('the plan’s escapes come with the description’s words', async () => {

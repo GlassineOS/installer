@@ -55,7 +55,11 @@ async function openSession(route, q) {
     s.report = await records.inspect(machine);
     const rec = s.report.recognition;
     if (s.report.supported) s.plan = await records.plan(machine, input);
-    s.desc = await records.description((s.plan && s.plan.description) || rec.device || rec.candidates[0]);
+    // The description names the machine only when it matched; a candidate's texts still say
+    // how to reach the mode it needs.
+    const own = (s.plan && s.plan.description) || (rec.result === 'match' ? rec.device : null);
+    s.desc = own ? await records.description(own) : null;
+    s.candidate = s.desc || (rec.candidates[0] ? await records.description(rec.candidates[0]) : null);
   }
   s.m = machineOf(s.report, s.desc);
   // A link to another screen of the same machine, input and theme.

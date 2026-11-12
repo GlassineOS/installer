@@ -14,14 +14,20 @@ export function Install({ s, state }) {
   const views = stepViews(s), n = views.length;
   const ponrAt = views.findIndex((v) => v.ponr);
   const dflt = st === 'ponr' && ponrAt >= 0 ? ponrAt : Math.min(Math.max(1, Math.floor(n / 2)), n - 1);
-  const at = Math.min(Math.max(s.num('at', dflt), st === 'stopped' ? 1 : 0), st === 'stopped' ? n : n - 1);
   const stopped = st === 'stopped';
+  let at = Math.min(Math.max(s.num('at', dflt), stopped ? 1 : 0), stopped ? n : n - 1);
+  // A stopped installation stopped after a step the plan names a safe stop.
+  if (stopped && !p.steps[at - 1].safe_stop) at = p.steps.findIndex((x, i) => i >= at - 1 && x.safe_stop) + 1 || n;
   const cur = views[stopped ? at - 1 : at], nxt = views[stopped ? at : at + 1];
   const title = (v) => (v.owed ? v.kind.replace(/-/g, ' ') : v.title.replace(/\.$/, ''));
   const pct = s.num('pct', st === 'ponr' ? 70 : 45);
+  // A stop waits for the first step from the running one on that the plan names a safe stop.
+  const safeAt = p.steps.findIndex((x, i) => i >= (stopped ? at - 1 : at) && x.safe_stop);
+  const safe = safeAt >= 0 ? views[safeAt] : null;
+  const afterSafe = safe ? (safeAt === at ? 'after this step' : `after step ${safeAt + 1}, ${title(safe)}`) : 'at the end of the installation';
   const connected = s.m.kind === 'pc' ? 'Keep the PC plugged in and the USB stick in.' : `Keep ${s.m.the} connected and this page open.`;
   return html`<${Page} s=${s} step="install"
-      eyebrow=${stopped ? 'Install · stopped' : st === 'stopping' ? 'Install · stopping after this step' : `Install · step ${at + 1} of ${n}`}
+      eyebrow=${stopped ? 'Install · stopped' : st === 'stopping' ? `Install · stopping ${afterSafe}` : `Install · step ${at + 1} of ${n}`}
       title=${stopped ? 'The installation is stopped' : title(cur)}
       lead=${stopped ? 'It stopped where you asked, after a step the plan names as a safe point.' : cur.ponr ? 'This is the point of no return. After this step, the installation can only be finished or undone by the installer.' : 'The installer follows the plan you confirmed, one step after another.'}>
     ${!stopped ? html`<${Admonition} label="While it runs"><p>${connected} If the connection is lost anyway, start the installer again: it finds the installation and resumes or undoes it.</p></${Admonition}>` : html`
@@ -34,10 +40,10 @@ export function Install({ s, state }) {
     <${Steps} views=${views} mode="progress" at=${at} pct=${pct} stopped=${stopped} />
     <${Actions}
       next=${stopped ? (nxt ? `Your choice: resume with step ${at + 1}, ${title(nxt)}, or undo.` : 'Your choice: resume, or undo.') : nxt ? `Step ${at + 2}: ${title(nxt)}.` : 'The restart into GlassineOS.'}
-      out=${stopped ? `Undo puts the backup back: ${s.m.the} is as it was before the installation.` : st === 'stopping' ? 'The installer stops after this step, then offers to resume or undo.' : 'Stop at the next safe point: after this step. Then resume or undo.'}
+      out=${stopped ? `Undo puts the backup back: ${s.m.the} is as it was before the installation.` : st === 'stopping' ? `The installer stops ${afterSafe}, then offers to resume or undo.` : `Stop at the next safe point: ${afterSafe}. Then resume or undo.`}
       buttons=${stopped
         ? [{ label: 'Resume', href: s.link('install', { state: 'midway', at }), primary: true }, { label: 'Undo: put the backup back', href: s.link('done', { state: 'stock' }) }, { label: 'Close', href: s.link('resume', { at }), push: true }]
-        : [{ label: st === 'stopping' ? 'Stopping after this step…' : 'Stop at the next safe point', href: st === 'stopping' ? undefined : s.link('install', { state: 'stopping', at }), disabled: st === 'stopping', id: 'stop' },
+        : [{ label: st === 'stopping' ? `Stopping ${afterSafe}…` : 'Stop at the next safe point', href: st === 'stopping' ? undefined : s.link('install', { state: 'stopping', at }), disabled: st === 'stopping', id: 'stop' },
           ...(nxt ? [] : [{ label: 'Continue', href: s.link('verify'), primary: true }])]} />
   </${Page}>`;
 }

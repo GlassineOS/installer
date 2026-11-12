@@ -118,10 +118,10 @@ function NotSupported({ s }) {
 
 // Recognised only once it is reached in another mode (or its state only there).
 function OtherMode({ s }) {
-  const rec = s.report.recognition, T = s.desc ? s.desc.texts : null;
+  const rec = s.report.recognition, d = s.candidate, T = d ? d.texts : null;
   return html`<section class="ins-stack">
     <h2 class="ins-h2">What the installer needs</h2>
-    <ul class="ins-caps">${rec.needs_modes.map((mo) => html`<${CapRow} mark="wait" name=${MODE[(s.desc && (s.desc.modes.find((m) => m.id === mo) || {}).kind) || mo] || mo}>
+    <ul class="ins-caps">${rec.needs_modes.map((mo) => html`<${CapRow} mark="wait" name=${MODE[(d && (d.modes.find((m) => m.id === mo) || {}).kind) || mo] || mo}>
       <span class="ins-small">${T && T.modes[mo] ? T.modes[mo] : html`<${Owed}>How to reach it: the description has no text for it</${Owed}>`}</span></${CapRow}>`)}</ul>
     <details class="il-details"><summary>Why</summary><ul class="ins-stack ins-small">${s.report.reasons.map((x) => html`<li>${x}</li>`)}</ul></details>
   </section>`;
