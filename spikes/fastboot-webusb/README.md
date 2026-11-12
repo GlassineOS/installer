@@ -60,7 +60,8 @@ python3 -m http.server -d web 8000    # then http://localhost:8000 in a Chromium
 | Note Air, any later command of the same boot, plain framing | fails, for the stock tool as for this one ([GlassineOS/abl#1](https://github.com/GlassineOS/abl/issues/1)) |
 | Note Air, equal-length framing, native Linux binary | one fastboot boot: warm-up accepted, 5 variables, 16 MiB into RAM in 390 ms (43 MB/s), reboot; back in GlassineOS, nothing changed |
 | Note Air, equal-length framing, browser (Chrome, WebUSB) | one fastboot boot: warm-up accepted, 3 variables, 16 MiB into RAM in 554 ms, reboot; 2.7 s from the click including the device chooser |
-| Claiming the interface right after the device appears (native, Linux) | "interface is busy" for the first one or two tries, then works; the installer has to retry |
+| Note Air, `flash` (native, equal-length framing) | 32 MiB random image to `cache` in one fastboot boot: OKAY in 3.1 s (33,619,455 bytes with 65,023 of zero padding), reboot. Read back from GlassineOS: image identical, padding zeros, the rest of the partition unchanged byte for byte; then the backup written back (identical) |
+| Claiming the interface right after the device appears (native, Linux) | "interface is busy" for the first one or two tries, then works; the tool retries opening (up to 5 s; 3 retries were needed once) |
 
 What the API costs: on wasm only the async calls exist, and web-sys's WebUSB bindings need
 `--cfg=web_sys_unstable_apis` (`.cargo/config.toml`). Natively the same async code runs
@@ -72,7 +73,7 @@ device, natively and in the browser. The Note Air's bootloader only answers the 
 fastboot command of each boot, and its data transfers (`flash`, `boot`) don't work, so on
 this device plain fastboot can identify, not install. With equal-length framing the same
 bootloader takes many commands and full downloads, with no change to it. So fastboot can
-install on the Note Air once `flash` is checked; the framing is a property of the device's
+install on the Note Air (`flash` checked byte for byte, above); the framing is a property of the device's
 bootloader, so it belongs in the device description. The padding costs one: a download is
 rounded up to whole 65535-byte chunks with zeros, and `flash` writes them, so an image
 needs that much room in its partition (a sparse image, or a raw image smaller than the
