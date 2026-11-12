@@ -168,10 +168,20 @@ texts the description provides.
   says.
 - **FR-017**: The installer runs from Linux, Windows or a browser on a computer connected
   to the device, and on a PC from removable media started on that PC.
+- **FR-018**: The installer reaches a device through the connections its description
+  names, such as its boot loader's own USB protocol or a mode of its stock system. Where a
+  boot loader departs from its protocol's standard, the description says how, and the
+  installer works with the boot loader as it shipped. Installing never needs the boot
+  loader changed first.
+- **FR-019**: Inspecting reports which of the device's connections the installer can use
+  from where it runs (a browser can use fewer than a program on the computer). With none,
+  the report says so and where the installation can run instead. The plan uses only
+  connections the running installer has.
 
 ## Key entities
 
-- **Device description**: how to recognise a device, its capabilities, its partitions
+- **Device description**: how to recognise a device, how the installer reaches it
+  (FR-018), its capabilities, its partitions
   (never-write, back up, replace, create), its device data, its unit-specific values, its
   backend, the texts it shows.
 - **Backend**: the steps for one platform family (devices that start from an Android
@@ -201,5 +211,3 @@ texts the description provides.
 - First-boot setup runs after the accepted boot and isn't part of the installer.
 - The GlassineOS recovery is the same on every machine (0014); on a machine that keeps
   another system, that system's own recovery stays as the secondary one it hands over to.
-- [NEEDS CLARIFICATION: how a browser installer reaches a device that has no USB mode the
-  browser can use]
