@@ -15,7 +15,8 @@
               "kernel",
               "boot-loader",
               "recovery",
-              "partition-layout"
+              "partition-layout",
+              "ram-environment"
             ],
             "type": "string"
           },
@@ -87,6 +88,7 @@
                   "fastboot-fetch",
                   "fastboot-getvar",
                   "emergency-read",
+                  "glassine-read",
                   "block-read",
                   "efi-variables"
                 ],
@@ -877,6 +879,7 @@
               "fastboot",
               "android-adb",
               "emergency-download",
+              "glassine-ram",
               "glassine-usb",
               "local"
             ],
@@ -997,6 +1000,7 @@
                   "fastboot-fetch",
                   "fastboot-getvar",
                   "emergency-read",
+                  "glassine-read",
                   "block-read",
                   "efi-variables"
                 ],
@@ -1358,7 +1362,8 @@
                         "kernel",
                         "boot-loader",
                         "recovery",
-                        "partition-layout"
+                        "partition-layout",
+                        "ram-environment"
                       ],
                       "type": "string"
                     },
@@ -1404,7 +1409,8 @@
                         "kernel",
                         "boot-loader",
                         "recovery",
-                        "partition-layout"
+                        "partition-layout",
+                        "ram-environment"
                       ],
                       "type": "string"
                     },
@@ -1455,7 +1461,8 @@
                         "kernel",
                         "boot-loader",
                         "recovery",
-                        "partition-layout"
+                        "partition-layout",
+                        "ram-environment"
                       ],
                       "type": "string"
                     },
@@ -1501,7 +1508,8 @@
                         "kernel",
                         "boot-loader",
                         "recovery",
-                        "partition-layout"
+                        "partition-layout",
+                        "ram-environment"
                       ],
                       "type": "string"
                     },
@@ -1682,7 +1690,8 @@
                         "kernel",
                         "boot-loader",
                         "recovery",
-                        "partition-layout"
+                        "partition-layout",
+                        "ram-environment"
                       ],
                       "type": "string"
                     },
@@ -2494,6 +2503,18 @@
       },
       {
         "backends": [
+          "android-bootloader"
+        ],
+        "doc": "a GlassineOS environment on the device reads partitions and sends them to the computer over USB",
+        "id": "glassine-read",
+        "modes": [
+          "glassine-ram",
+          "glassine-usb"
+        ],
+        "params": []
+      },
+      {
+        "backends": [
           "uefi-pc"
         ],
         "doc": "read the block device on the machine itself",
@@ -2723,6 +2744,7 @@
           "fastboot",
           "android-adb",
           "emergency-download",
+          "glassine-ram",
           "glassine-usb"
         ],
         "type": "Text",
@@ -2736,6 +2758,7 @@
           "fastboot",
           "android-adb",
           "emergency-download",
+          "glassine-ram",
           "glassine-usb"
         ],
         "type": "Text",
@@ -2749,6 +2772,7 @@
           "fastboot",
           "android-adb",
           "emergency-download",
+          "glassine-ram",
           "glassine-usb"
         ],
         "type": "Presence",
@@ -2762,6 +2786,7 @@
           "fastboot",
           "android-adb",
           "emergency-download",
+          "glassine-ram",
           "glassine-usb"
         ],
         "type": "Text",
@@ -2795,6 +2820,7 @@
           "fastboot",
           "android-adb",
           "emergency-download",
+          "glassine-ram",
           "local"
         ],
         "type": "Presence",
@@ -2808,6 +2834,7 @@
           "fastboot",
           "android-adb",
           "emergency-download",
+          "glassine-ram",
           "local"
         ],
         "type": "Number",
@@ -3002,6 +3029,18 @@
         "backends": [
           "android-bootloader"
         ],
+        "doc": "a GlassineOS environment the boot loader starts from memory (the ram-environment artifact), over USB; it reads the device's storage and changes nothing (not built yet)",
+        "id": "glassine-ram",
+        "operations": [
+          "read",
+          "reboot",
+          "reboot-bootloader"
+        ]
+      },
+      {
+        "backends": [
+          "android-bootloader"
+        ],
         "doc": "a running GlassineOS or its recovery, over USB (not built yet)",
         "id": "glassine-usb",
         "operations": []
@@ -3073,11 +3112,11 @@
     ],
     "partition_classes": [
       {
-        "doc": "never written; read only to inspect it",
+        "doc": "never written; steps may read it and back it up",
         "id": "never-write"
       },
       {
-        "doc": "steps may read it",
+        "doc": "steps may read it and back it up",
         "id": "read"
       },
       {
@@ -3131,6 +3170,7 @@
           "fastboot",
           "android-adb",
           "emergency-download",
+          "glassine-ram",
           "local"
         ],
         "params": []

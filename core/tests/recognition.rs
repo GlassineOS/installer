@@ -57,6 +57,26 @@ fn stock_note_air_over_adb_needs_fastboot() {
     }
 }
 
+/// The RAM environment the backup runs in reads the storage but can't tell a
+/// state: it must never call a stock device prepared.
+#[test]
+fn stock_note_air_in_the_ram_environment_has_no_state() {
+    let ds = shipped();
+    let refs: Vec<&Description> = ds.iter().collect();
+    let mut f = facts("noteair-stock-adb");
+    f.mode = "glassine-ram".into();
+    f.android = None;
+    f.glassine = Some(glassine_installer::facts::GlassineFacts { installation: false });
+    match recognize(&refs, &f).outcome {
+        Outcome::Undetermined { candidates, needs_modes } => {
+            assert_eq!(candidates, vec!["onyx-noteair"]);
+            assert!(needs_modes.iter().any(|m| m.starts_with("fastboot")), "{needs_modes:?}");
+        }
+        Outcome::Match { state, .. } => assert!(matches!(state, StateResult::Undetermined { .. }), "{state:?}"),
+        o => panic!("{o:?}"),
+    }
+}
+
 #[test]
 fn conflicting_signals_are_unsupported_and_named() {
     let ds = shipped();

@@ -60,8 +60,8 @@ pub struct FactKey {
     pub doc: &'static str,
 }
 
-pub const ANY_DEVICE_USB: &[&str] = &["fastboot", "android-adb", "emergency-download", "glassine-usb"];
-const STORAGE_MODES: &[&str] = &["fastboot", "android-adb", "emergency-download", "local"];
+pub const ANY_DEVICE_USB: &[&str] = &["fastboot", "android-adb", "emergency-download", "glassine-ram", "glassine-usb"];
+const STORAGE_MODES: &[&str] = &["fastboot", "android-adb", "emergency-download", "glassine-ram", "local"];
 
 pub const FACT_KEYS: &[FactKey] = &[
     FactKey {
@@ -372,6 +372,12 @@ pub const MODE_KINDS: &[ModeKind] = &[
         operations: &["read", "write", "erase", "reset"],
     },
     ModeKind {
+        id: "glassine-ram",
+        doc: "a GlassineOS environment the boot loader starts from memory (the ram-environment artifact), over USB; it reads the device's storage and changes nothing (not built yet)",
+        backends: &["android-bootloader"],
+        operations: &["read", "reboot", "reboot-bootloader"],
+    },
+    ModeKind {
         id: "glassine-usb",
         doc: "a running GlassineOS or its recovery, over USB (not built yet)",
         backends: &["android-bootloader"],
@@ -460,8 +466,8 @@ pub const SPECIAL_HARDWARE: &[&str] = &["emergency-cable"];
 
 /// The partition classes: the most any job may do to a partition (FR-014).
 pub const CLASSES: &[Entry] = &[
-    e("never-write", "never written; read only to inspect it"),
-    e("read", "steps may read it"),
+    e("never-write", "never written; steps may read it and back it up"),
+    e("read", "steps may read it and back it up"),
     e("back-up", "steps may read it and back it up"),
     e("replace", "steps may back it up and write it"),
     e("create", "a partition the job creates and then writes"),
@@ -484,8 +490,8 @@ pub const ACTIONS: &[Entry] = &[
 /// or backing up a partition that existed before.
 pub fn class_allows(class: &str, action: &str) -> bool {
     let allowed: &[&str] = match class {
-        "never-write" => &[],
-        "read" => &["reads"],
+        "never-write" => &["reads", "backs_up"],
+        "read" => &["reads", "backs_up"],
         "back-up" => &["reads", "backs_up"],
         "replace" => &["reads", "backs_up", "writes"],
         "create" => &["creates", "writes"],
@@ -531,6 +537,13 @@ pub const BACKUP_MEANS: &[Kind] = &[
         doc: "read over the emergency download mode",
         backends: &["android-bootloader"],
         modes: &["emergency-download"],
+        params: &[],
+    },
+    Kind {
+        id: "glassine-read",
+        doc: "a GlassineOS environment on the device reads partitions and sends them to the computer over USB",
+        backends: &["android-bootloader"],
+        modes: &["glassine-ram", "glassine-usb"],
         params: &[],
     },
     Kind {
@@ -591,6 +604,10 @@ pub const ARTIFACT_ROLES: &[Entry] = &[
     e("boot-loader", "a boot loader"),
     e("recovery", "the GlassineOS recovery"),
     e("partition-layout", "the partition layout the installation makes"),
+    e(
+        "ram-environment",
+        "a GlassineOS environment the boot loader starts from memory, writing nothing",
+    ),
 ];
 
 pub const STEP_KINDS: &[Kind] = &[
@@ -598,7 +615,7 @@ pub const STEP_KINDS: &[Kind] = &[
         id: "back-up",
         doc: "reads what the step's backs_up names and the boot settings it names, stores them on the computer and checks them by reading back",
         backends: &["android-bootloader", "uefi-pc"],
-        modes: &["fastboot", "android-adb", "emergency-download", "local"],
+        modes: &["fastboot", "android-adb", "emergency-download", "glassine-ram", "local"],
         params: &[],
     },
     Kind {
