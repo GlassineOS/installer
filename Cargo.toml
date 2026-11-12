@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+[workspace]
+resolver = "3"
+members = ["core", "cli"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "GPL-2.0-or-later"
+repository = "https://github.com/GlassineOS/installer"
+publish = false
+
+[profile.release]
+opt-level = "s"
+lto = true
