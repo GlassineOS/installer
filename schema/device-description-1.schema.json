@@ -1,0 +1,3385 @@
+{
+  "$id": "https://github.com/GlassineOS/installer/schema/device-description-1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A GlassineOS device description, format 1",
+  "properties": {
+    "artifacts": {
+      "items": {
+        "additionalProperties": false,
+        "description": "something the installation writes that doesn't come from the device (FR-019)",
+        "properties": {
+          "role": {
+            "enum": [
+              "base",
+              "kernel",
+              "boot-loader",
+              "recovery",
+              "partition-layout",
+              "ram-environment"
+            ],
+            "type": "string"
+          },
+          "size": {
+            "description": "bytes, or unknown until the release supplies it",
+            "oneOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "pattern": "^unknown$",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "required": [
+          "role",
+          "size"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "backend": {
+      "description": "the platform family",
+      "enum": [
+        "android-bootloader",
+        "uefi-pc"
+      ],
+      "type": "string"
+    },
+    "boot_settings": {
+      "items": {
+        "additionalProperties": false,
+        "description": "a boot setting (FR-016)",
+        "properties": {
+          "back_up": {
+            "additionalProperties": false,
+            "allOf": [
+              {
+                "oneOf": [
+                  {
+                    "required": [
+                      "with"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "means"
+                    ]
+                  }
+                ]
+              }
+            ],
+            "description": "how it is backed up (FR-016a)",
+            "properties": {
+              "check": {
+                "description": "how the backup is checked",
+                "enum": [
+                  "read-back-compare"
+                ],
+                "type": "string"
+              },
+              "means": {
+                "description": "how it is read",
+                "enum": [
+                  "fastboot-fetch",
+                  "fastboot-getvar",
+                  "emergency-read",
+                  "glassine-read",
+                  "block-read",
+                  "efi-variables"
+                ],
+                "type": "string"
+              },
+              "mode": {
+                "description": "the mode it is read in",
+                "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+                "type": "string"
+              },
+              "size": {
+                "description": "its size in bytes, when known",
+                "oneOf": [
+                  {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  {
+                    "pattern": "^unknown$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "with": {
+                "description": "backed up as part of this partition's backup (or role:partition-table)",
+                "pattern": "^(role:[a-z-]+|[A-Za-z0-9_.-]+)$",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "id": {
+            "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "boot-loader",
+              "slot-flags",
+              "firmware-boot-entry",
+              "firmware-boot-order"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "back_up"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "capabilities": {
+      "items": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "oneOf": [
+              {
+                "required": [
+                  "verified"
+                ]
+              },
+              {
+                "required": [
+                  "untried"
+                ]
+              }
+            ]
+          }
+        ],
+        "description": "a capability of the installed device (FR-020)",
+        "properties": {
+          "id": {
+            "enum": [
+              "start-kernel",
+              "fallback-boot",
+              "trial-boot",
+              "recovery",
+              "keep-stock",
+              "secondary-recovery",
+              "choose-at-start"
+            ],
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "have",
+              "lack",
+              "needs"
+            ],
+            "type": "string"
+          },
+          "untried": {
+            "description": "not tried on real hardware yet: why, or what is missing",
+            "type": "string"
+          },
+          "verified": {
+            "additionalProperties": false,
+            "description": "a recorded run on real hardware (FR-023a)",
+            "properties": {
+              "boot_loader": {
+                "description": "the boot loader the run was made on",
+                "type": "string"
+              },
+              "record": {
+                "description": "the record: owner/repo#number, or a page on docs.glassine.org",
+                "pattern": "^([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[0-9]+|https://docs\\.glassine\\.org/[A-Za-z0-9_./#-]*)$",
+                "type": "string"
+              },
+              "state": {
+                "description": "the install state the run was made in",
+                "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "record",
+              "state",
+              "boot_loader"
+            ],
+            "type": "object"
+          },
+          "when": {
+            "additionalProperties": false,
+            "description": "applies only when a choice has this outcome",
+            "properties": {
+              "choice": {
+                "description": "the choice",
+                "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+                "type": "string"
+              },
+              "equals": {
+                "description": "the option",
+                "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "choice",
+              "equals"
+            ],
+            "type": "object"
+          },
+          "with": {
+            "description": "for needs: what it needs",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "status"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "choices": {
+      "items": {
+        "additionalProperties": false,
+        "description": "something the person decides in the plan (FR-021)",
+        "properties": {
+          "default": {
+            "description": "an option, or for disks: first",
+            "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+            "type": "string"
+          },
+          "for_each": {
+            "description": "a template repeated for each item inspecting finds",
+            "enum": [
+              "systems"
+            ],
+            "type": "string"
+          },
+          "id": {
+            "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+            "type": "string"
+          },
+          "options": {
+            "description": "for source = fixed",
+            "items": {
+              "additionalProperties": false,
+              "description": "an outcome the person can choose",
+              "properties": {
+                "id": {
+                  "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+                  "type": "string"
+                },
+                "replaces_system": {
+                  "description": "choosing it replaces an operating system",
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "id"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "source": {
+            "description": "where the options come from",
+            "enum": [
+              "fixed",
+              "disks"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "source",
+          "default"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "device_data": {
+      "description": "the device-data files the installed system needs (boot 006)",
+      "items": {
+        "pattern": "^[A-Za-z0-9_./-]+$",
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "device_files": {
+      "items": {
+        "additionalProperties": false,
+        "description": "a vendor file the installation reads from the device (FR-018a)",
+        "properties": {
+          "id": {
+            "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+            "type": "string"
+          },
+          "used_by": {
+            "description": "what uses it",
+            "type": "string"
+          },
+          "what": {
+            "description": "what it is",
+            "type": "string"
+          },
+          "where": {
+            "description": "where on the device it is read",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "what",
+          "where",
+          "used_by"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "format": {
+      "const": 1,
+      "description": "the format; this is 1"
+    },
+    "generic": {
+      "description": "matches on its platform alone and is refined by any description that matches too",
+      "type": "boolean"
+    },
+    "id": {
+      "description": "lowercase, - between words, unique among descriptions",
+      "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+      "type": "string"
+    },
+    "identity": {
+      "description": "the signals that recognise the device",
+      "items": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "oneOf": [
+              {
+                "required": [
+                  "equals"
+                ]
+              },
+              {
+                "required": [
+                  "one-of"
+                ]
+              },
+              {
+                "required": [
+                  "present"
+                ]
+              },
+              {
+                "required": [
+                  "absent"
+                ]
+              },
+              {
+                "required": [
+                  "at-least"
+                ]
+              },
+              {
+                "required": [
+                  "at-most"
+                ]
+              }
+            ]
+          },
+          {
+            "oneOf": [
+              {
+                "required": [
+                  "verified"
+                ]
+              },
+              {
+                "required": [
+                  "untried"
+                ]
+              }
+            ]
+          }
+        ],
+        "description": "a signal of the device's identity (FR-006)",
+        "properties": {
+          "absent": {
+            "const": true,
+            "description": "the fact is absent (write true)"
+          },
+          "at-least": {
+            "description": "the number is at least this",
+            "type": "integer"
+          },
+          "at-most": {
+            "description": "the number is at most this",
+            "type": "integer"
+          },
+          "equals": {
+            "description": "the fact has this value",
+            "oneOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "pattern": "^.*$",
+                "type": "string"
+              }
+            ]
+          },
+          "key": {
+            "description": "the fact key (see the fact vocabulary)",
+            "pattern": "^[a-z]+\\.[A-Za-z0-9_.:<>-]+$",
+            "type": "string"
+          },
+          "one-of": {
+            "description": "the fact has one of these values",
+            "items": {
+              "oneOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "pattern": "^.*$",
+                  "type": "string"
+                }
+              ]
+            },
+            "minItems": 1,
+            "type": "array"
+          },
+          "present": {
+            "const": true,
+            "description": "the fact is present (write true)"
+          },
+          "required": {
+            "description": "required (all must hold for a match) or supporting",
+            "type": "boolean"
+          },
+          "untried": {
+            "description": "not tried on real hardware yet: why, or what is missing",
+            "type": "string"
+          },
+          "verified": {
+            "additionalProperties": false,
+            "description": "a recorded run on real hardware (FR-023a)",
+            "properties": {
+              "boot_loader": {
+                "description": "the boot loader the run was made on",
+                "type": "string"
+              },
+              "record": {
+                "description": "the record: owner/repo#number, or a page on docs.glassine.org",
+                "pattern": "^([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[0-9]+|https://docs\\.glassine\\.org/[A-Za-z0-9_./#-]*)$",
+                "type": "string"
+              },
+              "state": {
+                "description": "the install state the run was made in",
+                "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "record",
+              "state",
+              "boot_loader"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "key",
+          "required"
+        ],
+        "type": "object"
+      },
+      "minItems": 1,
+      "type": "array"
+    },
+    "jobs": {
+      "items": {
+        "additionalProperties": false,
+        "description": "a job and the states it is offered in (FR-024)",
+        "properties": {
+          "id": {
+            "enum": [
+              "install",
+              "repair",
+              "reinstall",
+              "back-to-stock"
+            ],
+            "type": "string"
+          },
+          "states": {
+            "description": "the states it is offered in",
+            "items": {
+              "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+              "type": "string"
+            },
+            "minItems": 1,
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "states"
+        ],
+        "type": "object"
+      },
+      "minItems": 1,
+      "type": "array"
+    },
+    "modes": {
+      "items": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "oneOf": [
+              {
+                "required": [
+                  "verified"
+                ]
+              },
+              {
+                "required": [
+                  "untried"
+                ]
+              }
+            ]
+          }
+        ],
+        "description": "a way the installer talks to the device (FR-010)",
+        "properties": {
+          "can": {
+            "description": "what it can do; empty while unknown",
+            "items": {
+              "enum": [
+                "identify",
+                "read",
+                "write"
+              ],
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "departures": {
+            "items": {
+              "additionalProperties": false,
+              "allOf": [
+                {
+                  "if": {
+                    "properties": {
+                      "kind": {
+                        "const": "equal-length-transfers"
+                      }
+                    },
+                    "required": [
+                      "kind"
+                    ]
+                  },
+                  "then": {
+                    "properties": {
+                      "params": {
+                        "additionalProperties": false,
+                        "description": "parameters of equal-length-transfers",
+                        "properties": {
+                          "length": {
+                            "description": "the one transfer length; not a multiple of the USB packet size",
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "warm-up": {
+                            "description": "the opening that arms it: short-command-then-dummy",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "length",
+                          "warm-up"
+                        ],
+                        "type": "object"
+                      }
+                    },
+                    "required": [
+                      "params"
+                    ]
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "kind": {
+                        "const": "fresh-boot-only"
+                      }
+                    },
+                    "required": [
+                      "kind"
+                    ]
+                  },
+                  "then": {
+                    "properties": {
+                      "params": {
+                        "additionalProperties": false,
+                        "description": "parameters of fresh-boot-only",
+                        "properties": {},
+                        "type": "object"
+                      }
+                    }
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "kind": {
+                        "const": "never-use"
+                      }
+                    },
+                    "required": [
+                      "kind"
+                    ]
+                  },
+                  "then": {
+                    "properties": {
+                      "params": {
+                        "additionalProperties": false,
+                        "description": "parameters of never-use",
+                        "properties": {
+                          "operation": {
+                            "description": "the operation",
+                            "type": "string"
+                          },
+                          "reason": {
+                            "description": "why, in plain words",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "operation",
+                          "reason"
+                        ],
+                        "type": "object"
+                      }
+                    },
+                    "required": [
+                      "params"
+                    ]
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "kind": {
+                        "const": "single-variables-only"
+                      }
+                    },
+                    "required": [
+                      "kind"
+                    ]
+                  },
+                  "then": {
+                    "properties": {
+                      "params": {
+                        "additionalProperties": false,
+                        "description": "parameters of single-variables-only",
+                        "properties": {},
+                        "type": "object"
+                      }
+                    }
+                  }
+                },
+                {
+                  "oneOf": [
+                    {
+                      "required": [
+                        "verified"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "untried"
+                      ]
+                    }
+                  ]
+                }
+              ],
+              "description": "a departure from the mode's standard protocol (FR-011)",
+              "properties": {
+                "kind": {
+                  "description": "the departure",
+                  "enum": [
+                    "equal-length-transfers",
+                    "fresh-boot-only",
+                    "never-use",
+                    "single-variables-only"
+                  ],
+                  "type": "string"
+                },
+                "params": {
+                  "type": "object"
+                },
+                "told_by": {
+                  "additionalProperties": false,
+                  "allOf": [
+                    {
+                      "oneOf": [
+                        {
+                          "required": [
+                            "equals"
+                          ]
+                        },
+                        {
+                          "required": [
+                            "one-of"
+                          ]
+                        },
+                        {
+                          "required": [
+                            "present"
+                          ]
+                        },
+                        {
+                          "required": [
+                            "absent"
+                          ]
+                        },
+                        {
+                          "required": [
+                            "at-least"
+                          ]
+                        },
+                        {
+                          "required": [
+                            "at-most"
+                          ]
+                        }
+                      ]
+                    }
+                  ],
+                  "description": "the first answer that tells it, when it must be known before recognition (FR-012)",
+                  "properties": {
+                    "absent": {
+                      "const": true,
+                      "description": "the fact is absent (write true)"
+                    },
+                    "at-least": {
+                      "description": "the number is at least this",
+                      "type": "integer"
+                    },
+                    "at-most": {
+                      "description": "the number is at most this",
+                      "type": "integer"
+                    },
+                    "equals": {
+                      "description": "the fact has this value",
+                      "oneOf": [
+                        {
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        {
+                          "pattern": "^.*$",
+                          "type": "string"
+                        }
+                      ]
+                    },
+                    "key": {
+                      "description": "the fact key (see the fact vocabulary)",
+                      "pattern": "^[a-z]+\\.[A-Za-z0-9_.:<>-]+$",
+                      "type": "string"
+                    },
+                    "one-of": {
+                      "description": "the fact has one of these values",
+                      "items": {
+                        "oneOf": [
+                          {
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          {
+                            "pattern": "^.*$",
+                            "type": "string"
+                          }
+                        ]
+                      },
+                      "minItems": 1,
+                      "type": "array"
+                    },
+                    "present": {
+                      "const": true,
+                      "description": "the fact is present (write true)"
+                    }
+                  },
+                  "required": [
+                    "key"
+                  ],
+                  "type": "object"
+                },
+                "untried": {
+                  "description": "not tried on real hardware yet: why, or what is missing",
+                  "type": "string"
+                },
+                "verified": {
+                  "additionalProperties": false,
+                  "description": "a recorded run on real hardware (FR-023a)",
+                  "properties": {
+                    "boot_loader": {
+                      "description": "the boot loader the run was made on",
+                      "type": "string"
+                    },
+                    "record": {
+                      "description": "the record: owner/repo#number, or a page on docs.glassine.org",
+                      "pattern": "^([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[0-9]+|https://docs\\.glassine\\.org/[A-Za-z0-9_./#-]*)$",
+                      "type": "string"
+                    },
+                    "state": {
+                      "description": "the install state the run was made in",
+                      "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "record",
+                    "state",
+                    "boot_loader"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "id": {
+            "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+            "type": "string"
+          },
+          "kind": {
+            "description": "the mode kind",
+            "enum": [
+              "fastboot",
+              "android-adb",
+              "emergency-download",
+              "glassine-ram",
+              "glassine-usb",
+              "local"
+            ],
+            "type": "string"
+          },
+          "restarts_into": {
+            "description": "modes it can restart the device into",
+            "items": {
+              "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "untried": {
+            "description": "not tried on real hardware yet: why, or what is missing",
+            "type": "string"
+          },
+          "usb": {
+            "additionalProperties": false,
+            "description": "how it shows on USB",
+            "properties": {
+              "interface": {
+                "description": "class-subclass-protocol, hex",
+                "pattern": "^[0-9a-f]{2}-[0-9a-f]{2}-[0-9a-f]{2}$",
+                "type": "string"
+              },
+              "product_id": {
+                "pattern": "^[0-9a-f]{4}$",
+                "type": "string"
+              },
+              "vendor_id": {
+                "pattern": "^[0-9a-f]{4}$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "vendor_id",
+              "product_id"
+            ],
+            "type": "object"
+          },
+          "verified": {
+            "additionalProperties": false,
+            "description": "a recorded run on real hardware (FR-023a)",
+            "properties": {
+              "boot_loader": {
+                "description": "the boot loader the run was made on",
+                "type": "string"
+              },
+              "record": {
+                "description": "the record: owner/repo#number, or a page on docs.glassine.org",
+                "pattern": "^([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[0-9]+|https://docs\\.glassine\\.org/[A-Za-z0-9_./#-]*)$",
+                "type": "string"
+              },
+              "state": {
+                "description": "the install state the run was made in",
+                "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "record",
+              "state",
+              "boot_loader"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "can"
+        ],
+        "type": "object"
+      },
+      "minItems": 1,
+      "type": "array"
+    },
+    "name": {
+      "description": "shown to people",
+      "type": "string"
+    },
+    "partitions": {
+      "items": {
+        "additionalProperties": false,
+        "description": "a partition rule (FR-014): the first rule that selects a partition decides; unselected means never-write",
+        "properties": {
+          "back_up": {
+            "additionalProperties": false,
+            "allOf": [
+              {
+                "oneOf": [
+                  {
+                    "required": [
+                      "with"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "means"
+                    ]
+                  }
+                ]
+              }
+            ],
+            "description": "how it is backed up (FR-016a)",
+            "properties": {
+              "check": {
+                "description": "how the backup is checked",
+                "enum": [
+                  "read-back-compare"
+                ],
+                "type": "string"
+              },
+              "means": {
+                "description": "how it is read",
+                "enum": [
+                  "fastboot-fetch",
+                  "fastboot-getvar",
+                  "emergency-read",
+                  "glassine-read",
+                  "block-read",
+                  "efi-variables"
+                ],
+                "type": "string"
+              },
+              "mode": {
+                "description": "the mode it is read in",
+                "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+                "type": "string"
+              },
+              "size": {
+                "description": "its size in bytes, when known",
+                "oneOf": [
+                  {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  {
+                    "pattern": "^unknown$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "with": {
+                "description": "backed up as part of this partition's backup (or role:partition-table)",
+                "pattern": "^(role:[a-z-]+|[A-Za-z0-9_.-]+)$",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "class": {
+            "description": "the most any job may do",
+            "enum": [
+              "never-write",
+              "read",
+              "back-up",
+              "replace",
+              "create",
+              "resize",
+              "remove"
+            ],
+            "type": "string"
+          },
+          "destroys": {
+            "description": "for resize and remove: whether it destroys what is on the partition (FR-015)",
+            "type": "boolean"
+          },
+          "select": {
+            "additionalProperties": false,
+            "allOf": [
+              {
+                "oneOf": [
+                  {
+                    "required": [
+                      "name"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "names"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "pattern"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "type"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "role"
+                    ]
+                  }
+                ]
+              }
+            ],
+            "description": "which partitions the rule selects",
+            "properties": {
+              "name": {
+                "pattern": "^[A-Za-z0-9_.-]+$",
+                "type": "string"
+              },
+              "names": {
+                "items": {
+                  "pattern": "^[A-Za-z0-9_.-]+$",
+                  "type": "string"
+                },
+                "minItems": 1,
+                "type": "array"
+              },
+              "pattern": {
+                "description": "`*` stands for any run of characters",
+                "pattern": "^[A-Za-z0-9_.*-]+$",
+                "type": "string"
+              },
+              "role": {
+                "enum": [
+                  "partition-table",
+                  "esp",
+                  "os",
+                  "free-space"
+                ],
+                "type": "string"
+              },
+              "type": {
+                "description": "a GPT type GUID",
+                "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "when": {
+            "additionalProperties": false,
+            "description": "applies only when a choice has this outcome",
+            "properties": {
+              "choice": {
+                "description": "the choice",
+                "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+                "type": "string"
+              },
+              "equals": {
+                "description": "the option",
+                "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "choice",
+              "equals"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "select",
+          "class"
+        ],
+        "type": "object"
+      },
+      "minItems": 1,
+      "type": "array"
+    },
+    "refines": {
+      "description": "the more general description this one refines",
+      "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+      "type": "string"
+    },
+    "states": {
+      "description": "the install states, the device as shipped first",
+      "items": {
+        "additionalProperties": false,
+        "description": "an install state (FR-009)",
+        "properties": {
+          "conditions": {
+            "items": {
+              "additionalProperties": false,
+              "allOf": [
+                {
+                  "oneOf": [
+                    {
+                      "required": [
+                        "equals"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "one-of"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "present"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "absent"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "at-least"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "at-most"
+                      ]
+                    }
+                  ]
+                }
+              ],
+              "description": "a condition that tells the state",
+              "properties": {
+                "absent": {
+                  "const": true,
+                  "description": "the fact is absent (write true)"
+                },
+                "at-least": {
+                  "description": "the number is at least this",
+                  "type": "integer"
+                },
+                "at-most": {
+                  "description": "the number is at most this",
+                  "type": "integer"
+                },
+                "equals": {
+                  "description": "the fact has this value",
+                  "oneOf": [
+                    {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    {
+                      "pattern": "^.*$",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "key": {
+                  "description": "the fact key (see the fact vocabulary)",
+                  "pattern": "^[a-z]+\\.[A-Za-z0-9_.:<>-]+$",
+                  "type": "string"
+                },
+                "mode": {
+                  "description": "the mode it is observed in, or `installer` for the installer's own records",
+                  "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+                  "type": "string"
+                },
+                "one-of": {
+                  "description": "the fact has one of these values",
+                  "items": {
+                    "oneOf": [
+                      {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      {
+                        "pattern": "^.*$",
+                        "type": "string"
+                      }
+                    ]
+                  },
+                  "minItems": 1,
+                  "type": "array"
+                },
+                "present": {
+                  "const": true,
+                  "description": "the fact is present (write true)"
+                },
+                "untried": {
+                  "description": "not tried on real hardware yet: why, or what is missing",
+                  "type": "string"
+                },
+                "verified": {
+                  "additionalProperties": false,
+                  "description": "a recorded run on real hardware (FR-023a)",
+                  "properties": {
+                    "boot_loader": {
+                      "description": "the boot loader the run was made on",
+                      "type": "string"
+                    },
+                    "record": {
+                      "description": "the record: owner/repo#number, or a page on docs.glassine.org",
+                      "pattern": "^([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[0-9]+|https://docs\\.glassine\\.org/[A-Za-z0-9_./#-]*)$",
+                      "type": "string"
+                    },
+                    "state": {
+                      "description": "the install state the run was made in",
+                      "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "record",
+                    "state",
+                    "boot_loader"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "key",
+                "mode"
+              ],
+              "type": "object"
+            },
+            "minItems": 1,
+            "type": "array"
+          },
+          "id": {
+            "description": "stock, prepared, installed, or the description's own",
+            "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "conditions"
+        ],
+        "type": "object"
+      },
+      "minItems": 1,
+      "type": "array"
+    },
+    "steps": {
+      "items": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "kind": {
+                  "const": "back-up"
+                }
+              },
+              "required": [
+                "kind"
+              ]
+            },
+            "then": {
+              "properties": {
+                "params": {
+                  "additionalProperties": false,
+                  "description": "parameters of back-up",
+                  "properties": {},
+                  "type": "object"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "kind": {
+                  "const": "write-boot-loader"
+                }
+              },
+              "required": [
+                "kind"
+              ]
+            },
+            "then": {
+              "properties": {
+                "params": {
+                  "additionalProperties": false,
+                  "description": "parameters of write-boot-loader",
+                  "properties": {
+                    "artifact": {
+                      "description": "the boot loader to write",
+                      "enum": [
+                        "base",
+                        "kernel",
+                        "boot-loader",
+                        "recovery",
+                        "partition-layout",
+                        "ram-environment"
+                      ],
+                      "type": "string"
+                    },
+                    "partition": {
+                      "description": "the partition it goes to",
+                      "pattern": "^(role:[a-z-]+|[A-Za-z0-9_.-]+)$",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "artifact",
+                    "partition"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "params"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "kind": {
+                  "const": "write-partition-table"
+                }
+              },
+              "required": [
+                "kind"
+              ]
+            },
+            "then": {
+              "properties": {
+                "params": {
+                  "additionalProperties": false,
+                  "description": "parameters of write-partition-table",
+                  "properties": {
+                    "artifact": {
+                      "description": "the layout",
+                      "enum": [
+                        "base",
+                        "kernel",
+                        "boot-loader",
+                        "recovery",
+                        "partition-layout",
+                        "ram-environment"
+                      ],
+                      "type": "string"
+                    },
+                    "renames": {
+                      "additionalProperties": {
+                        "pattern": "^[A-Za-z0-9_.-]+$",
+                        "type": "string"
+                      },
+                      "description": "partitions the layout renames in place, old = new",
+                      "propertyNames": {
+                        "pattern": "^[A-Za-z0-9_.-]+$"
+                      },
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "artifact"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "params"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "kind": {
+                  "const": "write-image"
+                }
+              },
+              "required": [
+                "kind"
+              ]
+            },
+            "then": {
+              "properties": {
+                "params": {
+                  "additionalProperties": false,
+                  "description": "parameters of write-image",
+                  "properties": {
+                    "artifact": {
+                      "description": "what is written",
+                      "enum": [
+                        "base",
+                        "kernel",
+                        "boot-loader",
+                        "recovery",
+                        "partition-layout",
+                        "ram-environment"
+                      ],
+                      "type": "string"
+                    },
+                    "partition": {
+                      "description": "where",
+                      "pattern": "^(role:[a-z-]+|[A-Za-z0-9_.-]+)$",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "artifact",
+                    "partition"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "params"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "kind": {
+                  "const": "write-base"
+                }
+              },
+              "required": [
+                "kind"
+              ]
+            },
+            "then": {
+              "properties": {
+                "params": {
+                  "additionalProperties": false,
+                  "description": "parameters of write-base",
+                  "properties": {
+                    "artifact": {
+                      "description": "the base",
+                      "enum": [
+                        "base",
+                        "kernel",
+                        "boot-loader",
+                        "recovery",
+                        "partition-layout",
+                        "ram-environment"
+                      ],
+                      "type": "string"
+                    },
+                    "partition": {
+                      "description": "the system partition",
+                      "pattern": "^(role:[a-z-]+|[A-Za-z0-9_.-]+)$",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "artifact",
+                    "partition"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "params"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "kind": {
+                  "const": "set-boot-slot"
+                }
+              },
+              "required": [
+                "kind"
+              ]
+            },
+            "then": {
+              "properties": {
+                "params": {
+                  "additionalProperties": false,
+                  "description": "parameters of set-boot-slot",
+                  "properties": {
+                    "pin": {
+                      "description": "active, highest priority, marked successful",
+                      "type": "boolean"
+                    },
+                    "slot": {
+                      "description": "the slot",
+                      "pattern": "^[a-z]$",
+                      "type": "string"
+                    },
+                    "unbootable": {
+                      "description": "marked unbootable, so it is never fallen back to",
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "slot"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "params"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "kind": {
+                  "const": "create-partitions"
+                }
+              },
+              "required": [
+                "kind"
+              ]
+            },
+            "then": {
+              "properties": {
+                "params": {
+                  "additionalProperties": false,
+                  "description": "parameters of create-partitions",
+                  "properties": {
+                    "partitions": {
+                      "description": "the partitions, in order",
+                      "items": {
+                        "additionalProperties": false,
+                        "description": "a partition to create",
+                        "properties": {
+                          "name": {
+                            "description": "the partition's name (GlassineOS's own)",
+                            "pattern": "^[a-z0-9-]+$",
+                            "type": "string"
+                          },
+                          "role": {
+                            "description": "what it is for",
+                            "enum": [
+                              "esp",
+                              "system"
+                            ],
+                            "type": "string"
+                          },
+                          "size": {
+                            "description": "bytes, or relative",
+                            "oneOf": [
+                              {
+                                "minimum": 0,
+                                "type": "integer"
+                              },
+                              {
+                                "pattern": "^([0-9]+(KiB|MiB|GiB|TiB)|rest-of-free-space|rest-of-disk|unknown|after:[A-Za-z0-9_.-]+)$",
+                                "type": "string"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "name",
+                          "size"
+                        ],
+                        "type": "object"
+                      },
+                      "minItems": 1,
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "partitions"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "params"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "kind": {
+                  "const": "remove-partitions"
+                }
+              },
+              "required": [
+                "kind"
+              ]
+            },
+            "then": {
+              "properties": {
+                "params": {
+                  "additionalProperties": false,
+                  "description": "parameters of remove-partitions",
+                  "properties": {},
+                  "type": "object"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "kind": {
+                  "const": "write-boot-files"
+                }
+              },
+              "required": [
+                "kind"
+              ]
+            },
+            "then": {
+              "properties": {
+                "params": {
+                  "additionalProperties": false,
+                  "description": "parameters of write-boot-files",
+                  "properties": {
+                    "artifact": {
+                      "description": "the kernel",
+                      "enum": [
+                        "base",
+                        "kernel",
+                        "boot-loader",
+                        "recovery",
+                        "partition-layout",
+                        "ram-environment"
+                      ],
+                      "type": "string"
+                    },
+                    "partition": {
+                      "description": "the boot partition",
+                      "pattern": "^(role:[a-z-]+|[A-Za-z0-9_.-]+)$",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "artifact",
+                    "partition"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "params"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "kind": {
+                  "const": "add-boot-entry"
+                }
+              },
+              "required": [
+                "kind"
+              ]
+            },
+            "then": {
+              "properties": {
+                "params": {
+                  "additionalProperties": false,
+                  "description": "parameters of add-boot-entry",
+                  "properties": {
+                    "partition": {
+                      "description": "the partition the entry starts from",
+                      "pattern": "^(role:[a-z-]+|[A-Za-z0-9_.-]+)$",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "partition"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "params"
+              ]
+            }
+          },
+          {
+            "oneOf": [
+              {
+                "required": [
+                  "verified"
+                ]
+              },
+              {
+                "required": [
+                  "untried"
+                ]
+              }
+            ]
+          }
+        ],
+        "description": "a step of a job (FR-022, FR-023)",
+        "properties": {
+          "after": {
+            "description": "the steps it comes after",
+            "items": {
+              "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "backs_up": {
+            "description": "partitions it backs up",
+            "items": {
+              "pattern": "^(role:[a-z-]+|[A-Za-z0-9_.-]+)$",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "boot_settings": {
+            "description": "boot settings it changes (or backs up, for back-up)",
+            "items": {
+              "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "creates": {
+            "description": "partitions it creates",
+            "items": {
+              "pattern": "^(role:[a-z-]+|[A-Za-z0-9_.-]+)$",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "done": {
+            "items": {
+              "additionalProperties": false,
+              "allOf": [
+                {
+                  "oneOf": [
+                    {
+                      "required": [
+                        "equals"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "one-of"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "present"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "absent"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "at-least"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "at-most"
+                      ]
+                    }
+                  ]
+                }
+              ],
+              "description": "a condition that tells the step is done",
+              "properties": {
+                "absent": {
+                  "const": true,
+                  "description": "the fact is absent (write true)"
+                },
+                "at-least": {
+                  "description": "the number is at least this",
+                  "type": "integer"
+                },
+                "at-most": {
+                  "description": "the number is at most this",
+                  "type": "integer"
+                },
+                "equals": {
+                  "description": "the fact has this value",
+                  "oneOf": [
+                    {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    {
+                      "pattern": "^.*$",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "key": {
+                  "description": "the fact key (see the fact vocabulary)",
+                  "pattern": "^[a-z]+\\.[A-Za-z0-9_.:<>-]+$",
+                  "type": "string"
+                },
+                "mode": {
+                  "description": "the mode it is observed in, or `installer` for the installer's own records",
+                  "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+                  "type": "string"
+                },
+                "one-of": {
+                  "description": "the fact has one of these values",
+                  "items": {
+                    "oneOf": [
+                      {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      {
+                        "pattern": "^.*$",
+                        "type": "string"
+                      }
+                    ]
+                  },
+                  "minItems": 1,
+                  "type": "array"
+                },
+                "present": {
+                  "const": true,
+                  "description": "the fact is present (write true)"
+                },
+                "untried": {
+                  "description": "not tried on real hardware yet: why, or what is missing",
+                  "type": "string"
+                },
+                "verified": {
+                  "additionalProperties": false,
+                  "description": "a recorded run on real hardware (FR-023a)",
+                  "properties": {
+                    "boot_loader": {
+                      "description": "the boot loader the run was made on",
+                      "type": "string"
+                    },
+                    "record": {
+                      "description": "the record: owner/repo#number, or a page on docs.glassine.org",
+                      "pattern": "^([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[0-9]+|https://docs\\.glassine\\.org/[A-Za-z0-9_./#-]*)$",
+                      "type": "string"
+                    },
+                    "state": {
+                      "description": "the install state the run was made in",
+                      "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "record",
+                    "state",
+                    "boot_loader"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "key",
+                "mode"
+              ],
+              "type": "object"
+            },
+            "minItems": 1,
+            "type": "array"
+          },
+          "escape": {
+            "additionalProperties": false,
+            "description": "how the step is escaped",
+            "properties": {
+              "failure": {
+                "additionalProperties": false,
+                "description": "a failure during it",
+                "properties": {
+                  "hardware": {
+                    "description": "the special hardware, when only that helps",
+                    "enum": [
+                      "emergency-cable"
+                    ],
+                    "type": "string"
+                  },
+                  "leaves": {
+                    "description": "the state it leaves the device in",
+                    "enum": [
+                      "previous-system-starts",
+                      "glassine-starts",
+                      "installer-can-finish",
+                      "installer-can-undo",
+                      "special-hardware"
+                    ],
+                    "type": "string"
+                  },
+                  "way_out": {
+                    "additionalProperties": false,
+                    "allOf": [
+                      {
+                        "oneOf": [
+                          {
+                            "required": [
+                              "step"
+                            ]
+                          },
+                          {
+                            "required": [
+                              "transition"
+                            ]
+                          }
+                        ]
+                      }
+                    ],
+                    "description": "the way out",
+                    "properties": {
+                      "step": {
+                        "description": "another step",
+                        "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+                        "type": "string"
+                      },
+                      "transition": {
+                        "description": "a transition",
+                        "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+                        "type": "string"
+                      }
+                    },
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "leaves",
+                  "way_out"
+                ],
+                "type": "object"
+              },
+              "interruption": {
+                "additionalProperties": false,
+                "description": "an interruption right after it",
+                "properties": {
+                  "hardware": {
+                    "description": "the special hardware, when only that helps",
+                    "enum": [
+                      "emergency-cable"
+                    ],
+                    "type": "string"
+                  },
+                  "leaves": {
+                    "description": "the state it leaves the device in",
+                    "enum": [
+                      "previous-system-starts",
+                      "glassine-starts",
+                      "installer-can-finish",
+                      "installer-can-undo",
+                      "special-hardware"
+                    ],
+                    "type": "string"
+                  },
+                  "way_out": {
+                    "additionalProperties": false,
+                    "allOf": [
+                      {
+                        "oneOf": [
+                          {
+                            "required": [
+                              "step"
+                            ]
+                          },
+                          {
+                            "required": [
+                              "transition"
+                            ]
+                          }
+                        ]
+                      }
+                    ],
+                    "description": "the way out",
+                    "properties": {
+                      "step": {
+                        "description": "another step",
+                        "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+                        "type": "string"
+                      },
+                      "transition": {
+                        "description": "a transition",
+                        "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+                        "type": "string"
+                      }
+                    },
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "leaves",
+                  "way_out"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "failure",
+              "interruption"
+            ],
+            "type": "object"
+          },
+          "for_each": {
+            "description": "repeated for each item of a template choice",
+            "enum": [
+              "systems"
+            ],
+            "type": "string"
+          },
+          "id": {
+            "description": "stable id",
+            "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+            "type": "string"
+          },
+          "job": {
+            "enum": [
+              "install",
+              "repair",
+              "reinstall",
+              "back-to-stock"
+            ],
+            "type": "string"
+          },
+          "kind": {
+            "description": "a step kind of the description's backend",
+            "enum": [
+              "back-up",
+              "write-boot-loader",
+              "write-partition-table",
+              "write-image",
+              "write-base",
+              "set-boot-slot",
+              "create-partitions",
+              "remove-partitions",
+              "write-boot-files",
+              "add-boot-entry"
+            ],
+            "type": "string"
+          },
+          "mode": {
+            "description": "the mode it needs",
+            "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+            "type": "string"
+          },
+          "params": {
+            "type": "object"
+          },
+          "point_of_no_return": {
+            "type": "boolean"
+          },
+          "reads": {
+            "description": "partitions it reads",
+            "items": {
+              "pattern": "^(role:[a-z-]+|[A-Za-z0-9_.-]+)$",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "removes": {
+            "description": "partitions it removes",
+            "items": {
+              "pattern": "^(role:[a-z-]+|[A-Za-z0-9_.-]+)$",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "resizes": {
+            "description": "partitions it resizes",
+            "items": {
+              "pattern": "^(role:[a-z-]+|[A-Za-z0-9_.-]+)$",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "safe_stop": {
+            "description": "a cancel may stop right after it",
+            "type": "boolean"
+          },
+          "untried": {
+            "description": "not tried on real hardware yet: why, or what is missing",
+            "type": "string"
+          },
+          "verified": {
+            "additionalProperties": false,
+            "description": "a recorded run on real hardware (FR-023a)",
+            "properties": {
+              "boot_loader": {
+                "description": "the boot loader the run was made on",
+                "type": "string"
+              },
+              "record": {
+                "description": "the record: owner/repo#number, or a page on docs.glassine.org",
+                "pattern": "^([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[0-9]+|https://docs\\.glassine\\.org/[A-Za-z0-9_./#-]*)$",
+                "type": "string"
+              },
+              "state": {
+                "description": "the install state the run was made in",
+                "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "record",
+              "state",
+              "boot_loader"
+            ],
+            "type": "object"
+          },
+          "when": {
+            "description": "the choices it depends on (all must hold)",
+            "items": {
+              "additionalProperties": false,
+              "description": "applies only when a choice has this outcome",
+              "properties": {
+                "choice": {
+                  "description": "the choice",
+                  "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+                  "type": "string"
+                },
+                "equals": {
+                  "description": "the option",
+                  "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "choice",
+                "equals"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "writes": {
+            "description": "partitions it writes",
+            "items": {
+              "pattern": "^(role:[a-z-]+|[A-Za-z0-9_.-]+)$",
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "job",
+          "kind",
+          "mode",
+          "done",
+          "escape",
+          "point_of_no_return",
+          "safe_stop"
+        ],
+        "type": "object"
+      },
+      "minItems": 1,
+      "type": "array"
+    },
+    "texts": {
+      "additionalProperties": false,
+      "description": "what the installer shows for this device (FR-026): plain text, no markup, English",
+      "properties": {
+        "choices": {
+          "additionalProperties": {
+            "description": "plain text, no markup",
+            "type": "string"
+          },
+          "description": "what each choice means here, by choice id",
+          "propertyNames": {
+            "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+          },
+          "type": "object"
+        },
+        "modes": {
+          "additionalProperties": {
+            "description": "plain text, no markup",
+            "type": "string"
+          },
+          "description": "how to reach each mode by hand, by mode id",
+          "propertyNames": {
+            "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+          },
+          "type": "object"
+        },
+        "name": {
+          "description": "the device's name as people see it",
+          "type": "string"
+        },
+        "options": {
+          "additionalProperties": {
+            "description": "plain text, no markup",
+            "type": "string"
+          },
+          "description": "what each option means, by choice-id.option-id",
+          "propertyNames": {
+            "pattern": "^[a-z0-9-]+\\.[a-z0-9-]+$"
+          },
+          "type": "object"
+        },
+        "states": {
+          "additionalProperties": {
+            "description": "plain text, no markup",
+            "type": "string"
+          },
+          "description": "each state in words, by state id",
+          "propertyNames": {
+            "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+          },
+          "type": "object"
+        },
+        "steps": {
+          "additionalProperties": {
+            "description": "plain text, no markup",
+            "type": "string"
+          },
+          "description": "each step in words, by step id",
+          "propertyNames": {
+            "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+          },
+          "type": "object"
+        },
+        "transitions": {
+          "additionalProperties": {
+            "description": "plain text, no markup",
+            "type": "string"
+          },
+          "description": "the guide for each by-hand transition, by transition id",
+          "propertyNames": {
+            "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "transitions": {
+      "items": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "oneOf": [
+              {
+                "required": [
+                  "verified"
+                ]
+              },
+              {
+                "required": [
+                  "untried"
+                ]
+              }
+            ]
+          }
+        ],
+        "description": "how the device gets from one mode to another (FR-013)",
+        "properties": {
+          "by": {
+            "description": "the installer does it, or the person by hand (texts.transitions.<id>)",
+            "enum": [
+              "installer",
+              "hand"
+            ],
+            "type": "string"
+          },
+          "from": {
+            "description": "a mode",
+            "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+            "type": "string"
+          },
+          "id": {
+            "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+            "type": "string"
+          },
+          "needs": {
+            "description": "what it needs",
+            "items": {
+              "enum": [
+                "hands",
+                "usb-debugging",
+                "cover",
+                "emergency-cable",
+                "removable-media",
+                "firmware-setup"
+              ],
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "to": {
+            "description": "a mode",
+            "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+            "type": "string"
+          },
+          "untried": {
+            "description": "not tried on real hardware yet: why, or what is missing",
+            "type": "string"
+          },
+          "verified": {
+            "additionalProperties": false,
+            "description": "a recorded run on real hardware (FR-023a)",
+            "properties": {
+              "boot_loader": {
+                "description": "the boot loader the run was made on",
+                "type": "string"
+              },
+              "record": {
+                "description": "the record: owner/repo#number, or a page on docs.glassine.org",
+                "pattern": "^([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[0-9]+|https://docs\\.glassine\\.org/[A-Za-z0-9_./#-]*)$",
+                "type": "string"
+              },
+              "state": {
+                "description": "the install state the run was made in",
+                "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "record",
+              "state",
+              "boot_loader"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "id",
+          "from",
+          "to",
+          "by"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "unit_values": {
+      "items": {
+        "additionalProperties": false,
+        "description": "a value unique to the unit that GlassineOS can't read itself (FR-017)",
+        "properties": {
+          "goes_to": {
+            "description": "where in the installed system it goes",
+            "type": "string"
+          },
+          "id": {
+            "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+            "type": "string"
+          },
+          "means": {
+            "description": "how it is read",
+            "type": "string"
+          },
+          "mode": {
+            "description": "the mode it is read in",
+            "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+            "type": "string"
+          },
+          "what": {
+            "description": "what it is",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "what",
+          "mode",
+          "means",
+          "goes_to"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "format",
+    "id",
+    "name",
+    "backend",
+    "identity",
+    "states",
+    "modes",
+    "partitions",
+    "jobs",
+    "steps",
+    "texts"
+  ],
+  "title": "GlassineOS device description, format 1",
+  "type": "object",
+  "x-vocabularies": {
+    "backends": [
+      {
+        "doc": "devices that start from an Android boot loader",
+        "id": "android-bootloader"
+      },
+      {
+        "doc": "PCs that start from UEFI",
+        "id": "uefi-pc"
+      }
+    ],
+    "backup_means": [
+      {
+        "backends": [
+          "android-bootloader"
+        ],
+        "doc": "the boot loader sends a partition's content back (fastboot fetch)",
+        "id": "fastboot-fetch",
+        "modes": [
+          "fastboot"
+        ],
+        "params": []
+      },
+      {
+        "backends": [
+          "android-bootloader"
+        ],
+        "doc": "values the boot loader answers (slot flags, partition sizes)",
+        "id": "fastboot-getvar",
+        "modes": [
+          "fastboot"
+        ],
+        "params": []
+      },
+      {
+        "backends": [
+          "android-bootloader"
+        ],
+        "doc": "read over the emergency download mode",
+        "id": "emergency-read",
+        "modes": [
+          "emergency-download"
+        ],
+        "params": []
+      },
+      {
+        "backends": [
+          "android-bootloader"
+        ],
+        "doc": "a GlassineOS environment on the device reads partitions and sends them to the computer over USB",
+        "id": "glassine-read",
+        "modes": [
+          "glassine-ram",
+          "glassine-usb"
+        ],
+        "params": []
+      },
+      {
+        "backends": [
+          "uefi-pc"
+        ],
+        "doc": "read the block device on the machine itself",
+        "id": "block-read",
+        "modes": [
+          "local"
+        ],
+        "params": []
+      },
+      {
+        "backends": [
+          "uefi-pc"
+        ],
+        "doc": "read the firmware's boot variables",
+        "id": "efi-variables",
+        "modes": [
+          "local"
+        ],
+        "params": []
+      }
+    ],
+    "boot_setting_kinds": [
+      {
+        "backends": [
+          "android-bootloader"
+        ],
+        "doc": "the boot loader itself",
+        "id": "boot-loader",
+        "modes": [],
+        "params": []
+      },
+      {
+        "backends": [
+          "android-bootloader"
+        ],
+        "doc": "the A/B slot flags: active, priority, tries, successful, unbootable",
+        "id": "slot-flags",
+        "modes": [],
+        "params": []
+      },
+      {
+        "backends": [
+          "uefi-pc"
+        ],
+        "doc": "a UEFI boot entry",
+        "id": "firmware-boot-entry",
+        "modes": [],
+        "params": []
+      },
+      {
+        "backends": [
+          "uefi-pc"
+        ],
+        "doc": "the UEFI boot order",
+        "id": "firmware-boot-order",
+        "modes": [],
+        "params": []
+      }
+    ],
+    "capabilities": [
+      {
+        "doc": "starts a GlassineOS kernel of the installation's choice",
+        "id": "start-kernel",
+        "needed_to_boot_safely": true
+      },
+      {
+        "doc": "falls back to the previous boot when a new one isn't accepted",
+        "id": "fallback-boot",
+        "needed_to_boot_safely": false
+      },
+      {
+        "doc": "a one-shot trial boot of a new kernel or deployment",
+        "id": "trial-boot",
+        "needed_to_boot_safely": false
+      },
+      {
+        "doc": "the GlassineOS recovery",
+        "id": "recovery",
+        "needed_to_boot_safely": false
+      },
+      {
+        "doc": "keeps the stock system next to GlassineOS",
+        "id": "keep-stock",
+        "needed_to_boot_safely": false
+      },
+      {
+        "doc": "the kept system's own recovery stays reachable",
+        "id": "secondary-recovery",
+        "needed_to_boot_safely": false
+      },
+      {
+        "doc": "the person picks the system at start-up",
+        "id": "choose-at-start",
+        "needed_to_boot_safely": false
+      }
+    ],
+    "condition_tests": [
+      {
+        "doc": "the fact has this value",
+        "id": "equals"
+      },
+      {
+        "doc": "the fact has one of these values",
+        "id": "one-of"
+      },
+      {
+        "doc": "the fact exists (true)",
+        "id": "present"
+      },
+      {
+        "doc": "the fact does not exist (true)",
+        "id": "absent"
+      },
+      {
+        "doc": "the number is at least this",
+        "id": "at-least"
+      },
+      {
+        "doc": "the number is at most this",
+        "id": "at-most"
+      }
+    ],
+    "departures": [
+      {
+        "backends": [
+          "android-bootloader"
+        ],
+        "doc": "after a warm-up, every transfer must be exactly `length` bytes: commands padded with NUL, data in chunks of `length`, a download rounded up to whole chunks with zeros",
+        "id": "equal-length-transfers",
+        "modes": [
+          "fastboot"
+        ],
+        "params": [
+          {
+            "doc": "the one transfer length; not a multiple of the USB packet size",
+            "name": "length",
+            "required": true,
+            "type": "Number"
+          },
+          {
+            "doc": "the opening that arms it: short-command-then-dummy",
+            "name": "warm-up",
+            "required": true,
+            "type": "Text"
+          }
+        ]
+      },
+      {
+        "backends": [
+          "android-bootloader"
+        ],
+        "doc": "the protocol only works in a fresh boot of the mode; a session that finds it used restarts the mode",
+        "id": "fresh-boot-only",
+        "modes": [
+          "fastboot"
+        ],
+        "params": []
+      },
+      {
+        "backends": [
+          "android-bootloader",
+          "uefi-pc"
+        ],
+        "doc": "an operation of the protocol that must never be sent",
+        "id": "never-use",
+        "modes": [
+          "fastboot",
+          "android-adb",
+          "emergency-download",
+          "local"
+        ],
+        "params": [
+          {
+            "doc": "the operation",
+            "name": "operation",
+            "required": true,
+            "type": "Operation"
+          },
+          {
+            "doc": "why, in plain words",
+            "name": "reason",
+            "required": true,
+            "type": "Text"
+          }
+        ]
+      },
+      {
+        "backends": [
+          "android-bootloader"
+        ],
+        "doc": "variables are read one at a time; the protocol's all-variables request is not used",
+        "id": "single-variables-only",
+        "modes": [
+          "fastboot"
+        ],
+        "params": []
+      }
+    ],
+    "escape_leaves": [
+      {
+        "doc": "the system the device had before starts",
+        "id": "previous-system-starts"
+      },
+      {
+        "doc": "GlassineOS starts",
+        "id": "glassine-starts"
+      },
+      {
+        "doc": "the installer can finish the job",
+        "id": "installer-can-finish"
+      },
+      {
+        "doc": "the installer can undo the job",
+        "id": "installer-can-undo"
+      },
+      {
+        "doc": "only special hardware helps (name it in `hardware`)",
+        "id": "special-hardware"
+      }
+    ],
+    "fact_keys": [
+      {
+        "doc": "USB vendor id, four lower-case hex digits",
+        "key": "usb.vendor-id",
+        "kind": "usb",
+        "modes": [
+          "fastboot",
+          "android-adb",
+          "emergency-download",
+          "glassine-ram",
+          "glassine-usb"
+        ],
+        "type": "Text",
+        "unit_unique": false
+      },
+      {
+        "doc": "USB product id, four lower-case hex digits",
+        "key": "usb.product-id",
+        "kind": "usb",
+        "modes": [
+          "fastboot",
+          "android-adb",
+          "emergency-download",
+          "glassine-ram",
+          "glassine-usb"
+        ],
+        "type": "Text",
+        "unit_unique": false
+      },
+      {
+        "doc": "an interface with class-subclass-protocol <name> (hex, e.g. ff-42-03)",
+        "key": "usb.interface.<name>",
+        "kind": "usb",
+        "modes": [
+          "fastboot",
+          "android-adb",
+          "emergency-download",
+          "glassine-ram",
+          "glassine-usb"
+        ],
+        "type": "Presence",
+        "unit_unique": false
+      },
+      {
+        "doc": "the USB serial number (unit-unique; never in a description)",
+        "key": "usb.serial",
+        "kind": "usb",
+        "modes": [
+          "fastboot",
+          "android-adb",
+          "emergency-download",
+          "glassine-ram",
+          "glassine-usb"
+        ],
+        "type": "Text",
+        "unit_unique": true
+      },
+      {
+        "doc": "the boot loader's answer to getvar:<name>; absent when it answers FAIL",
+        "key": "fastboot.var.<name>",
+        "kind": "boot-loader",
+        "modes": [
+          "fastboot"
+        ],
+        "type": "Text",
+        "unit_unique": false
+      },
+      {
+        "doc": "a system property of the running stock Android",
+        "key": "android.prop.<name>",
+        "kind": "system",
+        "modes": [
+          "android-adb"
+        ],
+        "type": "Text",
+        "unit_unique": false
+      },
+      {
+        "doc": "a partition named <name> exists",
+        "key": "storage.partition.<name>",
+        "kind": "storage",
+        "modes": [
+          "fastboot",
+          "android-adb",
+          "emergency-download",
+          "glassine-ram",
+          "local"
+        ],
+        "type": "Presence",
+        "unit_unique": false
+      },
+      {
+        "doc": "the size of partition <name> in bytes",
+        "key": "storage.partition.<name>.size",
+        "kind": "storage",
+        "modes": [
+          "fastboot",
+          "android-adb",
+          "emergency-download",
+          "glassine-ram",
+          "local"
+        ],
+        "type": "Number",
+        "unit_unique": false
+      },
+      {
+        "doc": "the kind of the first disk: emmc, ufs, nvme, sata, usb, other",
+        "key": "storage.kind",
+        "kind": "storage",
+        "modes": [
+          "local"
+        ],
+        "type": "Text",
+        "unit_unique": false
+      },
+      {
+        "doc": "how the machine starts: uefi or bios",
+        "key": "firmware.kind",
+        "kind": "firmware",
+        "modes": [
+          "local"
+        ],
+        "type": "Text",
+        "unit_unique": false
+      },
+      {
+        "doc": "UEFI secure boot: on, off or setup",
+        "key": "firmware.secure-boot",
+        "kind": "firmware",
+        "modes": [
+          "local"
+        ],
+        "type": "Text",
+        "unit_unique": false
+      },
+      {
+        "doc": "the processor architecture: x86-64 or arm64",
+        "key": "cpu.arch",
+        "kind": "cpu",
+        "modes": [
+          "local"
+        ],
+        "type": "Text",
+        "unit_unique": false
+      },
+      {
+        "doc": "the processor's maker as the processor reports it",
+        "key": "cpu.vendor",
+        "kind": "cpu",
+        "modes": [
+          "local"
+        ],
+        "type": "Text",
+        "unit_unique": false
+      },
+      {
+        "doc": "the system's maker (SMBIOS)",
+        "key": "board.vendor",
+        "kind": "board",
+        "modes": [
+          "local"
+        ],
+        "type": "Text",
+        "unit_unique": false
+      },
+      {
+        "doc": "the system's product name (SMBIOS)",
+        "key": "board.product",
+        "kind": "board",
+        "modes": [
+          "local"
+        ],
+        "type": "Text",
+        "unit_unique": false
+      },
+      {
+        "doc": "the system's serial number (unit-unique; never in a description)",
+        "key": "board.serial",
+        "kind": "board",
+        "modes": [
+          "local"
+        ],
+        "type": "Text",
+        "unit_unique": true
+      },
+      {
+        "doc": "the system's UUID (unit-unique; never in a description)",
+        "key": "board.uuid",
+        "kind": "board",
+        "modes": [
+          "local"
+        ],
+        "type": "Text",
+        "unit_unique": true
+      },
+      {
+        "doc": "a GlassineOS installation record on the machine",
+        "key": "glassine.installation",
+        "kind": "glassine",
+        "modes": [
+          "glassine-usb",
+          "local"
+        ],
+        "type": "Presence",
+        "unit_unique": false
+      },
+      {
+        "doc": "this job's backup is on the computer and verified",
+        "key": "installer.backup-verified",
+        "kind": "installer",
+        "modes": [
+          "installer"
+        ],
+        "type": "Presence",
+        "unit_unique": false
+      },
+      {
+        "doc": "the installer's record says step <name> completed",
+        "key": "installer.step.<name>",
+        "kind": "installer",
+        "modes": [
+          "installer"
+        ],
+        "type": "Presence",
+        "unit_unique": false
+      }
+    ],
+    "jobs": [
+      {
+        "doc": "install GlassineOS",
+        "id": "install"
+      },
+      {
+        "doc": "put boot and recovery back, keep deployments and the person's storage",
+        "id": "repair"
+      },
+      {
+        "doc": "a fresh deployment, keep the person's storage",
+        "id": "reinstall"
+      },
+      {
+        "doc": "restore the backup",
+        "id": "back-to-stock"
+      }
+    ],
+    "mode_kinds": [
+      {
+        "backends": [
+          "android-bootloader"
+        ],
+        "doc": "the boot loader's fastboot protocol over USB",
+        "id": "fastboot",
+        "operations": [
+          "getvar",
+          "download",
+          "flash",
+          "erase",
+          "boot-image",
+          "reboot",
+          "set-active",
+          "fetch"
+        ]
+      },
+      {
+        "backends": [
+          "android-bootloader"
+        ],
+        "doc": "the stock Android system's adb over USB",
+        "id": "android-adb",
+        "operations": [
+          "getprop",
+          "reboot",
+          "reboot-bootloader",
+          "reboot-recovery",
+          "reboot-edl"
+        ]
+      },
+      {
+        "backends": [
+          "android-bootloader"
+        ],
+        "doc": "the SoC's emergency download mode (Qualcomm EDL); special hardware or a software route",
+        "id": "emergency-download",
+        "operations": [
+          "read",
+          "write",
+          "erase",
+          "reset"
+        ]
+      },
+      {
+        "backends": [
+          "android-bootloader"
+        ],
+        "doc": "a GlassineOS environment the boot loader starts from memory (the ram-environment artifact), over USB; it reads the device's storage and changes nothing (not built yet)",
+        "id": "glassine-ram",
+        "operations": [
+          "read",
+          "reboot",
+          "reboot-bootloader"
+        ]
+      },
+      {
+        "backends": [
+          "android-bootloader"
+        ],
+        "doc": "a running GlassineOS or its recovery, over USB (not built yet)",
+        "id": "glassine-usb",
+        "operations": []
+      },
+      {
+        "backends": [
+          "uefi-pc"
+        ],
+        "doc": "the installer running on the machine itself (a PC from removable media)",
+        "id": "local",
+        "operations": [
+          "read",
+          "write",
+          "efi-variables"
+        ]
+      }
+    ],
+    "needs": [
+      {
+        "doc": "the person does it by hand",
+        "id": "hands"
+      },
+      {
+        "doc": "a setting on the device: USB debugging on in the stock system",
+        "id": "usb-debugging"
+      },
+      {
+        "doc": "the device's magnetic cover",
+        "id": "cover"
+      },
+      {
+        "doc": "special hardware: a USB cable that forces the emergency download mode",
+        "id": "emergency-cable"
+      },
+      {
+        "doc": "the installer on a USB stick or other removable media",
+        "id": "removable-media"
+      },
+      {
+        "doc": "a setting in the PC's firmware setup",
+        "id": "firmware-setup"
+      }
+    ],
+    "partition_actions": [
+      {
+        "doc": "reads it",
+        "id": "reads"
+      },
+      {
+        "doc": "backs it up to the computer",
+        "id": "backs_up"
+      },
+      {
+        "doc": "writes its content",
+        "id": "writes"
+      },
+      {
+        "doc": "creates it",
+        "id": "creates"
+      },
+      {
+        "doc": "changes its size",
+        "id": "resizes"
+      },
+      {
+        "doc": "removes it",
+        "id": "removes"
+      }
+    ],
+    "partition_classes": [
+      {
+        "doc": "never written; steps may read it and back it up",
+        "id": "never-write"
+      },
+      {
+        "doc": "steps may read it and back it up",
+        "id": "read"
+      },
+      {
+        "doc": "steps may read it and back it up",
+        "id": "back-up"
+      },
+      {
+        "doc": "steps may back it up and write it",
+        "id": "replace"
+      },
+      {
+        "doc": "a partition the job creates and then writes",
+        "id": "create"
+      },
+      {
+        "doc": "steps may change its size (and write it)",
+        "id": "resize"
+      },
+      {
+        "doc": "steps may remove it (and anything a resize may do)",
+        "id": "remove"
+      }
+    ],
+    "partition_roles": [
+      {
+        "doc": "the disk's partition table, as one object",
+        "id": "partition-table"
+      },
+      {
+        "doc": "an EFI system partition",
+        "id": "esp"
+      },
+      {
+        "doc": "a partition that belongs to an operating system inspecting found",
+        "id": "os"
+      },
+      {
+        "doc": "unpartitioned space on the target disk",
+        "id": "free-space"
+      }
+    ],
+    "step_kinds": [
+      {
+        "backends": [
+          "android-bootloader",
+          "uefi-pc"
+        ],
+        "doc": "reads what the step's backs_up names and the boot settings it names, stores them on the computer and checks them by reading back",
+        "id": "back-up",
+        "modes": [
+          "fastboot",
+          "android-adb",
+          "emergency-download",
+          "glassine-ram",
+          "local"
+        ],
+        "params": []
+      },
+      {
+        "backends": [
+          "android-bootloader"
+        ],
+        "doc": "writes a boot loader artifact over the boot loader partition",
+        "id": "write-boot-loader",
+        "modes": [
+          "fastboot",
+          "emergency-download"
+        ],
+        "params": [
+          {
+            "doc": "the boot loader to write",
+            "name": "artifact",
+            "required": true,
+            "type": "Artifact"
+          },
+          {
+            "doc": "the partition it goes to",
+            "name": "partition",
+            "required": true,
+            "type": "Partition"
+          }
+        ]
+      },
+      {
+        "backends": [
+          "android-bootloader"
+        ],
+        "doc": "writes a new partition table from the layout artifact: its backup copy first, then the primary",
+        "id": "write-partition-table",
+        "modes": [
+          "fastboot",
+          "emergency-download"
+        ],
+        "params": [
+          {
+            "doc": "the layout",
+            "name": "artifact",
+            "required": true,
+            "type": "Artifact"
+          },
+          {
+            "doc": "partitions the layout renames in place, old = new",
+            "name": "renames",
+            "required": false,
+            "type": "Renames"
+          }
+        ]
+      },
+      {
+        "backends": [
+          "android-bootloader",
+          "uefi-pc"
+        ],
+        "doc": "writes an artifact as a raw image to one partition",
+        "id": "write-image",
+        "modes": [
+          "fastboot",
+          "emergency-download",
+          "local"
+        ],
+        "params": [
+          {
+            "doc": "what is written",
+            "name": "artifact",
+            "required": true,
+            "type": "Artifact"
+          },
+          {
+            "doc": "where",
+            "name": "partition",
+            "required": true,
+            "type": "Partition"
+          }
+        ]
+      },
+      {
+        "backends": [
+          "android-bootloader",
+          "uefi-pc"
+        ],
+        "doc": "puts the base and the first deployment on the system partition",
+        "id": "write-base",
+        "modes": [
+          "fastboot",
+          "local",
+          "glassine-usb"
+        ],
+        "params": [
+          {
+            "doc": "the base",
+            "name": "artifact",
+            "required": true,
+            "type": "Artifact"
+          },
+          {
+            "doc": "the system partition",
+            "name": "partition",
+            "required": true,
+            "type": "Partition"
+          }
+        ]
+      },
+      {
+        "backends": [
+          "android-bootloader"
+        ],
+        "doc": "changes the A/B slot flags",
+        "id": "set-boot-slot",
+        "modes": [
+          "fastboot"
+        ],
+        "params": [
+          {
+            "doc": "the slot",
+            "name": "slot",
+            "required": true,
+            "type": "Slot"
+          },
+          {
+            "doc": "active, highest priority, marked successful",
+            "name": "pin",
+            "required": false,
+            "type": "Bool"
+          },
+          {
+            "doc": "marked unbootable, so it is never fallen back to",
+            "name": "unbootable",
+            "required": false,
+            "type": "Bool"
+          }
+        ]
+      },
+      {
+        "backends": [
+          "uefi-pc"
+        ],
+        "doc": "creates partitions in the target disk's free space",
+        "id": "create-partitions",
+        "modes": [
+          "local"
+        ],
+        "params": [
+          {
+            "doc": "the partitions, in order",
+            "name": "partitions",
+            "required": true,
+            "type": "NewPartitions"
+          }
+        ]
+      },
+      {
+        "backends": [
+          "uefi-pc"
+        ],
+        "doc": "removes the partitions of one operating system",
+        "id": "remove-partitions",
+        "modes": [
+          "local"
+        ],
+        "params": []
+      },
+      {
+        "backends": [
+          "uefi-pc"
+        ],
+        "doc": "puts the kernel and the boot loader into a boot partition",
+        "id": "write-boot-files",
+        "modes": [
+          "local"
+        ],
+        "params": [
+          {
+            "doc": "the kernel",
+            "name": "artifact",
+            "required": true,
+            "type": "Artifact"
+          },
+          {
+            "doc": "the boot partition",
+            "name": "partition",
+            "required": true,
+            "type": "Partition"
+          }
+        ]
+      },
+      {
+        "backends": [
+          "uefi-pc"
+        ],
+        "doc": "adds a firmware boot entry for GlassineOS and puts it first in the boot order",
+        "id": "add-boot-entry",
+        "modes": [
+          "local"
+        ],
+        "params": [
+          {
+            "doc": "the partition the entry starts from",
+            "name": "partition",
+            "required": true,
+            "type": "Partition"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -46,7 +46,11 @@ with the others. It never reads a newer description partly.
 **Given** a machine whose signals match one description's identity,
 **When** it is inspected,
 **Then** it is recognised as that device, and its install state is the one state whose
-conditions hold.
+conditions observable in the machine's mode hold; when that mode can't tell the state, the
+installer names the mode that can.
+**And given** a machine in a mode where some of a description's required signals can't be
+seen, and none of those that can be seen contradicts, **then** the installer says which
+mode would decide and moves there or asks, never guessing a match.
 **And given** signals of which some match and some contradict a description, **then** the
 machine is treated as unsupported and the report names the conflicting signals.
 **And given** signals that match no description, **then** the machine is unsupported, and
@@ -82,7 +86,8 @@ pinned to,
   one as in Scenario 2, never as invalid.
 - **FR-004**: The format, vocabularies included, is also published as a machine-readable
   schema for each `format`, so editors and the device repositories' own checks validate a
-  description completely without the installer.
+  description completely without the installer. The schema names every key of the format;
+  this spec names the keys whose meaning it needs to state.
 
 ### Who the device is
 
@@ -91,14 +96,23 @@ pinned to,
 - **FR-006**: `[[identity]]` lists signals, each with the fact it reads (`key`), a test
   (`equals`, `one-of`, `present`, `absent`, `at-least`, `at-most`), whether it is
   `required` or supporting, and whether it has been seen on real hardware (`verified`, with
-  a note when not).
+  a note when not). The fact key's vocabulary entry names the mode kinds the fact can be
+  observed in, so a signal needs no mode of its own: identity is the same in every mode.
 - **FR-007**: A description is matched when all its required signals hold. When some
   required signals hold and another contradicts, the result is a conflict (Scenario 3).
-  Supporting signals only add confidence and never make a match on their own.
+  Supporting signals only add confidence and never make a match on their own. A signal
+  whose fact can't be observed in the machine's mode is undetermined, never a
+  contradiction: when some required signals hold, none contradicts and the rest are
+  undetermined, recognition is undetermined, and the report names the description and the
+  modes that would decide (the device's modes whose kind can observe the missing facts).
 - **FR-007a**: A description may name one more general description it `refines` (a model of
   a family, a particular PC of the generic PC). When several match, the one that refines the
   others wins. Two matches neither of which refines the other are ambiguous: the machine is
   treated as unsupported and the report names both.
+- **FR-007b**: A description that refines another and half-matches (some of its required
+  signals hold, another contradicts) while the one it refines matches is not a conflict:
+  the machine is that more general device, not that model. Every other half-match is a
+  conflict (FR-007).
 - **FR-008**: Identity uses what the hardware is, never what a person named it and never
   what install state it is in. A device's description has at least two required signals of
   different kinds (for example, the storage's layout and the boot loader's platform). A
@@ -109,14 +123,22 @@ pinned to,
 - **FR-009**: `[[states]]` lists the install states in order (the first is the device as its
   maker ships it), each with an `id` and the conditions that tell it (same tests as
   FR-006). Every condition, here and in a step's `done` (FR-022), names the mode it can be
-  observed in. A condition is true, false, or undetermined in the mode the device is in;
-  an undetermined state says which mode would decide it, and the installer moves there
-  (FR-013) or asks. Exactly one state holds once decided; more than one is a conflict. The
-  standard ids are `stock`, `prepared` (changed by an earlier installation's first steps,
-  nothing of GlassineOS booted yet) and `installed`; a description may add others.
+  observed in. A condition is true, false, or undetermined in the mode the device is in.
+  A state is judged on its conditions that are observable in that mode: it holds when they
+  all hold, and it is undetermined when it has none there. When exactly one state holds,
+  the state is decided. When several hold and each of them also has conditions in other
+  modes, the state is undetermined, not a conflict; an undetermined state says which modes
+  would decide it, and the installer moves there (FR-013) or asks. Several states that hold
+  on conditions all observable in the one mode are a conflict. The standard ids are
+  `stock`, `prepared` (changed by an earlier installation's first steps, nothing of
+  GlassineOS booted yet) and `installed`; a description may add others.
 - **FR-009a**: A half-installed device is not a state a description lists: it is a device
   some of whose job's steps are done and some not, known from the steps' `done` conditions
   and the installation record (001 FR-008).
+- **FR-009b**: `installer` is a reserved mode, never a device's: it means the installer's
+  own records on the computer (a verified backup, a step's write that the installer read
+  back). A condition names it when the device can't show the result, as with a backup or a
+  raw image write. No description lists a mode with that id.
 
 ### How the installer reaches it
 
@@ -141,14 +163,30 @@ pinned to,
 
 - **FR-014**: `[[partitions]]` is an ordered list of rules. Each selects partitions (by
   name, a name pattern, a partition type, or a role such as "the EFI system partition") and
-  gives the most any job may do to them: `never-write`, `read`, `back-up`, `replace`,
-  `create`, `resize`, `remove`. The first rule that selects a partition decides. A partition
-  no rule selects is `never-write` (001 FR-004).
+  gives its class, the most any job may do to them. The first rule that selects a partition
+  decides. A partition no rule selects is `never-write` (001 FR-004). The classes are not
+  one order; each allows exactly these actions of a step:
+
+  | Class         | reads | backs up | writes | creates | resizes | removes |
+  |---------------|:-----:|:--------:|:------:|:-------:|:-------:|:-------:|
+  | `never-write` |  yes  |   yes    |        |         |         |         |
+  | `read`        |  yes  |   yes    |        |         |         |         |
+  | `back-up`     |  yes  |   yes    |        |         |         |         |
+  | `replace`     |  yes  |   yes    |  yes   |         |         |         |
+  | `create`      |       |          |  yes   |   yes   |         |         |
+  | `resize`      |  yes  |   yes    |  yes   |         |   yes   |         |
+  | `remove`      |  yes  |   yes    |  yes   |         |   yes   |   yes   |
+
+  A `create` partition doesn't exist before the job, so there is nothing of it to read or
+  back up.
 - **FR-014a**: What a plan does to each partition comes from its steps: each step names the
   partitions it reads, writes, creates, resizes or removes. The plan's list (001 FR-003)
   is derived from the steps the choices select, and the check rejects a step that would go
   beyond its partition's rule. A size may be relative (the rest of a disk, the free space,
   what is left after another partition).
+- **FR-014b**: Renaming a partition is not an action: it is a parameter of the step that
+  writes the partition table (old name = new name), and that step writes the table. The
+  rules select a renamed partition by both its names.
 - **FR-015**: A `resize` or `remove` says whether it destroys what's on the partition. The plan
   shows a destroying change as the loss of the person's files, never as a technical step.
 - **FR-016**: A change to how the machine starts (a boot slot's flags, a firmware boot entry,
@@ -188,8 +226,9 @@ pinned to,
 - **FR-022**: `[[steps]]` lists the installation's steps. Each has a stable `id`, a `kind`
   from its backend's list of step kinds, the kind's parameters, the mode it needs, the steps
   it comes after (the order; the list's own order means nothing), the choices it depends
-  on, and a `done` condition the installer can observe on the device (so an interrupted
-  installation knows where it stands).
+  on, and a `done` condition (so an interrupted installation knows where it stands). The
+  installer observes it on the device or, for a step whose result the device can't show,
+  in its own record (FR-009b).
 - **FR-023**: Each step says how it is escaped, separately for a failure during it and for an
   interruption after it: the state that leaves the device in (its previous system starts,
   GlassineOS starts, the installer can finish, the installer can undo, or only special

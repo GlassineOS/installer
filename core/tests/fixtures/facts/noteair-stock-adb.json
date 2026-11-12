@@ -1,0 +1,271 @@
+{
+ "facts_format": 1,
+ "mode": "android-adb",
+ "usb": {
+  "vendor_id": "18d1",
+  "product_id": "4ee2",
+  "interfaces": [
+   "ff-ff-00",
+   "ff-42-01"
+  ]
+ },
+ "android": {
+  "properties": {
+   "ro.product.device": "NoteAir",
+   "ro.board.platform": "sdm660",
+   "ro.build.version.release": "10"
+  }
+ },
+ "storage": {
+  "names": "vendor",
+  "disks": [
+   {
+    "index": 0,
+    "kind": "emmc",
+    "size": 31268536320,
+    "partitions": [
+     {
+      "index": 1,
+      "name": "xbl",
+      "size": 3670016
+     },
+     {
+      "index": 2,
+      "name": "xblbak",
+      "size": 3670016
+     },
+     {
+      "index": 3,
+      "name": "tz",
+      "size": 4194304
+     },
+     {
+      "index": 4,
+      "name": "rpm",
+      "size": 524288
+     },
+     {
+      "index": 5,
+      "name": "hyp",
+      "size": 524288
+     },
+     {
+      "index": 6,
+      "name": "pmic",
+      "size": 524288
+     },
+     {
+      "index": 7,
+      "name": "fsg",
+      "size": 2097152
+     },
+     {
+      "index": 8,
+      "name": "boot",
+      "size": 67108864
+     },
+     {
+      "index": 9,
+      "name": "recovery",
+      "size": 67108864
+     },
+     {
+      "index": 10,
+      "name": "system",
+      "size": 3221225472
+     },
+     {
+      "index": 11,
+      "name": "vendor",
+      "size": 838860800
+     },
+     {
+      "index": 12,
+      "name": "cache",
+      "size": 268435456
+     },
+     {
+      "index": 13,
+      "name": "keymaster",
+      "size": 1048576
+     },
+     {
+      "index": 14,
+      "name": "cmnlib",
+      "size": 1048576
+     },
+     {
+      "index": 15,
+      "name": "cmnlib64",
+      "size": 1048576
+     },
+     {
+      "index": 16,
+      "name": "mdtpsecapp",
+      "size": 4194304
+     },
+     {
+      "index": 17,
+      "name": "mdtp",
+      "size": 33554432
+     },
+     {
+      "index": 18,
+      "name": "modem",
+      "size": 115343360
+     },
+     {
+      "index": 19,
+      "name": "dsp",
+      "size": 16777216
+     },
+     {
+      "index": 20,
+      "name": "abl",
+      "size": 1048576
+     },
+     {
+      "index": 21,
+      "name": "dip",
+      "size": 1048576
+     },
+     {
+      "index": 22,
+      "name": "devinfo",
+      "size": 4096
+     },
+     {
+      "index": 23,
+      "name": "apdp",
+      "size": 262144
+     },
+     {
+      "index": 24,
+      "name": "msadp",
+      "size": 262144
+     },
+     {
+      "index": 25,
+      "name": "dpo",
+      "size": 1024
+     },
+     {
+      "index": 26,
+      "name": "splash",
+      "size": 34226176
+     },
+     {
+      "index": 27,
+      "name": "limits",
+      "size": 4096
+     },
+     {
+      "index": 28,
+      "name": "toolsfv",
+      "size": 1048576
+     },
+     {
+      "index": 29,
+      "name": "logfs",
+      "size": 8388608
+     },
+     {
+      "index": 30,
+      "name": "ddr",
+      "size": 1048576
+     },
+     {
+      "index": 31,
+      "name": "sec",
+      "size": 16384
+     },
+     {
+      "index": 32,
+      "name": "bluetooth",
+      "size": 1048576
+     },
+     {
+      "index": 33,
+      "name": "fsc",
+      "size": 1024
+     },
+     {
+      "index": 34,
+      "name": "ssd",
+      "size": 8192
+     },
+     {
+      "index": 35,
+      "name": "modemst1",
+      "size": 2097152
+     },
+     {
+      "index": 36,
+      "name": "modemst2",
+      "size": 2097152
+     },
+     {
+      "index": 37,
+      "name": "persist",
+      "size": 33554432
+     },
+     {
+      "index": 38,
+      "name": "misc",
+      "size": 1048576
+     },
+     {
+      "index": 39,
+      "name": "keystore",
+      "size": 524288
+     },
+     {
+      "index": 40,
+      "name": "devcfg",
+      "size": 1048576
+     },
+     {
+      "index": 41,
+      "name": "frp",
+      "size": 524288
+     },
+     {
+      "index": 42,
+      "name": "logdump",
+      "size": 67108864
+     },
+     {
+      "index": 43,
+      "name": "sti",
+      "size": 2097152
+     },
+     {
+      "index": 44,
+      "name": "storsec",
+      "size": 131072
+     },
+     {
+      "index": 45,
+      "name": "rawdump",
+      "size": 134217728
+     },
+     {
+      "index": 46,
+      "name": "vbmeta",
+      "size": 65536
+     },
+     {
+      "index": 47,
+      "name": "onyxconfig",
+      "size": 33554432
+     },
+     {
+      "index": 48,
+      "name": "userdata",
+      "size": 25799147008
+     }
+    ]
+   }
+  ]
+ }
+}

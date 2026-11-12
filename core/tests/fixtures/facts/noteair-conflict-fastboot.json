@@ -1,0 +1,82 @@
+{
+ "facts_format": 1,
+ "mode": "fastboot",
+ "runs_on": {
+  "platform": "linux",
+  "connections": [
+   "usb-native"
+  ]
+ },
+ "usb": {
+  "vendor_id": "18d1",
+  "product_id": "d00d",
+  "interfaces": [
+   "ff-42-03"
+  ]
+ },
+ "fastboot": {
+  "variables": {
+   "product": "sdm660",
+   "variant": "SDM EMMC",
+   "hw-revision": "10000",
+   "unlocked": "yes",
+   "secure": "no",
+   "max-download-size": "595230720",
+   "partition-size:xbl": "0x380000",
+   "partition-size:xblbak": "0x380000",
+   "partition-size:tz": "0x400000",
+   "partition-size:rpm": "0x80000",
+   "partition-size:hyp": "0x80000",
+   "partition-size:pmic": "0x80000",
+   "partition-size:fsg": "0x200000",
+   "partition-size:boot": "0x4000000",
+   "partition-size:recovery": "0x4000000",
+   "partition-size:system": "0xc0000000",
+   "partition-size:vendor": "0x32000000",
+   "partition-size:cache": "0x10000000",
+   "partition-size:keymaster": "0x100000",
+   "partition-size:cmnlib": "0x100000",
+   "partition-size:cmnlib64": "0x100000",
+   "partition-size:mdtpsecapp": "0x400000",
+   "partition-size:mdtp": "0x2000000",
+   "partition-size:modem": "0x6e00000",
+   "partition-size:dsp": "0x1000000",
+   "partition-size:abl": "0x100000",
+   "partition-size:dip": "0x100000",
+   "partition-size:devinfo": "0x1000",
+   "partition-size:apdp": "0x40000",
+   "partition-size:msadp": "0x40000",
+   "partition-size:dpo": "0x400",
+   "partition-size:splash": "0x20a4000",
+   "partition-size:limits": "0x1000",
+   "partition-size:toolsfv": "0x100000",
+   "partition-size:logfs": "0x800000",
+   "partition-size:ddr": "0x100000",
+   "partition-size:sec": "0x4000",
+   "partition-size:bluetooth": "0x100000",
+   "partition-size:fsc": "0x400",
+   "partition-size:ssd": "0x2000",
+   "partition-size:modemst1": "0x200000",
+   "partition-size:modemst2": "0x200000",
+   "partition-size:persist": "0x2000000",
+   "partition-size:misc": "0x100000",
+   "partition-size:keystore": "0x80000",
+   "partition-size:devcfg": "0x100000",
+   "partition-size:frp": "0x80000",
+   "partition-size:logdump": "0x4000000",
+   "partition-size:sti": "0x200000",
+   "partition-size:storsec": "0x20000",
+   "partition-size:rawdump": "0x8000000",
+   "partition-size:vbmeta": "0x10000",
+   "partition-size:onyxconfig": "0x1000000",
+   "partition-size:userdata": "0x601bfbe00",
+   "partition-size:boot_b": null,
+   "partition-size:system_b": null,
+   "partition-size:vendor_b": null,
+   "partition-size:boot_a": null,
+   "partition-size:system_a": null,
+   "partition-size:vendor_a": null,
+   "current-slot": null
+  }
+ }
+}
