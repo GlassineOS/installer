@@ -4,8 +4,10 @@
 
 use glassine_installer::facts::Snapshot;
 use glassine_installer::format1::{self, Description};
+use glassine_installer::inspect::{self, Host, Inspected};
 use glassine_installer::validate::{self, Loaded};
 use glassine_installer::{lock, plan, recognize, report};
+use glassine_installer_usb as usb;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -16,19 +18,25 @@ const OWN_REPOSITORY: &str = "GlassineOS/installer";
 
 const USAGE: &str = "usage:
   glassine-install validate FILE... [--lock LOCKFILE [--require-pins]]
-  glassine-install check --facts FACTS.json [--json] [--devices DIR]
-  glassine-install plan --dry-run --facts FACTS.json [--choice K=V]... [--hardware H=yes|no]...
+  glassine-install inspect [--json] [--out FACTS.json] [--reboot] [--devices DIR]
+  glassine-install check [--facts FACTS.json | --reboot] [--json] [--devices DIR]
+  glassine-install plan --dry-run [--facts FACTS.json | --reboot] [--choice K=V]... [--hardware H=yes|no]...
                         [--developer] [--free BYTES] [--job JOB] [--json] [--devices DIR]
   glassine-install schema
   glassine-install lock-unpinned LOCKFILE
 
 Descriptions come from the copies built into this program unless --devices names a directory.
-Nothing here talks to a device: check and plan read a facts snapshot.";
+inspect reads the one device connected in fastboot mode and writes nothing to it (getvar only;
+--reboot restarts it at the end). check and plan read a facts snapshot, or without --facts
+inspect the connected device first. A boot loader that only answers in a fresh start of its
+mode needs restarting before the next live command: use --reboot, or keep the facts with --out
+and pass them with --facts.";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let r = match args.first().map(String::as_str) {
         Some("validate") => validate_cmd(&args[1..]),
+        Some("inspect") => inspect_cmd(&args[1..]),
         Some("check") => check_cmd(&args[1..]),
         Some("plan") => plan_cmd(&args[1..]),
         Some("schema") => {
@@ -204,9 +212,79 @@ fn descriptions(o: &Opts) -> Result<Vec<Description>, String> {
     Ok(out)
 }
 
-fn facts(o: &Opts) -> Result<Snapshot, String> {
-    let f = o.one("--facts").ok_or(format!("--facts is required\n\n{USAGE}"))?;
-    Snapshot::parse(&read(Path::new(f))?).map_err(|e| format!("{f}: {e}"))
+/// Exit code for a device that couldn't be inspected (none, busy, not fresh,
+/// a timeout); the message says which.
+const DEVICE_FAILED: u8 = 5;
+
+/// Inspects the one connected fastboot device.
+fn live(ds: &[&Description], reboot: bool) -> Result<Inspected, String> {
+    let info = usb::find().map_err(|e| e.to_string())?;
+    let (t, ids) = usb::open(&info).map_err(|e| e.to_string())?;
+    let host = Host {
+        platform: std::env::consts::OS.to_string(),
+        connections: vec!["usb-native".into()],
+    };
+    let got = pollster::block_on(inspect::inspect(ds, t, &ids, &host, reboot)).map_err(|e| e.to_string())?;
+    if let Some(e) = &got.reboot_error {
+        eprintln!("the facts were read, but the reboot at the end failed: {e}");
+    }
+    Ok(got)
+}
+
+/// The snapshot from --facts, or a live inspect without it. `Err(Ok(code))`
+/// is a device that couldn't be inspected (already reported).
+fn facts(o: &Opts, ds: &[&Description]) -> Result<Result<Snapshot, ExitCode>, String> {
+    match o.one("--facts") {
+        Some(f) => Snapshot::parse(&read(Path::new(f))?).map(Ok).map_err(|e| format!("{f}: {e}")),
+        None => match live(ds, o.has("--reboot")) {
+            Ok(i) => Ok(Ok(i.snapshot)),
+            Err(e) => {
+                eprintln!("{e}");
+                Ok(Err(ExitCode::from(DEVICE_FAILED)))
+            }
+        },
+    }
+}
+
+fn inspect_cmd(args: &[String]) -> Result<ExitCode, String> {
+    let o = opts(args, &["--json", "--reboot"], &["--out", "--devices"])?;
+    let ds = descriptions(&o)?;
+    let refs: Vec<&Description> = ds.iter().collect();
+    let got = match live(&refs, o.has("--reboot")) {
+        Ok(g) => g,
+        Err(e) => {
+            eprintln!("{e}");
+            return Ok(ExitCode::from(DEVICE_FAILED));
+        }
+    };
+    let json = serde_json::to_string_pretty(&got.snapshot).unwrap() + "\n";
+    if let Some(out) = o.one("--out") {
+        std::fs::write(out, &json).map_err(|e| format!("{out}: {e}"))?;
+    }
+    if o.has("--json") {
+        print!("{json}");
+    } else {
+        let usb = got.snapshot.usb.as_ref().unwrap();
+        println!("fastboot device {}:{}", usb.vendor_id, usb.product_id);
+        match got.told_by.as_slice() {
+            [] => println!("framing: {}", got.framing.name()),
+            t => println!("framing: {} (told by {})", got.framing.name(), t.join(", ")),
+        }
+        for (k, v) in &got.snapshot.fastboot.as_ref().unwrap().variables {
+            println!("  {k}: {}", v.as_deref().unwrap_or("(FAIL)"));
+        }
+        if let Some(out) = o.one("--out") {
+            println!("facts written to {out}");
+        }
+        if got.rebooted {
+            println!("the device is restarting");
+        }
+    }
+    Ok(if got.reboot_error.is_some() {
+        ExitCode::from(DEVICE_FAILED)
+    } else {
+        ExitCode::SUCCESS
+    })
 }
 
 fn plan_input(o: &Opts) -> Result<plan::Input, String> {
@@ -235,10 +313,13 @@ fn plan_input(o: &Opts) -> Result<plan::Input, String> {
 }
 
 fn check_cmd(args: &[String]) -> Result<ExitCode, String> {
-    let o = opts(args, &["--json"], &["--facts", "--devices"])?;
+    let o = opts(args, &["--json", "--reboot"], &["--facts", "--devices"])?;
     let ds = descriptions(&o)?;
     let refs: Vec<&Description> = ds.iter().collect();
-    let f = facts(&o)?;
+    let f = match facts(&o, &refs)? {
+        Ok(f) => f,
+        Err(code) => return Ok(code),
+    };
     let rec = recognize::recognize(&refs, &f);
     let p = plan::plan(&refs, &f, &rec, &plan::Input::default());
     let r = report::report(&refs, &f, &rec, Some(&p));
@@ -253,17 +334,21 @@ fn check_cmd(args: &[String]) -> Result<ExitCode, String> {
 fn plan_cmd(args: &[String]) -> Result<ExitCode, String> {
     let o = opts(
         args,
-        &["--json", "--dry-run", "--developer"],
+        &["--json", "--dry-run", "--developer", "--reboot"],
         &["--facts", "--devices", "--choice", "--hardware", "--free", "--job"],
     )?;
     if !o.has("--dry-run") {
         return Err("only the dry run exists: plan --dry-run".into());
     }
+    let input = plan_input(&o)?;
     let ds = descriptions(&o)?;
     let refs: Vec<&Description> = ds.iter().collect();
-    let f = facts(&o)?;
+    let f = match facts(&o, &refs)? {
+        Ok(f) => f,
+        Err(code) => return Ok(code),
+    };
     let rec = recognize::recognize(&refs, &f);
-    let p = plan::plan(&refs, &f, &rec, &plan_input(&o)?);
+    let p = plan::plan(&refs, &f, &rec, &input);
     if o.has("--json") {
         println!("{}", serde_json::to_string_pretty(&p).unwrap());
     } else {
