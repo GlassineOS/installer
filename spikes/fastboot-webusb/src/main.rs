@@ -39,8 +39,27 @@ fn main() {
         std::process::exit(2);
     };
     eprintln!("device {:04x}:{:04x}", info.vendor_id(), info.product_id());
-    let dev = info.open().wait().expect("open");
-    let t = usb::UsbTransport::open_blocking(dev).expect("claim");
+    // Right after the device appears, the host may hold the interface for a
+    // moment ("interface is busy"). Retry opening only; nothing has been sent.
+    let mut t = None;
+    for _ in 0..10 {
+        match info.open().wait().map_err(|e| e.to_string()).and_then(|d| {
+            usb::UsbTransport::open_blocking(d).map_err(|e| e.to_string())
+        }) {
+            Ok(x) => {
+                t = Some(x);
+                break;
+            }
+            Err(e) => {
+                eprintln!("open: {e}; retrying");
+                std::thread::sleep(std::time::Duration::from_millis(500));
+            }
+        }
+    }
+    let Some(t) = t else {
+        eprintln!("could not open the fastboot interface");
+        std::process::exit(3);
+    };
     let t0 = Instant::now();
     let (mut s, product) = match pollster::block_on(Session::start(t, framing)) {
         Ok(x) => x,
