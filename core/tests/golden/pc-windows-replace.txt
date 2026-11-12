@@ -26,15 +26,16 @@ Partitions:
 
 Backup (default), to the installer's USB stick, checked by reading it back before the first write:
   disk 0 (nvme, 512.0 GiB), whole: the partition table and every partition; at most 512.0 GiB, stored compressed; only the used blocks where the file system tells them, every block elsewhere
+  You can switch it off (choice backup = off). Without the backup there is no way back to the maker's system and no repair from the backup. The values unique to the device are still kept.
 
 How the machine starts:
   boot-entries (firmware-boot-entry): back-up, change
   boot-order (firmware-boot-order): back-up, change
 
 Space on the computer:
-  backup 512.0 GiB
+  backup 68.0 KiB plus images of at most 512.0 GiB
   artifacts 0 B plus base, kernel of unknown size
-  at least 512.0 GiB
+  at least 68.0 KiB
 
 Afterwards the device:
   have start-kernel [untried]

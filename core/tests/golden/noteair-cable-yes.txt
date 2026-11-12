@@ -27,6 +27,7 @@ Partitions:
 
 Backup (default), to this computer, checked by reading it back before the first write:
   disk 0, whole: the partition table and every partition; about 8.0 GiB, stored compressed; only the used blocks where the file system tells them, every block elsewhere
+  You can switch it off (choice backup = off). Without the backup there is no way back to the maker's system and no repair from the backup. The values unique to the device are still kept.
 
 How the machine starts:
   boot-loader (boot-loader): back-up, change

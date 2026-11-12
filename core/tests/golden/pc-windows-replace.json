@@ -179,7 +179,7 @@
       "kind": "installer-media",
       "disk": null
     },
-    "consequence": null,
+    "consequence": "Without the backup there is no way back to the maker's system and no repair from the backup. The values unique to the device are still kept.",
     "escapes_lost": []
   },
   "keeps": {
@@ -188,14 +188,15 @@
     "device_data": []
   },
   "space": {
-    "backup_bytes": 549755883520,
+    "backup_bytes": 69632,
+    "backup_at_most": 549755813888,
     "backup_unknown": [],
     "artifact_bytes": 0,
     "artifacts_unknown": [
       "base",
       "kernel"
     ],
-    "total_at_least": 549755883520,
+    "total_at_least": 69632,
     "exact": false
   },
   "capabilities": [

@@ -137,11 +137,9 @@
       "id": "boot-loader",
       "kind": "boot-loader",
       "actions": [
-        "back-up",
         "change"
       ],
       "steps": [
-        "back-up",
         "replace-boot-loader"
       ]
     },
@@ -149,11 +147,9 @@
       "id": "slot-flags",
       "kind": "slot-flags",
       "actions": [
-        "back-up",
         "change"
       ],
       "steps": [
-        "back-up",
         "partition-table",
         "set-slot"
       ]
@@ -182,6 +178,7 @@
   },
   "space": {
     "backup_bytes": 0,
+    "backup_at_most": 0,
     "backup_unknown": [],
     "artifact_bytes": 0,
     "artifacts_unknown": [

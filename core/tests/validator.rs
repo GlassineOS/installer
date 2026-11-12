@@ -391,6 +391,15 @@ fn a_description_has_a_rule_for_the_whole_disk() {
     );
 }
 
+#[test]
+fn the_whole_disk_rule_has_no_condition() {
+    na(
+        "select = { role = \"disk\" }\nclass = \"never-write\"",
+        "select = { role = \"disk\" }\nclass = \"never-write\"\nwhen = { choice = \"keep-stock\", equals = \"yes\" }",
+        "partitions[7].when",
+    );
+}
+
 /// FR-009a: the backup is the flow's choice, never a description's.
 #[test]
 fn the_backup_choice_is_reserved() {
