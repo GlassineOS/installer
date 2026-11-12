@@ -1,22 +1,34 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-//! Native spike tool. Writes nothing to the device's storage.
+//! Native spike tool. Writes storage only with `--flash`, and only to the
+//! partitions the core allows.
 //!
-//!   fbspike [--note-air] [--download MIB] [--reboot] [VAR...]
+//!   fbspike [--note-air] [--download MIB] [--flash PART FILE] [--reboot] [VAR...]
 //!
 //! `--note-air` uses the Note Air's equal-length framing (GlassineOS/abl#1);
-//! `--download` sends MIB MiB of a pattern into the bootloader's RAM.
+//! `--download` sends MIB MiB of a pattern into the bootloader's RAM;
+//! `--flash` writes FILE to PART, which must be in `FLASH_ALLOWED`.
 #[cfg(not(target_arch = "wasm32"))]
 fn main() {
     use fbspike::{Framing, NOTE_AIR, Session, pattern, usb};
     use nusb::MaybeFuture;
     use std::time::Instant;
     let (mut framing, mut mib, mut reboot, mut names) = (Framing::Plain, 0usize, false, vec![]);
+    let mut flash: Option<(String, Vec<u8>)> = None;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
             "--note-air" => framing = NOTE_AIR,
             "--download" => mib = args.next().and_then(|v| v.parse().ok()).expect("--download MIB"),
             "--reboot" => reboot = true,
+            "--flash" => {
+                let part = args.next().expect("--flash PART FILE");
+                let file = args.next().expect("--flash PART FILE");
+                if !fbspike::FLASH_ALLOWED.contains(&part.as_str()) {
+                    eprintln!("refused: flash to {part:?} (allowed: {:?})", fbspike::FLASH_ALLOWED);
+                    std::process::exit(2);
+                }
+                flash = Some((part, std::fs::read(&file).expect("read FILE")));
+            }
             _ => names.push(a),
         }
     }
@@ -61,6 +73,19 @@ fn main() {
             Err(e) => {
                 println!("download: {e}");
                 ok = false;
+            }
+        }
+    }
+    if let Some((part, data)) = &flash {
+        if ok {
+            let t0 = Instant::now();
+            match pollster::block_on(s.flash(part, data)) {
+                Ok(n) => println!("flash {part}: OKAY, {n} bytes ({} of them padding) in {} ms",
+                                  n - data.len(), t0.elapsed().as_millis()),
+                Err(e) => {
+                    println!("flash {part}: {e}");
+                    ok = false;
+                }
             }
         }
     }

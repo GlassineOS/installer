@@ -4,9 +4,11 @@ Decision [0015](https://docs.glassine.org/decisions/0015-installer-stack/) owes 
 before the core is built on them. This directory holds the first one and the notes of the
 second. Throwaway code: it proves the stack, it is not the installer.
 
-**Writes nothing to the device's storage, by construction:** the only fastboot commands are
-`getvar`, `download` (into the bootloader's RAM) and `reboot`. There is no `flash`, `erase`,
-`boot` (on an A/B device it rewrites the slot flags) or `set_active`. A variable name with
+**Writes only where the test can undo it, by construction:** the fastboot commands are
+`getvar`, `download` (into the bootloader's RAM), `reboot`, and `flash` to the partitions in
+`FLASH_ALLOWED` (only the Note Air's `cache`, which GlassineOS doesn't use; any other name is
+refused before anything is sent, tested). There is no `erase`, `boot` (on an A/B device it
+rewrites the slot flags) or `set_active`. A variable name with
 `:`, white space or control characters is refused before anything is sent (tested).
 
 ## What it is
@@ -19,8 +21,8 @@ second. Throwaway code: it proves the stack, it is not the installer.
   command NUL-padded and all data in chunks of exactly 65535 bytes; it checks the warm-up's
   answers and refuses a device that isn't in a fresh fastboot boot. A `run` entry point for
   the browser (wasm-bindgen).
-- `src/main.rs`: `fbspike [--note-air] [--download MIB] [--reboot] [VAR...]`, the native
-  tool.
+- `src/main.rs`: `fbspike [--note-air] [--download MIB] [--flash PART FILE] [--reboot] [VAR...]`,
+  the native tool.
 - `web/index.html`: one button (WebUSB needs a user gesture), the variables, the framing,
   a download test into RAM, reboot at the end; the result and the time it took.
 - The tests run the session against a simulated Note Air (its driver's counting and its
@@ -48,7 +50,7 @@ python3 -m http.server -d web 8000    # then http://localhost:8000 in a Chromium
 
 | Check | Result |
 |---|---|
-| Protocol tests (fake transport: OKAY, INFO/TEXT then OKAY, FAIL, refusals, malformed, download size check; simulated Note Air: plain fails, equal-length works, warm device refused or correct) | 10/10 pass |
+| Protocol tests (fake transport: OKAY, INFO/TEXT then OKAY, FAIL, refusals, malformed, download size check; simulated Note Air: plain fails, equal-length works, warm device refused or correct) | 11/11 pass (with flash refusals and a flash on the simulated Note Air) |
 | Same source compiles for Linux x86-64 musl, Windows x86-64, arm64 musl, wasm32 | yes, no target-specific code but the entry points |
 | Linux binary | static, 656 KB; on a host with no fastboot device it enumerates and says so (exit 2) |
 | Windows binary | 496 KB, cross-built; not run (no Windows machine) |

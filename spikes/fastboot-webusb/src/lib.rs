@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //! Spike: the fastboot protocol in one Rust core, over nusb natively and over
-//! WebUSB in the browser. Writes nothing to the device's storage by
-//! construction: the only commands are `getvar`, `download` (into the
-//! bootloader's RAM) and `reboot`. There is no flash, erase, boot or
-//! set_active here.
+//! WebUSB in the browser. The commands are `getvar`, `download` (into the
+//! bootloader's RAM), `reboot`, and `flash` to the partitions in
+//! `FLASH_ALLOWED` only (a partition the test can lose and write back). There
+//! is no erase, boot or set_active here.
 
 use std::fmt;
 
@@ -86,6 +86,10 @@ pub enum Framing {
     /// packet size, so that every transfer ends in a short packet.
     EqualLength { len: usize },
 }
+
+/// The only partitions `flash` writes in this spike: the Note Air's `cache`,
+/// which GlassineOS doesn't use and the test backs up and writes back.
+pub const FLASH_ALLOWED: &[&str] = &["cache"];
 
 /// The Note Air's framing (proven on its bootloader, GlassineOS/abl#1).
 pub const NOTE_AIR: Framing = Framing::EqualLength { len: 65535 };
@@ -212,6 +216,19 @@ impl<T: Transport> Session<T> {
         }
         self.finish().await?;
         Ok(size)
+    }
+
+    /// `download` then `flash:<partition>`, for a partition in `FLASH_ALLOWED`
+    /// only (refused before anything is sent). Returns the bytes written: with
+    /// equal-length framing that includes the zero padding.
+    pub async fn flash(&mut self, partition: &str, data: &[u8]) -> Result<usize, FbError> {
+        if !FLASH_ALLOWED.contains(&partition) {
+            return Err(FbError::NotReadOnly(format!("flash:{partition}")));
+        }
+        let n = self.download(data).await?;
+        self.command(&format!("flash:{partition}")).await?;
+        self.finish().await?;
+        Ok(n)
     }
 
     /// `reboot`: leaves fastboot and starts the device normally.
@@ -381,10 +398,11 @@ mod tests {
         got: Vec<u8>,
         replies: VecDeque<Vec<u8>>,
         rebooted: bool,
+        flashed: Vec<(String, usize)>,
     }
     impl NoteAir {
         fn fresh() -> Self {
-            NoteAir { n: 0, prev: 0, cmdbuf: [0; 64], left: 0, got: vec![], replies: VecDeque::new(), rebooted: false }
+            NoteAir { n: 0, prev: 0, cmdbuf: [0; 64], left: 0, got: vec![], replies: VecDeque::new(), rebooted: false, flashed: vec![] }
         }
         /// A device after an earlier session: not the first transfers of a
         /// boot, and an old command still in the buffer.
@@ -427,6 +445,9 @@ mod tests {
             } else if let Some(h) = cmd.strip_prefix("download:") {
                 self.left = usize::from_str_radix(h, 16).unwrap();
                 format!("DATA{h}\0").into_bytes()
+            } else if let Some(part) = cmd.strip_prefix("flash:") {
+                self.flashed.push((part.to_string(), self.got.len()));
+                b"OKAY".to_vec()
             } else if cmd == "reboot" {
                 self.rebooted = true;
                 b"OKAY".to_vec()
@@ -481,6 +502,20 @@ mod tests {
         let d = NoteAir::warm(65535, b"getvar:product");
         let (mut s, _) = block(Session::start(d, NOTE_AIR)).unwrap();
         assert_eq!(block(s.download(&pattern(70_000))).unwrap(), 2 * 65535);
+    }
+
+    #[test]
+    fn flash_only_to_allowed_partitions() {
+        let (mut s, _) = block(Session::start(NoteAir::fresh(), NOTE_AIR)).unwrap();
+        for bad in ["boot", "boot_a", "abl", "cache_a", "cach", "cache:0", ""] {
+            assert!(matches!(block(s.flash(bad, &[1; 10])), Err(FbError::NotReadOnly(_))), "{bad}");
+        }
+        assert!(s.t.got.is_empty() && s.t.flashed.is_empty());
+        let n = block(s.flash("cache", &pattern(200_000))).unwrap();
+        assert_eq!(n, 4 * 65535);
+        assert_eq!(s.t.flashed, vec![("cache".to_string(), n)]);
+        // The session goes on after a flash.
+        assert_eq!(block(s.getvar("product")).unwrap().0, "NoteAir");
     }
 
     #[test]
