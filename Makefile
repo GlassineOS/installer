@@ -24,7 +24,7 @@ lint:
 descriptions:
 	$(CARGO) build -p glassine-install
 	$(BIN) validate --lock devices/lock.toml
-	$(BIN) schema | cmp - schema/device-description-1.schema.json
+	$(BIN) schema | cmp - schema/device-description-2.schema.json
 
 targets:
 	$(CARGO) build --release -p glassine-install

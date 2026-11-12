@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-//! The vocabularies of format 1: every name a description may use, with what
-//! its parameters are. They are data, so the validator, the schema and the
-//! planner read the same lists. A new entry is a format change (FR-003).
+//! The vocabularies of the description format: every name a description may
+//! use, with what its parameters are. They are data, so the validator, the
+//! schema and the planner read the same lists. A new entry is a format change
+//! (FR-003): an entry says the formats it is in.
 
 /// The type of a fact's value.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -279,19 +280,55 @@ pub fn looks_unit_unique(key: &str) -> bool {
     k.split(['.', ':', '_', '-']).any(|seg| UNIT_UNIQUE_WORDS.contains(&seg)) || UNIT_UNIQUE_WORDS.iter().any(|w| w.len() > 4 && k.contains(w))
 }
 
-/// A named entry with a short meaning, for the plain vocabularies.
+/// A named entry with a short meaning, for the plain vocabularies, and the
+/// formats it is in (`since` to `until`, both included).
 #[derive(Debug)]
 pub struct Entry {
     pub id: &'static str,
     pub doc: &'static str,
+    pub since: i64,
+    pub until: i64,
 }
 
+/// An entry of every format.
 pub const fn e(id: &'static str, doc: &'static str) -> Entry {
-    Entry { id, doc }
+    Entry {
+        id,
+        doc,
+        since: 1,
+        until: i64::MAX,
+    }
 }
 
+/// An entry from format `since` on.
+pub const fn since(since: i64, id: &'static str, doc: &'static str) -> Entry {
+    Entry {
+        id,
+        doc,
+        since,
+        until: i64::MAX,
+    }
+}
+
+/// An entry of the formats up to `until`.
+pub const fn until(until: i64, id: &'static str, doc: &'static str) -> Entry {
+    Entry { id, doc, since: 1, until }
+}
+
+impl Entry {
+    pub fn in_format(&self, format: i64) -> bool {
+        self.since <= format && format <= self.until
+    }
+}
+
+/// The ids of the latest format.
 pub fn ids(list: &[Entry]) -> Vec<&'static str> {
-    list.iter().map(|e| e.id).collect()
+    ids_in(list, crate::format1::FORMAT)
+}
+
+/// The ids of one format.
+pub fn ids_in(list: &[Entry], format: i64) -> Vec<&'static str> {
+    list.iter().filter(|e| e.in_format(format)).map(|e| e.id).collect()
 }
 
 pub const BACKENDS: &[Entry] = &[
@@ -467,8 +504,9 @@ pub const SPECIAL_HARDWARE: &[&str] = &["emergency-cable"];
 /// The partition classes: the most any job may do to a partition (FR-014).
 pub const CLASSES: &[Entry] = &[
     e("never-write", "never written; steps may read it and back it up"),
-    e("read", "steps may read it and back it up"),
-    e("back-up", "steps may read it and back it up"),
+    // Format 1 had two more names for never-write.
+    until(1, "read", "steps may read it and back it up"),
+    until(1, "back-up", "steps may read it and back it up"),
     e("replace", "steps may back it up and write it"),
     e("create", "a partition the job creates and then writes"),
     e("resize", "steps may change its size (and write it)"),
@@ -487,7 +525,8 @@ pub const ACTIONS: &[Entry] = &[
 
 /// The allowed-set table: which step actions each class permits. The classes
 /// are not one order: `create` permits writing what it created, never reading
-/// or backing up a partition that existed before.
+/// or backing up a partition that existed before. Format 1's `read` and
+/// `back-up` are `never-write`.
 pub fn class_allows(class: &str, action: &str) -> bool {
     let allowed: &[&str] = match class {
         "never-write" => &["reads", "backs_up"],
@@ -507,6 +546,11 @@ pub const ROLES: &[Entry] = &[
     e("esp", "an EFI system partition"),
     e("os", "a partition that belongs to an operating system inspecting found"),
     e("free-space", "unpartitioned space on the target disk"),
+    since(
+        2,
+        "disk",
+        "a whole disk the job writes to, as one object: its partition table and every partition",
+    ),
 ];
 
 pub const SELECTORS: &[Entry] = &[

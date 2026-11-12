@@ -18,6 +18,16 @@
       "choice": "systems.1",
       "value": "replace",
       "default": false
+    },
+    {
+      "choice": "backup",
+      "value": "full",
+      "default": true
+    },
+    {
+      "choice": "backup-to",
+      "value": "installer-media",
+      "default": true
     }
   ],
   "systems": [
@@ -28,28 +38,14 @@
   ],
   "partitions": [
     {
-      "partition": "disk 0 partition 1",
-      "class": "back-up",
-      "actions": [
-        "backs-up"
-      ],
-      "size": 104857600,
-      "loses_files": false,
-      "steps": [
-        "back-up"
-      ]
-    },
-    {
       "partition": "partition table",
       "class": "replace",
       "actions": [
-        "backs-up",
         "writes"
       ],
       "size": null,
       "loses_files": false,
       "steps": [
-        "back-up",
         "remove-system.1",
         "create-partitions"
       ]
@@ -133,6 +129,7 @@
     }
   ],
   "untouched_partitions": 1,
+  "imaged_partitions": 1,
   "boot_settings": [
     {
       "id": "boot-entries",
@@ -159,20 +156,47 @@
       ]
     }
   ],
+  "backup": {
+    "choice": "full",
+    "default": true,
+    "images": [
+      {
+        "disk": "disk 0",
+        "index": 0,
+        "kind": "nvme",
+        "disk_size": 549755813888,
+        "holds": "the partition table and every partition",
+        "stored": "compressed; only the used blocks where the file system tells them, every block elsewhere",
+        "estimate": "at-most",
+        "estimate_bytes": 549755813888,
+        "mode": "local",
+        "means": "block-read",
+        "check": "read-back-compare",
+        "step": "back-up"
+      }
+    ],
+    "target": {
+      "kind": "installer-media",
+      "disk": null
+    },
+    "consequence": "Without the backup there is no way back to the maker's system and no repair from the backup. The values unique to the device are still kept.",
+    "escapes_lost": []
+  },
   "keeps": {
     "unit_values": [],
     "device_files": [],
     "device_data": []
   },
   "space": {
-    "backup_bytes": 105971712,
+    "backup_bytes": 69632,
+    "backup_at_most": 549755813888,
     "backup_unknown": [],
     "artifact_bytes": 0,
     "artifacts_unknown": [
       "base",
       "kernel"
     ],
-    "total_at_least": 105971712,
+    "total_at_least": 69632,
     "exact": false
   },
   "capabilities": [

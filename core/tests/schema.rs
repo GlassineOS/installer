@@ -4,10 +4,24 @@
 mod common;
 use common::*;
 
+use glassine_installer::format1::{FIRST_FORMAT, FORMAT, json_schema_for, schema_file};
+
+/// One schema per format; an earlier format's file never changes.
 #[test]
-fn committed_schema_is_current() {
-    let got = serde_json::to_string_pretty(&glassine_installer::format1::json_schema()).unwrap() + "\n";
-    golden("schema/device-description-1.schema.json", &got);
+fn committed_schemas_are_current() {
+    for f in FIRST_FORMAT..=FORMAT {
+        let got = serde_json::to_string_pretty(&json_schema_for(f)).unwrap() + "\n";
+        golden(&format!("schema/{}", schema_file(f)), &got);
+    }
+}
+
+#[test]
+fn the_format_1_schema_accepts_format_1_descriptions_only() {
+    let v = jsonschema::validator_for(&json_schema_for(1)).unwrap();
+    for f in ["onyx-noteair-format1", "uefi-pc-format1"] {
+        assert!(v.is_valid(&as_json(&text(&format!("core/tests/fixtures/descriptions/{f}.toml")))), "{f}");
+    }
+    assert!(!v.is_valid(&as_json(&noteair())));
 }
 
 #[test]
@@ -43,7 +57,7 @@ fn the_schema_rejects_what_the_structure_rejects() {
     let cases = [
         ("backend = \"android-bootloader\"", "backend = \"android-bootloader\"\ncolour = \"red\""),
         ("name = \"Onyx Boox Note Air\"\nbackend", "backend"),
-        ("format = 1", "format = 2"),
+        ("format = 2", "format = 3"),
         ("kind = \"write-base\"", "kind = \"dance\""),
         (
             "params = { artifact = \"kernel\", partition = \"boot_b\" }",

@@ -116,13 +116,13 @@ fn every_problem_at_once() {
 
 #[test]
 fn format_first() {
-    let t = mutate(&noteair(), "format = 1\nid = \"onyx-noteair\"", "id = \"onyx-noteair\"\nformat = 1");
+    let t = mutate(&noteair(), "format = 2\nid = \"onyx-noteair\"", "id = \"onyx-noteair\"\nformat = 2");
     rejects(&t, "format");
 }
 
 #[test]
 fn unknown_format() {
-    na("format = 1", "format = 0", "format");
+    na("format = 2", "format = 0", "format");
 }
 
 #[test]
@@ -134,8 +134,29 @@ fn not_toml() {
 /// nothing of it is read.
 #[test]
 fn newer_format_is_too_new_not_invalid() {
-    let t = mutate(&noteair(), "format = 1", "format = 2\nnew_key_of_format_2 = true");
-    assert!(matches!(load(&t), Loaded::TooNew { format: 2 }));
+    let t = mutate(&noteair(), "format = 2", "format = 3\nnew_key_of_format_3 = true");
+    assert!(matches!(load(&t), Loaded::TooNew { format: 3 }));
+}
+
+/// FR-003: a reader reads every earlier format too.
+#[test]
+fn format_1_still_reads() {
+    for f in ["onyx-noteair-format1", "uefi-pc-format1"] {
+        let d = valid(&text(&format!("core/tests/fixtures/descriptions/{f}.toml")));
+        assert_eq!(d.format, 1);
+    }
+}
+
+/// FR-003: what format 2 added is not in format 1.
+#[test]
+fn format_1_has_no_disk_role() {
+    let t = text("core/tests/fixtures/descriptions/onyx-noteair-format1.toml");
+    let t = mutate(
+        &t,
+        "[[partitions]]\nselect = { name = \"userdata\" }",
+        "[[partitions]]\nselect = { role = \"disk\" }\nclass = \"back-up\"\nback_up = { mode = \"ram\", means = \"glassine-read\", check = \"read-back-compare\" }\n\n[[partitions]]\nselect = { name = \"userdata\" }",
+    );
+    rejects(&t, "partitions[6].select.role");
 }
 
 // ---- FR-025: names the vocabularies or the backend don't have ----------------------
@@ -198,9 +219,9 @@ fn unknown_role() {
 #[test]
 fn backup_means_of_another_mode() {
     na(
-        "back_up = { mode = \"ram\", means = \"glassine-read\", check = \"read-back-compare\", size = 1048576 }",
-        "back_up = { mode = \"ram\", means = \"block-read\", check = \"read-back-compare\", size = 1048576 }",
-        "partitions[1].back_up.means",
+        "back_up = { mode = \"ram\", means = \"glassine-read\", check = \"read-back-compare\", size = 9200000000 }",
+        "back_up = { mode = \"ram\", means = \"block-read\", check = \"read-back-compare\", size = 9200000000 }",
+        "partitions[7].back_up.means",
     );
 }
 
@@ -317,21 +338,80 @@ fn resize_says_whether_it_destroys() {
     na("class = \"resize\"\ndestroys = true", "class = \"resize\"", "partitions[6].destroys");
 }
 
+/// Format 2 has one class for "only read": never-write.
 #[test]
-fn replace_names_its_backup() {
-    na(
-        "class = \"replace\"\nback_up = { mode = \"ram\", means = \"glassine-read\", check = \"read-back-compare\", size = 1048576 }",
-        "class = \"replace\"",
+fn format_2_has_no_back_up_class() {
+    na("class = \"resize\"\ndestroys = true", "class = \"back-up\"", "partitions[6].class");
+}
+
+/// Format 1: a replace rule names its own backup.
+#[test]
+fn replace_names_its_backup_in_format_1() {
+    rejects(
+        &mutate(
+            &text("core/tests/fixtures/descriptions/onyx-noteair-format1.toml"),
+            "class = \"replace\"\nback_up = { mode = \"ram\", means = \"glassine-read\", check = \"read-back-compare\", size = 1048576 }",
+            "class = \"replace\"",
+        ),
         "partitions[1].back_up",
     );
+}
+
+/// 001 FR-009: the whole disk says how its image is read.
+#[test]
+fn the_whole_disk_names_how_it_is_read() {
+    na(
+        "back_up = { mode = \"ram\", means = \"glassine-read\", check = \"read-back-compare\", size = 9200000000 }",
+        "back_up = { with = \"role:partition-table\" }",
+        "partitions[7].back_up",
+    );
+}
+
+/// 001 FR-009: a job that writes images the disks first, in a step of its own.
+#[test]
+fn a_writing_job_backs_up_whole_disks() {
+    na("backs_up = [\"role:disk\"]", "backs_up = [\"boot\"]", "steps");
+}
+
+#[test]
+fn every_write_comes_after_the_disk_backup() {
+    na(
+        "after = [\"back-up\"]\nparams = { artifact = \"boot-loader\"",
+        "after = []\nparams = { artifact = \"boot-loader\"",
+        "steps[1].after",
+    );
+}
+
+#[test]
+fn a_description_has_a_rule_for_the_whole_disk() {
+    pcm(
+        "[[partitions]]\nselect = { role = \"disk\" }\nclass = \"never-write\"\nback_up = { mode = \"local\", means = \"block-read\", check = \"read-back-compare\" }\n",
+        "",
+        "partitions",
+    );
+}
+
+#[test]
+fn the_whole_disk_rule_has_no_condition() {
+    na(
+        "select = { role = \"disk\" }\nclass = \"never-write\"",
+        "select = { role = \"disk\" }\nclass = \"never-write\"\nwhen = { choice = \"keep-stock\", equals = \"yes\" }",
+        "partitions[7].when",
+    );
+}
+
+/// FR-009a: the backup is the flow's choice, never a description's.
+#[test]
+fn the_backup_choice_is_reserved() {
+    na("[[choices]]\nid = \"keep-stock\"", "[[choices]]\nid = \"backup\"", "choices[0].id");
 }
 
 #[test]
 fn backup_mode_exists() {
     na(
-        "back_up = { mode = \"ram\", means = \"glassine-read\", check = \"read-back-compare\", size = 67108864 }",
-        "back_up = { mode = \"edl\", means = \"glassine-read\", check = \"read-back-compare\", size = 67108864 }",
-        "partitions[3].back_up.mode",
+        "back_up = { mode = \"ram\", means = \"glassine-read\", check = \"read-back-compare\", size = 9200000000 }",
+        "back_up = { mode = \"edl\", means = \"glassine-read\", check = \"read-back-compare\", size = 9200000000 }",
+        "partitions[7].back_up.mode",
     );
 }
 
@@ -343,11 +423,7 @@ fn step_beyond_its_rule() {
 /// A full backup reads every partition: never-write forbids writing, not reading.
 #[test]
 fn never_write_partitions_may_be_backed_up() {
-    let t = mutate(
-        &noteair(),
-        "backs_up = [\"abl\", \"role:partition-table\",",
-        "backs_up = [\"xbl\", \"modemst1\", \"abl\", \"role:partition-table\",",
-    );
+    let t = mutate(&noteair(), "backs_up = [\"role:disk\"]", "backs_up = [\"xbl\", \"modemst1\", \"role:disk\"]");
     valid(&t);
 }
 
@@ -367,14 +443,14 @@ fn param_partition_is_in_the_steps_writes() {
 
 #[test]
 fn replaced_only_after_its_backup() {
-    na("\"boot\", \"recovery\", \"system\"", "\"boot\", \"system\"", "steps[5].writes[0]");
+    na("backs_up = [\"role:disk\"]", "backs_up = [\"boot\"]", "steps[1].writes[0]");
 }
 
 #[test]
 fn boot_setting_changed_only_after_its_backup() {
     pcm(
-        "backs_up = [\"role:esp\", \"role:partition-table\"]\nboot_settings = [\"boot-entries\", \"boot-order\"]",
-        "backs_up = [\"role:esp\", \"role:partition-table\"]\nboot_settings = [\"boot-order\"]",
+        "backs_up = [\"role:disk\"]\nboot_settings = [\"boot-entries\", \"boot-order\"]",
+        "backs_up = [\"role:disk\"]\nboot_settings = [\"boot-order\"]",
         "steps[5].boot_settings[0]",
     );
 }
