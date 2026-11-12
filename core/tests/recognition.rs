@@ -173,3 +173,21 @@ fn no_device_is_named_in_the_code() {
         }
     }
 }
+
+/// Recorded from a real Note Air on the GlassineOS boot loader (A/B layout,
+/// slot b) by `glassine-install inspect`, unchanged: the boot loader pads
+/// partition sizes with a leading space. Same result as the hand-made fixture.
+#[test]
+fn recorded_note_air_on_glassine_boot_loader() {
+    match outcome(&shipped(), "noteair-recorded-glassine-fastboot") {
+        Outcome::Match {
+            id,
+            state: StateResult::Undetermined { holding, needs_modes, .. },
+        } => {
+            assert_eq!(id, "onyx-noteair");
+            assert_eq!(holding, vec!["prepared", "installed"]);
+            assert_eq!(needs_modes, vec!["glassine"]);
+        }
+        o => panic!("{o:?}"),
+    }
+}
