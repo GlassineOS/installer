@@ -150,7 +150,8 @@ texts the description provides.
 
 - **FR-012**: The installation has the layout of 0010: the system partition with a base, the
   first deployment, the person's storage on the data partition, the device data from the
-  device's list, and the device's recovery.
+  device's list, and the GlassineOS recovery; where the plan keeps another system, its
+  recovery stays reachable as the secondary.
 - **FR-013**: The installation is complete only when the device has booted the first
   deployment and it has been accepted (boot 001). Until then, the installer shows the
   installation as unfinished.
@@ -198,7 +199,7 @@ texts the description provides.
 - Bases come as the send streams of 0013. Where a base comes from (built on the computer or
   downloaded) is not this feature's concern.
 - First-boot setup runs after the accepted boot and isn't part of the installer.
-- The recovery for PCs is not decided (0014). Until it is, a PC installation lists
-  "recovery" as a capability it lacks.
+- The GlassineOS recovery is the same on every machine (0014); on a machine that keeps
+  another system, that system's own recovery stays as the secondary one it hands over to.
 - [NEEDS CLARIFICATION: how a browser installer reaches a device that has no USB mode the
   browser can use]
