@@ -184,7 +184,7 @@ export function spaceRows(s) {
   const sp = s.plan.space;
   const rows = [];
   const bv = backupView(s);
-  rows.push(['For the backup', !bv.on ? 'Nothing: the backup is off'
+  rows.push(['For the backup', !bv.on ? (sp.backup_bytes ? `The backup is off: ${human(sp.backup_bytes)} for what is kept outside the disks` : 'Nothing: the backup is off')
     : `${human(sp.backup_bytes)}${sp.backup_at_most ? (sp.backup_bytes ? ', and ' : '') + 'up to ' + human(sp.backup_at_most) + ' for the disk images (the used part is known once a disk is read)' : ''}${sp.backup_unknown.length ? ', plus ' + list(sp.backup_unknown.map((x) => 'the ' + x)) + ', of a size not known yet' : ''}`]);
   rows.push(['For what the installer downloads', sp.artifacts_unknown.length && !sp.artifact_bytes ? 'Not known yet' : human(sp.artifact_bytes) + (sp.artifacts_unknown.length ? ' and more' : '')]);
   rows.push([s.m.kind === 'pc' ? 'In all' : 'On this computer, in all', `${sp.exact ? '' : 'At least '}${human(sp.total_at_least)}`]);

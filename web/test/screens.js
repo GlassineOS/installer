@@ -206,7 +206,8 @@ async function main() {
 
   await test('the backup: sizes from each disk image', async () => {
     await go(page, '#/plan?plan=noteair-no-stock-developer');
-    assert.match(await page.$eval('#backup-images', (x) => x.innerText), /Disk 0: about 8\.0 GiB\./);
+    const gib = (plans['noteair-no-stock-developer'].backup.images[0].estimate_bytes / 2 ** 30).toFixed(1);
+    assert.ok((await page.$eval('#backup-images', (x) => x.innerText)).includes(`Disk 0: about ${gib} GiB.`), 'the image’s size isn’t the plan’s');
     await go(page, '#/plan?plan=pc-two-disks-first');
     const t = await page.$eval('#backup-images', (x) => x.innerText);
     assert.match(t, /Disk 0, NVME: at most 512\.0 GiB, the disk’s size\./);
