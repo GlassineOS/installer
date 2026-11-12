@@ -12,7 +12,7 @@ file = "onyx-noteair.toml"
 repository = "GlassineOS/bootstrap-onyx-noteair"
 path = "devices/onyx-noteair.toml"
 version = "unpinned"
-sha256 = "e79ce6423c59645e82f2f5d1cba0ce09a4bdf0e1562adae1e393b010b337f794"
+sha256 = "2e679ba758c711ad8af94c17487e94ddfc7932c8e566109b3227f256556280aa"
 
 [[copies]]
 file = "uefi-pc.toml"

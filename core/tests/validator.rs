@@ -219,8 +219,8 @@ fn unknown_role() {
 #[test]
 fn backup_means_of_another_mode() {
     na(
-        "back_up = { mode = \"ram\", means = \"glassine-read\", check = \"read-back-compare\", size = 8600000000 }",
-        "back_up = { mode = \"ram\", means = \"block-read\", check = \"read-back-compare\", size = 8600000000 }",
+        "back_up = { mode = \"ram\", means = \"glassine-read\", check = \"read-back-compare\", size = 9200000000 }",
+        "back_up = { mode = \"ram\", means = \"block-read\", check = \"read-back-compare\", size = 9200000000 }",
         "partitions[7].back_up.means",
     );
 }
@@ -361,7 +361,7 @@ fn replace_names_its_backup_in_format_1() {
 #[test]
 fn the_whole_disk_names_how_it_is_read() {
     na(
-        "back_up = { mode = \"ram\", means = \"glassine-read\", check = \"read-back-compare\", size = 8600000000 }",
+        "back_up = { mode = \"ram\", means = \"glassine-read\", check = \"read-back-compare\", size = 9200000000 }",
         "back_up = { with = \"role:partition-table\" }",
         "partitions[7].back_up",
     );
@@ -409,8 +409,8 @@ fn the_backup_choice_is_reserved() {
 #[test]
 fn backup_mode_exists() {
     na(
-        "back_up = { mode = \"ram\", means = \"glassine-read\", check = \"read-back-compare\", size = 8600000000 }",
-        "back_up = { mode = \"edl\", means = \"glassine-read\", check = \"read-back-compare\", size = 8600000000 }",
+        "back_up = { mode = \"ram\", means = \"glassine-read\", check = \"read-back-compare\", size = 9200000000 }",
+        "back_up = { mode = \"edl\", means = \"glassine-read\", check = \"read-back-compare\", size = 9200000000 }",
         "partitions[7].back_up.mode",
     );
 }
