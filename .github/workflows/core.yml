@@ -1,5 +1,5 @@
 name: core
-# the core's tests, lints, every build target, and the description checks
+# the core's tests, lints, every build target, the description checks, and the web screens
 on: [push, pull_request, workflow_dispatch]
 permissions:
   contents: read
@@ -12,6 +12,8 @@ jobs:
         run: make docker-check
       - name: Linux, Windows, arm64 and WebAssembly builds
         run: make docker-targets
+      - name: the web screens in headless Chromium, with the core's records
+        run: make docker-web-check
       - name: a pinned copy for every description its repository now holds
         env:
           GH_TOKEN: ${{ github.token }}

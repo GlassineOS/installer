@@ -2,3 +2,4 @@
 !/specs/*/spec.md
 /target
 /.cargo-home
+/web/node_modules
