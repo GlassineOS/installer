@@ -52,9 +52,9 @@ and GlassineOS can't read),
 **When** it is installed,
 **Then** never-write partitions are only read; each unit-specific value the description
 names is captured before the first write and is in place in the installed system; a full
-backup of the machine's storage (every partition and the partition table, enough to undo
-any damage) is on the person's computer or a disk they chose, verified before the first
-write; and the plan names the backup's location and size.
+image of every disk the installation writes to (its partition table and every partition,
+enough to undo any damage) is on the person's computer or a disk they chose, verified
+before the first write; and the plan names each image's location and size.
 **And given** too little room for the backup, or a person who doesn't want one, **when**
 they switch the backup off, **then** the plan says plainly that going back to the maker's
 system and repairing damage from it are then impossible, the switch is its own choice,
@@ -112,6 +112,11 @@ texts the description provides.
   install doesn't start.
 - Not enough room for the backup where the person chose: the plan offers another place
   (another disk) or installing without it (FR-009a).
+- The backup goes to the installer's own removable media while the person chose a
+  removable disk as the target: as long as inspecting can't tell which disk the installer
+  runs from, the plan can't rule out imaging that disk onto itself. Open: inspecting
+  names the installer's own disk, and the plan refuses it as the backup's target when it
+  writes to it.
 - The person cancels after confirming: the installer stops at the next point the plan names
   as safe, and offers to resume or undo.
 - A step that only special hardware can escape (an emergency-mode cable): the plan asks
@@ -127,8 +132,9 @@ texts the description provides.
 - **FR-002**: The device is recognised from its hardware and firmware (SoC, board,
   bootloader, storage layout), never from a user-visible model name alone.
 - **FR-003**: The plan lists every partition and every boot setting the installation reads,
-  backs up, replaces or creates, every operating system found and what happens to it, the
-  space needed, the capabilities the result will have and lack, and each step's escape.
+  backs up, replaces or creates, the backup image of each disk (FR-009), every operating
+  system found and what happens to it, the space needed, the capabilities the result will
+  have and lack, and each step's escape.
 - **FR-004**: Partitions the description doesn't classify are never written.
 - **FR-005**: The plan exists both as screens a person reads and as a record a program
   reads. The installer can produce it without installing (the dry run).
@@ -146,10 +152,17 @@ texts the description provides.
 
 ### Keep what can't be replaced
 
-- **FR-009**: By default the plan makes a full backup: every partition of the machine's
-  storage and its partition table, so that any damage can be undone, not only what the plan
-  replaces. It is verified by reading it back before the first write. The plan shows its
-  size (stored compressed) before the person confirms.
+- **FR-009**: By default the plan backs up every disk it writes to as one full image per
+  disk: the disk's partition table and all its partitions, so that any damage can be
+  undone, not only what the plan replaces.
+  - Each image is stored compressed. It holds only the used blocks where the file system
+    lets the installer tell which those are, and every block elsewhere.
+  - Each image is verified by reading it back before the first write.
+  - Each image is stored somewhere other than the disks the plan changes: the person's
+    computer, the installer's removable media, or another disk the person chose.
+  - Disks the plan doesn't write to aren't imaged, and stay untouched.
+  - The plan shows, before the person confirms, each image's disk, its size and where it
+    goes.
 - **FR-009a**: The backup can be switched off, on a PC and on a device, so that an
   installation also works with little free space. Switching it off is a choice of its own
   with its consequence stated (no way back to the maker's system, no repair from the
@@ -165,6 +178,13 @@ texts the description provides.
   first deployment, the person's storage on the data partition, the device data from the
   device's list, and the GlassineOS recovery; where the plan keeps another system, its
   recovery stays reachable as the secondary.
+- **FR-012a**: Where the installer makes the partitions (a PC), it gives each the standard
+  partition type for its role, records each one's unique partition ID in the installation
+  record, and writes the system partition's and userdata's IDs into the boot entry's
+  command line as the identity keys of [boot 001](https://github.com/GlassineOS/boot/blob/main/specs/001-deployments/spec.md)
+  (FR-020). No disk goes into a base's or a deployment's file system table. Where a
+  device's partitions have fixed names, its description names them instead and no keys
+  are written. The recovery rebuilds a lost boot entry from the installation record.
 - **FR-013**: The installation is complete only when the device has booted the first
   deployment and it has been accepted (boot 001). Until then, the installer shows the
   installation as unfinished.
@@ -200,7 +220,8 @@ texts the description provides.
 - **Backend**: the steps for one platform family (devices that start from an Android
   bootloader; PCs that start from UEFI).
 - **Plan**: everything an installation will do, with each step's escape.
-- **Backup**: the replaced partitions and the captured values, on the person's computer.
+- **Backup**: one full image of each disk the installation writes to, and the captured
+  values, stored off those disks (FR-009).
 - **Installation record**: what was installed, on what, with which versions.
 
 ## Success criteria

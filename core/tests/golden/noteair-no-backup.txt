@@ -1,0 +1,82 @@
+Plan (dry run) for Onyx Boox Note Air
+State: stock. Job: install.
+Status: ready
+
+Questions:
+  Do you have the emergency-cable? Only it gets the device out if step replace-boot-loader, partition-table goes wrong. Answer: yes
+
+Choices:
+  keep-stock = yes (default)
+  backup = off
+  backup-to = computer (default)
+
+Systems:
+  stock system: kept and still startable
+
+Partitions:
+  abl (replace, 1.0 MiB): writes
+  partition table (replace): writes
+  boot_b (create): creates, writes
+  system_b (create): creates, writes
+  vendor_b (create): creates
+  userdata (resize, 24.0 GiB): resizes
+    Everything on it is deleted: files on it are lost.
+  recovery (replace, 64.0 MiB): writes
+  45 other partitions are not touched.
+
+Backup: off (your choice).
+  Without the backup there is no way back to the maker's system and no repair from the backup. The values unique to the device are still kept.
+
+How the machine starts:
+  boot-loader (boot-loader): change
+  slot-flags (slot-flags): change
+
+Kept from the device:
+  device data: gpu-firmware
+  device data: sensor-calibration
+  device data: modem-firmware
+  device data: wifi-firmware
+
+Space on the computer:
+  backup 0 B
+  artifacts 0 B plus base, boot-loader, kernel, partition-layout, recovery of unknown size
+  at least 0 B
+
+Afterwards the device:
+  have start-kernel [untried]
+  have fallback-boot [untried]
+  lack trial-boot [untried]
+  needs recovery (the GlassineOS recovery, which isn't built yet) [untried]
+  have keep-stock [untried]
+  lack secondary-recovery [untried]
+  needs choose-at-start (a way to pick a slot at start-up, which isn't decided) [untried]
+
+Steps:
+  1. back-up (back-up, in ram) [safe stop]
+     The backup is off: no disk is imaged. Only what is kept outside the disks (firmware boot settings, values unique to the device) is read.
+     if it fails: previous-system-starts via transition ram-to-android
+     if cut off after it: previous-system-starts via transition ram-to-android
+  2. replace-boot-loader (write-boot-loader, in fastboot-stock) [untried, point of no return, safe stop]
+     Replace the boot loader with GlassineOS's. From here there is no way back without the backup, and if this step fails only the emergency-mode cable helps.
+     if it fails: special-hardware (emergency-cable) via transition cable-to-emergency
+     if cut off after it: previous-system-starts via transition fastboot-to-android
+  3. partition-table (write-partition-table, in fastboot) [untried, point of no return, safe stop]
+     Give the device a second slot for GlassineOS. The data partition is made smaller: everything on it is deleted.
+     if it fails: special-hardware (emergency-cable) via transition cable-to-emergency
+     if cut off after it: installer-can-finish via step write-kernel
+  4. write-kernel (write-image, in fastboot) [untried, safe stop]
+     Write the GlassineOS kernel to slot B.
+     if it fails: installer-can-finish via step write-kernel
+     if cut off after it: installer-can-finish via step write-base
+  5. write-base (write-base, in fastboot) [untried, safe stop]
+     Write GlassineOS to slot B.
+     if it fails: installer-can-finish via step write-base
+     if cut off after it: installer-can-finish via step write-recovery
+  6. write-recovery (write-image, in fastboot) [untried, safe stop]
+     Write the GlassineOS recovery.
+     if it fails: installer-can-finish via step write-recovery
+     if cut off after it: installer-can-finish via step set-slot
+  7. set-slot (set-boot-slot, in fastboot) [untried, safe stop]
+     Start GlassineOS by default.
+     if it fails: installer-can-finish via step set-slot
+     if cut off after it: glassine-starts via transition fastboot-to-glassine

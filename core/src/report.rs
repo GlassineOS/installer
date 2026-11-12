@@ -141,6 +141,10 @@ pub struct PlanSummary {
     pub creates: Vec<String>,
     pub loses_files: Vec<String>,
     pub untouched_partitions: usize,
+    /// Partitions only read, into a whole-disk backup image.
+    pub imaged_partitions: usize,
+    /// The person switched the full backup off (001 FR-009a).
+    pub backup_off: bool,
     pub space_at_least: u64,
     pub space_exact: bool,
 }
@@ -338,11 +342,19 @@ pub fn report(ds: &[&Description], facts: &Snapshot, rec: &Recognition, plan: Op
                 .and_then(|v| v.as_str().map(String::from))
                 .unwrap_or_default(),
             keeps: p.systems.iter().filter(|s| s.outcome.starts_with("kept")).map(|s| s.system.clone()).collect(),
-            backs_up: with("backs-up"),
+            backs_up: p
+                .backup
+                .images
+                .iter()
+                .map(|i| format!("{} (whole disk)", i.disk))
+                .chain(with("backs-up"))
+                .collect(),
             replaces: with("writes").into_iter().filter(|x| !with("creates").contains(x)).collect(),
             creates: with("creates"),
             loses_files: p.partitions.iter().filter(|x| x.loses_files).map(|x| x.partition.clone()).collect(),
             untouched_partitions: p.untouched_partitions,
+            imaged_partitions: p.imaged_partitions,
+            backup_off: p.backup.choice == "off",
             space_at_least: p.space.total_at_least,
             space_exact: p.space.exact,
         }
@@ -478,13 +490,24 @@ pub fn render(r: &Report) -> String {
     if let Some(p) = &r.plan {
         line(format!("An installation ({}):", p.status));
         line(format!("  keeps: {}", if p.keeps.is_empty() { "-".into() } else { p.keeps.join(", ") }));
-        line(format!("  backs up: {}", p.backs_up.join(", ")));
+        if p.backup_off {
+            line("  backs up: nothing whole (the backup is switched off)".into());
+        } else {
+            line(format!("  backs up: {}", p.backs_up.join(", ")));
+        }
         line(format!("  replaces: {}", p.replaces.join(", ")));
         line(format!("  creates: {}", p.creates.join(", ")));
         if !p.loses_files.is_empty() {
             line(format!("  deletes everything on: {}", p.loses_files.join(", ")));
         }
-        line(format!("  leaves {} other partitions untouched", p.untouched_partitions));
+        if p.imaged_partitions > 0 {
+            line(format!(
+                "  only reads {} other partitions, into the backup, and leaves {} untouched",
+                p.imaged_partitions, p.untouched_partitions
+            ));
+        } else {
+            line(format!("  leaves {} other partitions untouched", p.untouched_partitions));
+        }
         line(format!(
             "  space on the computer: {} {} bytes",
             if p.space_exact { "" } else { "at least" },

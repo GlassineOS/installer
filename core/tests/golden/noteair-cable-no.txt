@@ -8,25 +8,26 @@ Questions:
 
 Choices:
   keep-stock = yes (default)
+  backup = full (default)
+  backup-to = computer (default)
 
 Systems:
   stock system: kept and still startable
 
 Partitions:
-  abl (replace, 1.0 MiB): backs-up, writes
-  partition table (replace): backs-up, writes
-  boot (back-up, 64.0 MiB): backs-up
-  recovery (replace, 64.0 MiB): backs-up, writes
-  system (back-up, 3.0 GiB): backs-up
-  vendor (back-up, 800.0 MiB): backs-up
-  vbmeta (back-up, 64.0 KiB): backs-up
-  misc (back-up, 1.0 MiB): backs-up
+  abl (replace, 1.0 MiB): writes
+  partition table (replace): writes
   boot_b (create): creates, writes
   system_b (create): creates, writes
   vendor_b (create): creates
   userdata (resize, 24.0 GiB): resizes
     Everything on it is deleted: files on it are lost.
-  40 other partitions are not touched.
+  recovery (replace, 64.0 MiB): writes
+  45 other partitions are only read, into the backup; 0 are not touched.
+
+Backup (default), to this computer, checked by reading it back before the first write:
+  disk 0, whole: the partition table and every partition; about 8.6 GiB, stored compressed; only the used blocks where the file system tells them, every block elsewhere
+  You can switch it off (choice backup = off). Without the backup there is no way back to the maker's system and no repair from the backup. The values unique to the device are still kept.
 
 How the machine starts:
   boot-loader (boot-loader): back-up, change
@@ -39,9 +40,9 @@ Kept from the device:
   device data: wifi-firmware
 
 Space on the computer:
-  backup 3.9 GiB plus partition table of unknown size
+  backup 8.6 GiB
   artifacts 0 B plus base, boot-loader, kernel, partition-layout, recovery of unknown size
-  at least 3.9 GiB
+  at least 8.6 GiB
 
 Afterwards the device:
   have start-kernel [untried]
@@ -54,7 +55,7 @@ Afterwards the device:
 
 Steps:
   1. back-up (back-up, in ram) [safe stop]
-     Back up the boot loader, the partition table, the boot, recovery, system and vendor partitions and the boot settings to this computer, and check the backup.
+     Back up the device's whole storage, every partition and the partition table, to this computer, and check the backup by reading it back.
      if it fails: previous-system-starts via transition ram-to-android
      if cut off after it: previous-system-starts via transition ram-to-android
   2. replace-boot-loader (write-boot-loader, in fastboot-stock) [untried, point of no return, safe stop]

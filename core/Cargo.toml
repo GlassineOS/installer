@@ -18,3 +18,5 @@ regex-lite = "0.1"
 [dev-dependencies]
 # Only to check that the generated schema validates what the validator does.
 jsonschema = { version = "0.61", default-features = false }
+# Drives the async fastboot session in the inspect tests.
+pollster = "0.4"
