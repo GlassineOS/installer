@@ -266,7 +266,7 @@ fn note_air_images_its_whole_storage() {
     let p = run("noteair-keep-stock", "noteair-stock-fastboot", Input::default());
     assert_eq!(p.backup.images.len(), 1);
     let i = &p.backup.images[0];
-    assert_eq!((i.estimate.as_str(), i.estimate_bytes), ("about", Some(8_600_000_000)));
+    assert_eq!((i.estimate.as_str(), i.estimate_bytes), ("about", Some(9_200_000_000)));
     assert_eq!(p.backup.target.kind, "computer");
     assert_eq!(p.untouched_partitions, 0);
 }

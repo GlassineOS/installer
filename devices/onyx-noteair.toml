@@ -271,11 +271,11 @@ class = "resize"
 destroys = true
 
 # The backup is the whole eMMC user area, read by the RAM environment: the
-# partition table and every partition as one image, about 8.6 GB compressed.
+# partition table and every partition as one image, about 9.2 GB (8.5 GiB) compressed.
 [[partitions]]
 select = { role = "disk" }
 class = "never-write"
-back_up = { mode = "ram", means = "glassine-read", check = "read-back-compare", size = 8600000000 }
+back_up = { mode = "ram", means = "glassine-read", check = "read-back-compare", size = 9200000000 }
 
 [[boot_settings]]
 id = "boot-loader"

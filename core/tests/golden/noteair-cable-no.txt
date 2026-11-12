@@ -26,7 +26,7 @@ Partitions:
   45 other partitions are only read, into the backup; 0 are not touched.
 
 Backup (default), to this computer, checked by reading it back before the first write:
-  disk 0, whole: the partition table and every partition; about 8.0 GiB, stored compressed; only the used blocks where the file system tells them, every block elsewhere
+  disk 0, whole: the partition table and every partition; about 8.6 GiB, stored compressed; only the used blocks where the file system tells them, every block elsewhere
   You can switch it off (choice backup = off). Without the backup there is no way back to the maker's system and no repair from the backup. The values unique to the device are still kept.
 
 How the machine starts:
@@ -40,9 +40,9 @@ Kept from the device:
   device data: wifi-firmware
 
 Space on the computer:
-  backup 8.0 GiB
+  backup 8.6 GiB
   artifacts 0 B plus base, boot-loader, kernel, partition-layout, recovery of unknown size
-  at least 8.0 GiB
+  at least 8.6 GiB
 
 Afterwards the device:
   have start-kernel [untried]

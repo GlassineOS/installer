@@ -171,7 +171,7 @@
         "holds": "the partition table and every partition",
         "stored": "compressed; only the used blocks where the file system tells them, every block elsewhere",
         "estimate": "about",
-        "estimate_bytes": 8600000000,
+        "estimate_bytes": 9200000000,
         "mode": "ram",
         "means": "glassine-read",
         "check": "read-back-compare",
@@ -196,7 +196,7 @@
     ]
   },
   "space": {
-    "backup_bytes": 8600000000,
+    "backup_bytes": 9200000000,
     "backup_at_most": 0,
     "backup_unknown": [],
     "artifact_bytes": 0,
@@ -207,7 +207,7 @@
       "partition-layout",
       "recovery"
     ],
-    "total_at_least": 8600000000,
+    "total_at_least": 9200000000,
     "exact": false
   },
   "capabilities": [
