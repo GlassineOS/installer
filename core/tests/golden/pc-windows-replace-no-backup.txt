@@ -44,7 +44,7 @@ Afterwards the device:
 
 Steps:
   1. back-up (back-up, in local) [safe stop]
-     Back up every disk GlassineOS changes, whole, and the firmware's boot entries, then check the backup by reading it back.
+     The backup is off: no disk is imaged. Only what is kept outside the disks (firmware boot settings, values unique to the device) is read.
      if it fails: previous-system-starts via step back-up
      if cut off after it: previous-system-starts via step back-up
   2. remove-system.1 (remove-partitions, in local) [untried, point of no return]

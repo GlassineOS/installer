@@ -214,7 +214,10 @@ fn the_backup_can_be_switched_off() {
     );
     assert_eq!(p.status, Status::Ready);
     assert!(p.backup.images.is_empty());
-    assert!(p.backup.consequence.as_deref().is_some_and(|c| c.contains("no way back")));
+    assert!(p.backup.consequence.contains("no way back"));
+    // A firmware variable is outside the disks: still kept.
+    let b = p.boot_settings.iter().find(|b| b.id == "boot-entries").unwrap();
+    assert!(b.actions.contains(&"back-up".to_string()));
     assert_eq!(p.backup.escapes_lost, vec!["remove-system.1".to_string()]);
     assert!(p.choices.iter().any(|c| c.choice == "backup" && c.value == "off" && !c.default));
     let p = run(
@@ -224,6 +227,37 @@ fn the_backup_can_be_switched_off() {
     );
     assert!(p.backup.images.is_empty());
     assert_eq!(p.space.backup_bytes, 0);
+    // The boot settings kept in the disk image aren't backed up without it.
+    assert!(
+        p.boot_settings.iter().all(|b| !b.actions.contains(&"back-up".to_string())),
+        "{:#?}",
+        p.boot_settings
+    );
+    let txt = render(&p, Some(&valid(&noteair())));
+    assert!(txt.contains("The backup is off: no disk is imaged"), "{txt}");
+    assert!(!txt.contains("Back up the device's whole storage"), "{txt}");
+}
+
+/// The opt-out's consequence is in the record before anyone switches it off.
+#[test]
+fn the_consequence_is_stated_with_the_backup_on() {
+    let p = run("pc-windows-keep", "pc-windows", Input::default());
+    assert_eq!(p.backup.choice, "full");
+    assert!(p.backup.consequence.contains("no way back"));
+}
+
+/// An image known only as at most the disk's size proves nothing about room.
+#[test]
+fn an_upper_bound_never_refuses() {
+    let ds = [valid(&pc())];
+    let refs: Vec<&Description> = ds.iter().collect();
+    let f = facts("pc-two-disks");
+    let mut i = input(&[], &[], true);
+    i.free_bytes = Some(100 << 30);
+    let p = plan(&refs, &f, &recognize(&refs, &f), &i);
+    assert_eq!(p.status, Status::Ready, "{:?}", p.reasons);
+    assert_eq!(p.space.backup_at_most, 549755813888);
+    assert!(p.space.total_at_least < 100 << 30);
 }
 
 /// The Note Air's image is its whole storage, sized by its description.

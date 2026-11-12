@@ -28,8 +28,8 @@ Backup: off (your choice).
   Without the backup there is no way back to the maker's system and no repair from the backup. The values unique to the device are still kept.
 
 How the machine starts:
-  boot-loader (boot-loader): back-up, change
-  slot-flags (slot-flags): back-up, change
+  boot-loader (boot-loader): change
+  slot-flags (slot-flags): change
 
 Kept from the device:
   device data: gpu-firmware
@@ -53,7 +53,7 @@ Afterwards the device:
 
 Steps:
   1. back-up (back-up, in ram) [safe stop]
-     Back up the device's whole storage, every partition and the partition table, to this computer, and check the backup by reading it back.
+     The backup is off: no disk is imaged. Only what is kept outside the disks (firmware boot settings, values unique to the device) is read.
      if it fails: previous-system-starts via transition ram-to-android
      if cut off after it: previous-system-starts via transition ram-to-android
   2. replace-boot-loader (write-boot-loader, in fastboot-stock) [untried, point of no return, safe stop]

@@ -176,6 +176,7 @@
   },
   "space": {
     "backup_bytes": 69632,
+    "backup_at_most": 0,
     "backup_unknown": [],
     "artifact_bytes": 0,
     "artifacts_unknown": [

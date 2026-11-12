@@ -182,7 +182,7 @@
       "kind": "computer",
       "disk": null
     },
-    "consequence": null,
+    "consequence": "Without the backup there is no way back to the maker's system and no repair from the backup. The values unique to the device are still kept.",
     "escapes_lost": []
   },
   "keeps": {
@@ -197,6 +197,7 @@
   },
   "space": {
     "backup_bytes": 8600000000,
+    "backup_at_most": 0,
     "backup_unknown": [],
     "artifact_bytes": 0,
     "artifacts_unknown": [

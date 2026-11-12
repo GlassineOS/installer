@@ -127,8 +127,9 @@ pub struct BackupPlan {
     pub default: bool,
     pub images: Vec<DiskImage>,
     pub target: BackupTarget,
-    /// With the backup off, what that costs.
-    pub consequence: Option<String>,
+    /// What switching the backup off costs, stated whether or not it is off,
+    /// so the choice is shown with it (FR-009a).
+    pub consequence: String,
     /// With the backup off, the steps whose escape needed it.
     pub escapes_lost: Vec<String>,
 }
@@ -143,7 +144,7 @@ impl Default for BackupPlan {
                 kind: "computer".into(),
                 disk: None,
             },
-            consequence: None,
+            consequence: BACKUP_OFF_CONSEQUENCE.into(),
             escapes_lost: vec![],
         }
     }
@@ -188,6 +189,9 @@ pub struct Keeps {
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct Space {
     pub backup_bytes: u64,
+    /// Images known only as at most this much (the disks' sizes): not part of
+    /// `total_at_least`, never a reason to refuse.
+    pub backup_at_most: u64,
     /// Backed-up items whose size isn't known yet.
     pub backup_unknown: Vec<String>,
     pub artifact_bytes: u64,
@@ -520,6 +524,7 @@ pub fn plan(ds: &[&Description], facts: &Snapshot, rec: &Recognition, input: &In
     let mut created: BTreeSet<String> = BTreeSet::new();
     // The disks the plan writes to, and the step that images them.
     let mut touched_disks: BTreeSet<u32> = BTreeSet::new();
+    let mut backup_at_most = 0u64;
     let mut disk_step: Option<String> = None;
     for inst in &insts {
         let s = inst.step;
@@ -611,6 +616,10 @@ pub fn plan(ds: &[&Description], facts: &Snapshot, rec: &Recognition, input: &In
                     actions: vec![],
                     steps: vec![],
                 });
+                // A setting kept in the disk image isn't backed up without it.
+                if s.kind == "back-up" && !backup_on && bs.back_up.with.as_deref() == Some("role:disk") {
+                    continue;
+                }
                 let a = if s.kind == "back-up" { "back-up" } else { "change" }.to_string();
                 if !e.actions.contains(&a) {
                     e.actions.push(a);
@@ -690,9 +699,11 @@ pub fn plan(ds: &[&Description], facts: &Snapshot, rec: &Recognition, input: &In
                         (_, Some(disk)) => ("at-most", Some(disk.size)),
                         _ => ("unknown", None),
                     };
-                    match bytes {
-                        Some(x) => backup_bytes += x,
-                        None => {
+                    match (estimate, bytes) {
+                        ("about", Some(x)) => backup_bytes += x,
+                        // An upper bound proves nothing about room: kept apart.
+                        (_, Some(x)) => backup_at_most += x,
+                        _ => {
                             backup_unknown.insert(format!("disk {n} image"));
                         }
                     }
@@ -726,7 +737,6 @@ pub fn plan(ds: &[&Description], facts: &Snapshot, rec: &Recognition, input: &In
         }
     }
     if !backup_on {
-        backup.consequence = Some(BACKUP_OFF_CONSEQUENCE.into());
         backup.escapes_lost = steps
             .iter()
             .filter(|s| s.on_failure.leaves == "installer-can-undo" || s.on_interruption.leaves == "installer-can-undo")
@@ -746,6 +756,7 @@ pub fn plan(ds: &[&Description], facts: &Snapshot, rec: &Recognition, input: &In
     let backup_unknown: Vec<String> = backup_unknown.into_iter().collect();
     let space = Space {
         backup_bytes,
+        backup_at_most,
         // An image's size is an estimate until it is made.
         exact: backup_unknown.is_empty() && artifacts_unknown.is_empty() && backup.images.is_empty(),
         backup_unknown,
@@ -1070,9 +1081,7 @@ pub fn render(p: &Plan, d: Option<&Description>) -> String {
         };
         if b.choice == "off" {
             line(&mut o, "\nBackup: off (your choice).".into());
-            if let Some(c) = &b.consequence {
-                line(&mut o, format!("  {c}"));
-            }
+            line(&mut o, format!("  {}", b.consequence));
             if !b.escapes_lost.is_empty() {
                 line(&mut o, format!("  Steps whose way out needed it: {}.", b.escapes_lost.join(", ")));
             }
@@ -1096,6 +1105,7 @@ pub fn render(p: &Plan, d: Option<&Description>) -> String {
                 };
                 line(&mut o, format!("  {}{what}, whole: {}; {size}, stored {}", i.disk, i.holds, i.stored));
             }
+            line(&mut o, format!("  You can switch it off (choice backup = off). {}", b.consequence));
         }
     }
     if !p.boot_settings.is_empty() {
@@ -1123,8 +1133,13 @@ pub fn render(p: &Plan, d: Option<&Description>) -> String {
         line(
             &mut o,
             format!(
-                "  backup {}{}",
+                "  backup {}{}{}",
                 human(s.backup_bytes),
+                if s.backup_at_most > 0 {
+                    format!(" plus images of at most {}", human(s.backup_at_most))
+                } else {
+                    String::new()
+                },
                 if s.backup_unknown.is_empty() {
                     String::new()
                 } else {
@@ -1173,7 +1188,12 @@ pub fn render(p: &Plan, d: Option<&Description>) -> String {
             };
             line(&mut o, format!("  {}. {} ({}, in {}){flags}", n + 1, st.id, st.kind, st.mode));
             let base = st.id.split('.').next().unwrap_or_default();
-            if let Some(t) = text(base) {
+            if p.backup.choice == "off" && st.kind == "back-up" {
+                line(
+                    &mut o,
+                    "     The backup is off: no disk is imaged. Only what is kept outside the disks (firmware boot settings, values unique to the device) is read.".into(),
+                );
+            } else if let Some(t) = text(base) {
                 line(&mut o, format!("     {t}"));
             }
             let esc = |e: &EscapePlan| {
