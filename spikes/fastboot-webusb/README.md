@@ -41,12 +41,20 @@ python3 -m http.server -d web 8000    # then http://localhost:8000 in a Chromium
 | Linux binary | static, 634 KB; on a host with no fastboot device it enumerates and says so (exit 2) |
 | Windows binary | 466 KB, cross-built; not run (no Windows machine) |
 | Browser | wasm 222 KB; headless Chromium 156 loads the core and finds `navigator.usb` |
-| A real fastboot device, native and in the browser | **owed**: needs a device in fastboot mode |
+| Note Air (bootloader fastboot), native Linux binary, first command of a boot | `product: NoteAir`, 151 ms, same as the stock `fastboot` tool |
+| Note Air, browser (Chrome, WebUSB, the same core as wasm), first command of a boot | `product: NoteAir` (2.7 s from the click, including the device chooser) |
+| Note Air, any later command of the same boot | fails, for the stock tool as for this one: the bootloader answers one command per boot ([GlassineOS/abl#1](https://github.com/GlassineOS/abl/issues/1)) |
 
 What the API costs: on wasm only the async calls exist, and web-sys's WebUSB bindings need
 `--cfg=web_sys_unstable_apis` (`.cargo/config.toml`). Natively the same async code runs
 under a trivial executor (`pollster`), and opening uses the blocking calls. Neither leaks
 into the protocol code.
+
+**What the Note Air run means for the installer:** the stack works end to end on a real
+device, natively and in the browser. The Note Air's bootloader only answers the first
+fastboot command of each boot, and its data transfers (`flash`, `boot`) don't work, so on
+this device fastboot can identify, not install. Writes go through another channel (stock
+Android's adb, or GlassineOS's own USB gadget) unless abl#1 gets fixed.
 
 ## Spike 2: Windows USB drivers (notes; needs a Windows machine)
 
