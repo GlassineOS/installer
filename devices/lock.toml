@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# The description copies this installer ships (spec 002 FR-027, FR-028): per
+# copy, the repository it lives in, the version it is pinned to and the hash
+# of its content. A copy that differs, an entry without a copy and a copy
+# without an entry all fail the checks. "unpinned" is allowed only while the
+# device's repository doesn't hold the description yet; CI fails once it does.
+
+lock_format = 1
+
+[[copies]]
+file = "onyx-noteair.toml"
+repository = "GlassineOS/bootstrap-onyx-noteair"
+path = "devices/onyx-noteair.toml"
+version = "unpinned"
+sha256 = "dfd7f188bee917312495fbee5a3bcb14edc241fb1ddedb28423b5918336c1e8f"
+
+[[copies]]
+file = "uefi-pc.toml"
+repository = "GlassineOS/installer"
+path = "devices/uefi-pc.toml"
+version = "this-repository"
+sha256 = "2cb401488c08a187cc4fa609eb92054b4bb452ceba9e403f98cd35f7e3065824"

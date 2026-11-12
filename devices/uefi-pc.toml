@@ -1,0 +1,263 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# The generic UEFI PC (x86-64): any PC that starts from UEFI, with the
+# installer started from removable media on it. A particular PC's own
+# description refines this one. Owned by GlassineOS/installer.
+#
+# Nothing here has been tried on real hardware yet.
+
+format = 1
+id = "uefi-pc"
+name = "UEFI PC (x86-64)"
+backend = "uefi-pc"
+generic = true
+
+[[identity]]
+key = "firmware.kind"
+equals = "uefi"
+required = true
+untried = "the PC backend isn't built yet"
+
+[[identity]]
+key = "cpu.arch"
+equals = "x86-64"
+required = true
+untried = "the PC backend isn't built yet"
+
+# ---- install states --------------------------------------------------------
+
+[[states]]
+id = "stock"
+[[states.conditions]]
+key = "storage.partition.glassine-system"
+absent = true
+mode = "local"
+
+[[states]]
+id = "prepared"
+[[states.conditions]]
+key = "storage.partition.glassine-system"
+present = true
+mode = "local"
+[[states.conditions]]
+key = "glassine.installation"
+absent = true
+mode = "local"
+
+[[states]]
+id = "installed"
+[[states.conditions]]
+key = "glassine.installation"
+present = true
+mode = "local"
+
+# ---- how the installer reaches it -------------------------------------------
+
+[[modes]]
+id = "local"
+kind = "local"
+can = ["identify", "read", "write"]
+untried = "the PC backend isn't built yet"
+
+# ---- what it may write ------------------------------------------------------
+
+# An operating system's partitions: replaced only where the person chose so.
+[[partitions]]
+select = { role = "os" }
+class = "remove"
+destroys = true
+when = { choice = "systems", equals = "replace" }
+
+[[partitions]]
+select = { role = "os" }
+class = "never-write"
+
+[[partitions]]
+select = { role = "esp" }
+class = "back-up"
+back_up = { mode = "local", means = "block-read", check = "read-back-compare" }
+
+[[partitions]]
+select = { role = "partition-table" }
+class = "replace"
+back_up = { mode = "local", means = "block-read", check = "read-back-compare", size = 1048576 }
+
+[[partitions]]
+select = { role = "free-space" }
+class = "create"
+
+[[partitions]]
+select = { names = ["glassine-boot", "glassine-system"] }
+class = "create"
+
+[[boot_settings]]
+id = "boot-entries"
+kind = "firmware-boot-entry"
+back_up = { mode = "local", means = "efi-variables", check = "read-back-compare", size = 65536 }
+
+[[boot_settings]]
+id = "boot-order"
+kind = "firmware-boot-order"
+back_up = { with = "role:partition-table" }
+
+# ---- what an installation does ----------------------------------------------
+
+[[artifacts]]
+role = "base"
+size = "unknown"
+
+[[artifacts]]
+role = "kernel"
+size = "unknown"
+
+[[artifacts]]
+role = "partition-layout"
+size = "unknown"
+
+[[capabilities]]
+id = "start-kernel"
+status = "have"
+untried = "the PC backend isn't built yet"
+
+[[capabilities]]
+id = "recovery"
+status = "lack"
+untried = "the GlassineOS recovery isn't built yet"
+
+[[capabilities]]
+id = "choose-at-start"
+status = "have"
+untried = "the PC backend isn't built yet"
+
+[[choices]]
+id = "target-disk"
+source = "disks"
+default = "first"
+
+[[choices]]
+id = "systems"
+source = "fixed"
+for_each = "systems"
+options = [{ id = "keep" }, { id = "replace", replaces_system = true }]
+default = "keep"
+
+[[jobs]]
+id = "install"
+states = ["stock", "prepared"]
+
+[[steps]]
+id = "back-up"
+job = "install"
+kind = "back-up"
+mode = "local"
+backs_up = ["role:esp", "role:partition-table"]
+boot_settings = ["boot-entries", "boot-order"]
+done = [{ key = "installer.backup-verified", present = true, mode = "installer" }]
+escape.failure = { leaves = "previous-system-starts", way_out = { step = "back-up" } }
+escape.interruption = { leaves = "previous-system-starts", way_out = { step = "back-up" } }
+point_of_no_return = false
+safe_stop = true
+untried = "the PC backend isn't built yet"
+
+[[steps]]
+id = "remove-system"
+job = "install"
+kind = "remove-partitions"
+mode = "local"
+after = ["back-up"]
+for_each = "systems"
+when = [{ choice = "systems", equals = "replace" }]
+removes = ["role:os"]
+writes = ["role:partition-table"]
+done = [{ key = "installer.step.remove-system", present = true, mode = "installer" }]
+escape.failure = { leaves = "installer-can-undo", way_out = { step = "back-up" } }
+escape.interruption = { leaves = "installer-can-finish", way_out = { step = "create-partitions" } }
+point_of_no_return = true
+safe_stop = false
+untried = "the PC backend isn't built yet"
+
+[[steps]]
+id = "create-partitions"
+job = "install"
+kind = "create-partitions"
+mode = "local"
+after = ["back-up", "remove-system"]
+params.partitions = [
+  { name = "glassine-boot", size = "1GiB", role = "esp" },
+  { name = "glassine-system", size = "rest-of-free-space", role = "system" },
+]
+writes = ["role:partition-table"]
+creates = ["role:free-space", "glassine-boot", "glassine-system"]
+done = [{ key = "storage.partition.glassine-system", present = true, mode = "local" }]
+escape.failure = { leaves = "previous-system-starts", way_out = { step = "back-up" } }
+escape.interruption = { leaves = "installer-can-finish", way_out = { step = "write-base" } }
+point_of_no_return = false
+safe_stop = true
+untried = "the PC backend isn't built yet"
+
+[[steps]]
+id = "write-base"
+job = "install"
+kind = "write-base"
+mode = "local"
+after = ["create-partitions"]
+params = { artifact = "base", partition = "glassine-system" }
+writes = ["glassine-system"]
+done = [{ key = "installer.step.write-base", present = true, mode = "installer" }]
+escape.failure = { leaves = "previous-system-starts", way_out = { step = "write-base" } }
+escape.interruption = { leaves = "previous-system-starts", way_out = { step = "write-boot" } }
+point_of_no_return = false
+safe_stop = true
+untried = "the PC backend isn't built yet"
+
+[[steps]]
+id = "write-boot"
+job = "install"
+kind = "write-boot-files"
+mode = "local"
+after = ["write-base"]
+params = { artifact = "kernel", partition = "glassine-boot" }
+writes = ["glassine-boot"]
+done = [{ key = "installer.step.write-boot", present = true, mode = "installer" }]
+escape.failure = { leaves = "previous-system-starts", way_out = { step = "write-boot" } }
+escape.interruption = { leaves = "previous-system-starts", way_out = { step = "add-boot-entry" } }
+point_of_no_return = false
+safe_stop = true
+untried = "the PC backend isn't built yet"
+
+[[steps]]
+id = "add-boot-entry"
+job = "install"
+kind = "add-boot-entry"
+mode = "local"
+after = ["write-boot"]
+params = { partition = "glassine-boot" }
+writes = ["glassine-boot"]
+boot_settings = ["boot-entries", "boot-order"]
+done = [{ key = "installer.step.add-boot-entry", present = true, mode = "installer" }]
+escape.failure = { leaves = "previous-system-starts", way_out = { step = "add-boot-entry" } }
+escape.interruption = { leaves = "glassine-starts", way_out = { step = "add-boot-entry" } }
+point_of_no_return = false
+safe_stop = true
+untried = "the PC backend isn't built yet"
+
+[texts]
+name = "PC"
+
+[texts.modes]
+local = "Start the PC from the USB stick with the installer: switch it on and choose the stick in the firmware's boot menu."
+
+[texts.choices]
+target-disk = "The disk GlassineOS goes on. It uses the free space there."
+systems = "What happens to this operating system."
+
+[texts.options]
+"systems.keep" = "Keep it. It still starts; pick it in the firmware's boot menu."
+"systems.replace" = "Replace it. Everything on it, your files included, is deleted."
+
+[texts.steps]
+back-up = "Back up the partition table, the EFI system partition and the firmware's boot entries to the installer's stick."
+remove-system = "Delete the operating system you chose to replace."
+create-partitions = "Make room for GlassineOS in the free space."
+write-base = "Put GlassineOS on its new partition."
+write-boot = "Put the GlassineOS kernel and boot loader on its boot partition."
+add-boot-entry = "Add GlassineOS to the firmware's boot menu and start it first."

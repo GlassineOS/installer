@@ -1,0 +1,83 @@
+Plan (dry run) for Onyx Boox Note Air
+State: stock. Job: install.
+Status: developers only
+  - steps replace-boot-loader, partition-table, write-kernel, write-base, write-recovery, set-slot write and haven't been tried on real hardware: only a developer who asks for them may run them
+
+Questions:
+  Do you have the emergency-cable? Only it gets the device out if step replace-boot-loader, partition-table goes wrong. Answer: yes
+
+Choices:
+  keep-stock = yes (default)
+
+Systems:
+  stock system: kept and still startable
+
+Partitions:
+  abl (replace, 1.0 MiB): backs-up, writes
+  partition table (replace): backs-up, writes
+  boot (back-up, 64.0 MiB): backs-up
+  recovery (replace, 64.0 MiB): backs-up, writes
+  system (back-up, 3.0 GiB): backs-up
+  vendor (back-up, 800.0 MiB): backs-up
+  vbmeta (back-up, 64.0 KiB): backs-up
+  misc (back-up, 1.0 MiB): backs-up
+  boot_b (create): creates, writes
+  system_b (create): creates, writes
+  vendor_b (create): creates
+  userdata (resize, 24.0 GiB): resizes
+    Everything on it is deleted: files on it are lost.
+  40 other partitions are not touched.
+
+How the machine starts:
+  boot-loader (boot-loader): back-up, change
+  slot-flags (slot-flags): back-up, change
+
+Kept from the device:
+  device data: gpu-firmware
+  device data: sensor-calibration
+  device data: modem-firmware
+  device data: wifi-firmware
+
+Space on the computer:
+  backup 3.9 GiB plus partition table of unknown size
+  artifacts 0 B plus base, boot-loader, kernel, partition-layout, recovery of unknown size
+  at least 3.9 GiB
+
+Afterwards the device:
+  have start-kernel [untried]
+  have fallback-boot [untried]
+  lack trial-boot [untried]
+  needs recovery (the GlassineOS recovery, which isn't built yet) [untried]
+  have keep-stock [untried]
+  lack secondary-recovery [untried]
+  needs choose-at-start (a way to pick a slot at start-up, which isn't decided) [untried]
+
+Steps:
+  1. back-up (back-up, in fastboot-stock) [safe stop]
+     Back up the boot loader, the partition table, the boot, recovery, system and vendor partitions and the boot settings to this computer, and check the backup.
+     if it fails: previous-system-starts via transition fastboot-stock-to-android
+     if cut off after it: previous-system-starts via transition fastboot-stock-to-android
+  2. replace-boot-loader (write-boot-loader, in fastboot-stock) [untried, point of no return, safe stop]
+     Replace the boot loader with GlassineOS's. From here there is no way back without the backup, and if this step fails only the emergency-mode cable helps.
+     if it fails: special-hardware (emergency-cable) via transition cable-to-emergency
+     if cut off after it: previous-system-starts via transition fastboot-to-android
+  3. partition-table (write-partition-table, in fastboot) [untried, point of no return, safe stop]
+     Give the device a second slot for GlassineOS. The data partition is made smaller: everything on it is deleted.
+     if it fails: special-hardware (emergency-cable) via transition cable-to-emergency
+     if cut off after it: installer-can-finish via step write-kernel
+  4. write-kernel (write-image, in fastboot) [untried, safe stop]
+     Write the GlassineOS kernel to slot B.
+     if it fails: installer-can-finish via step write-kernel
+     if cut off after it: installer-can-finish via step write-base
+  5. write-base (write-base, in fastboot) [untried, safe stop]
+     Write GlassineOS to slot B.
+     if it fails: installer-can-finish via step write-base
+     if cut off after it: installer-can-finish via step write-recovery
+  6. write-recovery (write-image, in fastboot) [untried, safe stop]
+     Write the GlassineOS recovery.
+     if it fails: installer-can-finish via step write-recovery
+     if cut off after it: installer-can-finish via step set-slot
+  7. set-slot (set-boot-slot, in fastboot) [untried, safe stop]
+     Start GlassineOS by default.
+     if it fails: installer-can-finish via step set-slot
+     if cut off after it: glassine-starts via transition fastboot-to-glassine
