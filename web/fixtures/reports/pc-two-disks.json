@@ -1,0 +1,158 @@
+{
+  "report_format": 1,
+  "mode": "local",
+  "runs_on": {
+    "platform": "glassine-live",
+    "connections": [
+      "local"
+    ]
+  },
+  "machine": {
+    "usb": null,
+    "fastboot": null,
+    "android": null,
+    "disks": [
+      {
+        "kind": "nvme",
+        "size": 549755813888,
+        "removable": false,
+        "table": "gpt",
+        "partitions": [
+          {
+            "name": null,
+            "size": 104857600,
+            "role": "esp",
+            "filesystem": "vfat"
+          },
+          {
+            "name": null,
+            "size": 16777216,
+            "role": null,
+            "filesystem": null
+          },
+          {
+            "name": null,
+            "size": 322122547200,
+            "role": null,
+            "filesystem": "ntfs"
+          },
+          {
+            "name": null,
+            "size": 734003200,
+            "role": null,
+            "filesystem": "ntfs"
+          }
+        ],
+        "free": 214748364800
+      },
+      {
+        "kind": "sata",
+        "size": 1000204886016,
+        "removable": false,
+        "table": "gpt",
+        "partitions": [
+          {
+            "name": null,
+            "size": 536870912000,
+            "role": null,
+            "filesystem": "ext4"
+          }
+        ],
+        "free": 463333974016
+      },
+      {
+        "kind": "usb",
+        "size": 34359738368,
+        "removable": true,
+        "table": "gpt",
+        "partitions": [
+          {
+            "name": null,
+            "size": 34359738368,
+            "role": null,
+            "filesystem": "vfat"
+          }
+        ],
+        "free": 0
+      }
+    ],
+    "firmware": {
+      "kind": "uefi",
+      "secure_boot": "off",
+      "boot_entries": 2
+    },
+    "cpu": {
+      "arch": "x86-64",
+      "vendor": "GenuineIntel"
+    },
+    "board": {
+      "vendor": "Example Computers",
+      "product": "Example 13"
+    },
+    "systems": [
+      {
+        "kind": "windows"
+      },
+      {
+        "kind": "linux"
+      }
+    ]
+  },
+  "recognition": {
+    "result": "match",
+    "device": "uefi-pc",
+    "name": "PC",
+    "state": "stock",
+    "candidates": [],
+    "needs_modes": [],
+    "signals": []
+  },
+  "supported": true,
+  "reasons": [
+    "steps create-partitions, write-base, write-boot, add-boot-entry write and haven't been tried on real hardware: only a developer who asks for them may run them"
+  ],
+  "capabilities": [
+    {
+      "id": "start-kernel",
+      "status": "have",
+      "with": null,
+      "tried": false
+    },
+    {
+      "id": "recovery",
+      "status": "lack",
+      "with": null,
+      "tried": false
+    },
+    {
+      "id": "choose-at-start",
+      "status": "have",
+      "with": null,
+      "tried": false
+    }
+  ],
+  "plan": {
+    "status": "developer-only",
+    "keeps": [
+      "system 1 (windows)",
+      "system 2 (linux)"
+    ],
+    "backs_up": [
+      "disk 0 (whole disk)"
+    ],
+    "replaces": [
+      "partition table"
+    ],
+    "creates": [
+      "disk 0 free space",
+      "glassine-boot",
+      "glassine-system"
+    ],
+    "loses_files": [],
+    "untouched_partitions": 2,
+    "imaged_partitions": 4,
+    "backup_off": false,
+    "space_at_least": 69632,
+    "space_exact": false
+  }
+}

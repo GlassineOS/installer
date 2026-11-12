@@ -1,0 +1,248 @@
+{
+ "contract": 1,
+ "combinations": [
+  {
+   "voice": "white",
+   "scheme": "paper",
+   "pen": 1,
+   "attributes": {
+    "data-theme": "white-paper",
+    "data-pen": "1"
+   }
+  },
+  {
+   "voice": "white",
+   "scheme": "paper",
+   "pen": 2,
+   "attributes": {
+    "data-theme": "white-paper",
+    "data-pen": "2"
+   }
+  },
+  {
+   "voice": "white",
+   "scheme": "paper",
+   "pen": 3,
+   "attributes": {
+    "data-theme": "white-paper",
+    "data-pen": "3"
+   }
+  },
+  {
+   "voice": "white",
+   "scheme": "night",
+   "pen": 1,
+   "attributes": {
+    "data-theme": "white-night",
+    "data-pen": "1"
+   }
+  },
+  {
+   "voice": "white",
+   "scheme": "night",
+   "pen": 2,
+   "attributes": {
+    "data-theme": "white-night",
+    "data-pen": "2"
+   }
+  },
+  {
+   "voice": "white",
+   "scheme": "night",
+   "pen": 3,
+   "attributes": {
+    "data-theme": "white-night",
+    "data-pen": "3"
+   }
+  },
+  {
+   "voice": "white",
+   "scheme": "eink",
+   "pen": 1,
+   "attributes": {
+    "data-theme": "white-eink",
+    "data-pen": "1"
+   }
+  },
+  {
+   "voice": "white",
+   "scheme": "eink",
+   "pen": 2,
+   "attributes": {
+    "data-theme": "white-eink",
+    "data-pen": "2"
+   }
+  },
+  {
+   "voice": "white",
+   "scheme": "eink",
+   "pen": 3,
+   "attributes": {
+    "data-theme": "white-eink",
+    "data-pen": "3"
+   }
+  },
+  {
+   "voice": "editorial",
+   "scheme": "paper",
+   "pen": 1,
+   "attributes": {
+    "data-theme": "editorial-paper",
+    "data-pen": "1"
+   }
+  },
+  {
+   "voice": "editorial",
+   "scheme": "paper",
+   "pen": 2,
+   "attributes": {
+    "data-theme": "editorial-paper",
+    "data-pen": "2"
+   }
+  },
+  {
+   "voice": "editorial",
+   "scheme": "paper",
+   "pen": 3,
+   "attributes": {
+    "data-theme": "editorial-paper",
+    "data-pen": "3"
+   }
+  },
+  {
+   "voice": "editorial",
+   "scheme": "night",
+   "pen": 1,
+   "attributes": {
+    "data-theme": "editorial-night",
+    "data-pen": "1"
+   }
+  },
+  {
+   "voice": "editorial",
+   "scheme": "night",
+   "pen": 2,
+   "attributes": {
+    "data-theme": "editorial-night",
+    "data-pen": "2"
+   }
+  },
+  {
+   "voice": "editorial",
+   "scheme": "night",
+   "pen": 3,
+   "attributes": {
+    "data-theme": "editorial-night",
+    "data-pen": "3"
+   }
+  },
+  {
+   "voice": "editorial",
+   "scheme": "eink",
+   "pen": 1,
+   "attributes": {
+    "data-theme": "editorial-eink",
+    "data-pen": "1"
+   }
+  },
+  {
+   "voice": "editorial",
+   "scheme": "eink",
+   "pen": 2,
+   "attributes": {
+    "data-theme": "editorial-eink",
+    "data-pen": "2"
+   }
+  },
+  {
+   "voice": "editorial",
+   "scheme": "eink",
+   "pen": 3,
+   "attributes": {
+    "data-theme": "editorial-eink",
+    "data-pen": "3"
+   }
+  },
+  {
+   "voice": "stationery",
+   "scheme": "paper",
+   "pen": 1,
+   "attributes": {
+    "data-theme": "stationery-paper",
+    "data-pen": "1"
+   }
+  },
+  {
+   "voice": "stationery",
+   "scheme": "paper",
+   "pen": 2,
+   "attributes": {
+    "data-theme": "stationery-paper",
+    "data-pen": "2"
+   }
+  },
+  {
+   "voice": "stationery",
+   "scheme": "paper",
+   "pen": 3,
+   "attributes": {
+    "data-theme": "stationery-paper",
+    "data-pen": "3"
+   }
+  },
+  {
+   "voice": "stationery",
+   "scheme": "night",
+   "pen": 1,
+   "attributes": {
+    "data-theme": "stationery-night",
+    "data-pen": "1"
+   }
+  },
+  {
+   "voice": "stationery",
+   "scheme": "night",
+   "pen": 2,
+   "attributes": {
+    "data-theme": "stationery-night",
+    "data-pen": "2"
+   }
+  },
+  {
+   "voice": "stationery",
+   "scheme": "night",
+   "pen": 3,
+   "attributes": {
+    "data-theme": "stationery-night",
+    "data-pen": "3"
+   }
+  },
+  {
+   "voice": "stationery",
+   "scheme": "eink",
+   "pen": 1,
+   "attributes": {
+    "data-theme": "stationery-eink",
+    "data-pen": "1"
+   }
+  },
+  {
+   "voice": "stationery",
+   "scheme": "eink",
+   "pen": 2,
+   "attributes": {
+    "data-theme": "stationery-eink",
+    "data-pen": "2"
+   }
+  },
+  {
+   "voice": "stationery",
+   "scheme": "eink",
+   "pen": 3,
+   "attributes": {
+    "data-theme": "stationery-eink",
+    "data-pen": "3"
+   }
+  }
+ ]
+}

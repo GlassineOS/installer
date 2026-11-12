@@ -1,0 +1,5 @@
+preact 10.29.8 (npm, MIT, LICENSE.preact): dist/preact.module.js, hooks/dist/hooks.module.js
+  tarball sha256 b18cb0a457f3d43c7bb30391a74ade7d13e03bc6e77915e061c70c0fe1123299
+htm 3.1.1 (npm, Apache-2.0, LICENSE.htm): dist/htm.module.js
+  tarball sha256 2425b9bee11409177bcabc7f32e319926fc6690c1701c0b257c88bdff2d5ba90
+Written by web/tools/vendor libs; the files are as the tarballs have them.

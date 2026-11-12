@@ -1,0 +1,70 @@
+{
+  "report_format": 1,
+  "mode": "fastboot",
+  "runs_on": {
+    "platform": "linux",
+    "connections": [
+      "usb-native"
+    ]
+  },
+  "machine": {
+    "usb": {
+      "vendor_id": "18d1",
+      "product_id": "d00d",
+      "interfaces": [
+        "ff-42-03"
+      ]
+    },
+    "fastboot": {
+      "values": {
+        "hw-revision": "10000",
+        "max-download-size": "595230720",
+        "partition-size:boot": "0x4000000",
+        "partition-size:onyxconfig": null,
+        "partition-size:system": "0x80000000",
+        "partition-size:userdata": "0x200000000",
+        "product": "some-board",
+        "secure": "no",
+        "unlocked": "yes",
+        "variant": "SDM UFS"
+      },
+      "other_names": []
+    },
+    "android": null,
+    "disks": [],
+    "firmware": null,
+    "cpu": null,
+    "board": null,
+    "systems": []
+  },
+  "recognition": {
+    "result": "none",
+    "device": null,
+    "name": null,
+    "state": null,
+    "candidates": [
+      "onyx-noteair"
+    ],
+    "needs_modes": [],
+    "signals": [
+      {
+        "description": "onyx-noteair",
+        "test": "fastboot.var.variant = \"SDM EMMC\"",
+        "result": "false",
+        "seen": "SDM UFS"
+      },
+      {
+        "description": "onyx-noteair",
+        "test": "storage.partition.onyxconfig.size = 33554432",
+        "result": "false",
+        "seen": "absent"
+      }
+    ]
+  },
+  "supported": false,
+  "reasons": [
+    "no description matches: GlassineOS doesn't support this machine yet"
+  ],
+  "capabilities": [],
+  "plan": null
+}

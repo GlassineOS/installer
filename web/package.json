@@ -1,0 +1,12 @@
+{
+  "name": "glassine-installer-web",
+  "private": true,
+  "description": "The installer's web screens: only the test tools are packages, the pages load nothing from npm.",
+  "license": "GPL-2.0-or-later",
+  "scripts": {
+    "test": "node test/screens.js"
+  },
+  "devDependencies": {
+    "puppeteer-core": "25.16.0"
+  }
+}
