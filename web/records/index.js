@@ -35,7 +35,7 @@ export const GOLDEN_PLANS = {
 // The check reports there are records of (one per facts snapshot of the core's tests).
 export const REPORTS = [
   'noteair-stock-fastboot', 'noteair-stock-adb', 'noteair-prepared-fastboot', 'noteair-conflict-fastboot',
-  'unknown-fastboot', 'pc-windows', 'pc-windows-other-model', 'pc-two-disks',
+  'unknown-fastboot', 'pc-windows', 'pc-windows-other-model', 'pc-two-disks', 'noteair-recorded-glassine-fastboot',
 ];
 
 const cache = new Map();

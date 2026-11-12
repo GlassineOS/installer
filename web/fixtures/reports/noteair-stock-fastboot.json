@@ -149,7 +149,7 @@
     "untouched_partitions": 0,
     "imaged_partitions": 45,
     "backup_off": false,
-    "space_at_least": 8600000000,
+    "space_at_least": 9200000000,
     "space_exact": false
   }
 }
