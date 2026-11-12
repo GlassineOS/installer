@@ -1,13 +1,18 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-//! Format 1 of the device description (spec 002): its structure as a shape
-//! (for the walker and the schema) and as typed records (for everything after).
+//! The device description (spec 002), formats 1 and 2: its structure as a
+//! shape for each format (for the walker and the schema) and as typed records
+//! (for everything after; format 2 only adds to format 1, so one set of
+//! records reads both).
 
 use crate::shape::*;
 use crate::vocab::{self, ParamType};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-pub const FORMAT: i64 = 1;
+/// The latest format; a reader reads it and every earlier one (FR-003).
+pub const FORMAT: i64 = 2;
+/// The earliest format a reader reads.
+pub const FIRST_FORMAT: i64 = 1;
 
 pub const ID_PATTERN: &str = "^[a-z0-9]+(-[a-z0-9]+)*$";
 /// Partition names as the device's table has them, or `role:<role>`.
@@ -607,7 +612,12 @@ fn when() -> Shape {
     ))
 }
 
-fn back_up() -> Shape {
+fn back_up(format: i64) -> Shape {
+    let size_doc = if format >= 2 {
+        "its size in bytes, when known; for a whole disk (role disk), about the size of its image as stored (compressed, used blocks only)"
+    } else {
+        "its size in bytes, when known"
+    };
     table(
         Table::new(
             "how it is backed up (FR-016a)",
@@ -623,7 +633,7 @@ fn back_up() -> Shape {
                     "size",
                     Shape::IntOrStr {
                         pattern: "^unknown$",
-                        doc: "its size in bytes, when known".into(),
+                        doc: size_doc.into(),
                     },
                 ),
             ],
@@ -665,9 +675,14 @@ fn text_map(doc: &str, key_pattern: &'static str) -> Shape {
     }
 }
 
-/// The whole of format 1.
+/// The whole of the latest format.
 pub fn shape() -> Table {
-    let ids = |l: &[vocab::Entry]| vocab::ids(l);
+    shape_for(FORMAT)
+}
+
+/// The whole of one format.
+pub fn shape_for(format: i64) -> Table {
+    let ids = |l: &[vocab::Entry]| vocab::ids_in(l, format);
     let part_list = |doc: &str| arr(sp(PART_REF_PATTERN, ""), doc);
     let mode_kinds: Vec<&str> = vocab::MODE_KINDS.iter().map(|m| m.id).collect();
     let cap_ids: Vec<&str> = vocab::CAPABILITIES.iter().map(|c| c.id).collect();
@@ -770,7 +785,7 @@ pub fn shape() -> Table {
                 boolean("for resize and remove: whether it destroys what is on the partition (FR-015)"),
             ),
             opt("when", when()),
-            opt("back_up", back_up()),
+            opt("back_up", back_up(format)),
         ],
     ));
     let boot_setting = table(Table::new(
@@ -778,7 +793,7 @@ pub fn shape() -> Table {
         vec![
             f("id", sp(ID_PATTERN, "")),
             f("kind", se(&kinds_ids(vocab::BOOT_SETTING_KINDS), "")),
-            f("back_up", back_up()),
+            f("back_up", back_up(format)),
         ],
     ));
     let unit_value = table(Table::new(
@@ -913,13 +928,13 @@ pub fn shape() -> Table {
     ));
 
     Table::new(
-        "A GlassineOS device description, format 1",
+        format!("A GlassineOS device description, format {format}"),
         vec![
             f(
                 "format",
                 Shape::Int {
                     min: Some(1),
-                    doc: "the format; this is 1".into(),
+                    doc: format!("the format; this is {format}"),
                 },
             ),
             f("id", sp(ID_PATTERN, "lowercase, - between words, unique among descriptions")),
@@ -952,28 +967,46 @@ pub fn shape() -> Table {
     )
 }
 
-/// The JSON Schema of format 1, generated from `shape()`.
+/// The JSON Schema of the latest format.
 pub fn json_schema() -> serde_json::Value {
-    let mut v = shape().json_schema();
+    json_schema_for(FORMAT)
+}
+
+/// The published file name of one format's schema (FR-004).
+pub fn schema_file(format: i64) -> String {
+    format!("device-description-{format}.schema.json")
+}
+
+/// The JSON Schema of one format, generated from `shape_for(format)`.
+pub fn json_schema_for(format: i64) -> serde_json::Value {
+    let mut v = shape_for(format).json_schema();
     if let serde_json::Value::Object(m) = &mut v {
         m.insert("$schema".into(), "https://json-schema.org/draft/2020-12/schema".into());
         m.insert(
             "$id".into(),
-            "https://github.com/GlassineOS/installer/schema/device-description-1.schema.json".into(),
+            format!("https://github.com/GlassineOS/installer/schema/{}", schema_file(format)).into(),
         );
-        m.insert("title".into(), "GlassineOS device description, format 1".into());
-        m.insert("x-vocabularies".into(), vocabularies_json());
+        m.insert("title".into(), format!("GlassineOS device description, format {format}").into());
+        m.insert("x-vocabularies".into(), vocabularies_json(format));
         if let Some(serde_json::Value::Object(props)) = m.get_mut("properties") {
-            props.insert("format".into(), serde_json::json!({ "const": 1, "description": "the format; this is 1" }));
+            props.insert(
+                "format".into(),
+                serde_json::json!({ "const": format, "description": format!("the format; this is {format}") }),
+            );
         }
     }
     v
 }
 
-/// The vocabularies with their meanings and parameters, in the schema too.
-pub fn vocabularies_json() -> serde_json::Value {
+/// The vocabularies of one format with their meanings and parameters, in the schema too.
+pub fn vocabularies_json(format: i64) -> serde_json::Value {
     use serde_json::json;
-    let entries = |l: &[vocab::Entry]| l.iter().map(|e| json!({ "id": e.id, "doc": e.doc })).collect::<Vec<_>>();
+    let entries = |l: &[vocab::Entry]| {
+        l.iter()
+            .filter(|e| e.in_format(format))
+            .map(|e| json!({ "id": e.id, "doc": e.doc }))
+            .collect::<Vec<_>>()
+    };
     let kinds = |l: &[vocab::Kind]| {
         l.iter()
             .map(|k| {

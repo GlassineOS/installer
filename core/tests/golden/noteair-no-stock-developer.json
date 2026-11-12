@@ -22,6 +22,16 @@
       "choice": "keep-stock",
       "value": "no",
       "default": false
+    },
+    {
+      "choice": "backup",
+      "value": "full",
+      "default": true
+    },
+    {
+      "choice": "backup-to",
+      "value": "computer",
+      "default": true
     }
   ],
   "systems": [
@@ -35,13 +45,11 @@
       "partition": "abl",
       "class": "replace",
       "actions": [
-        "backs-up",
         "writes"
       ],
       "size": 1048576,
       "loses_files": false,
       "steps": [
-        "back-up",
         "replace-boot-loader"
       ]
     },
@@ -49,88 +57,12 @@
       "partition": "partition table",
       "class": "replace",
       "actions": [
-        "backs-up",
         "writes"
       ],
       "size": null,
       "loses_files": false,
       "steps": [
-        "back-up",
         "partition-table"
-      ]
-    },
-    {
-      "partition": "boot",
-      "class": "back-up",
-      "actions": [
-        "backs-up"
-      ],
-      "size": 67108864,
-      "loses_files": false,
-      "steps": [
-        "back-up"
-      ]
-    },
-    {
-      "partition": "recovery",
-      "class": "replace",
-      "actions": [
-        "backs-up",
-        "writes"
-      ],
-      "size": 67108864,
-      "loses_files": false,
-      "steps": [
-        "back-up",
-        "write-recovery"
-      ]
-    },
-    {
-      "partition": "system",
-      "class": "back-up",
-      "actions": [
-        "backs-up"
-      ],
-      "size": 3221225472,
-      "loses_files": false,
-      "steps": [
-        "back-up"
-      ]
-    },
-    {
-      "partition": "vendor",
-      "class": "back-up",
-      "actions": [
-        "backs-up"
-      ],
-      "size": 838860800,
-      "loses_files": false,
-      "steps": [
-        "back-up"
-      ]
-    },
-    {
-      "partition": "vbmeta",
-      "class": "back-up",
-      "actions": [
-        "backs-up"
-      ],
-      "size": 65536,
-      "loses_files": false,
-      "steps": [
-        "back-up"
-      ]
-    },
-    {
-      "partition": "misc",
-      "class": "back-up",
-      "actions": [
-        "backs-up"
-      ],
-      "size": 1048576,
-      "loses_files": false,
-      "steps": [
-        "back-up"
       ]
     },
     {
@@ -184,9 +116,22 @@
       "steps": [
         "partition-table"
       ]
+    },
+    {
+      "partition": "recovery",
+      "class": "replace",
+      "actions": [
+        "writes"
+      ],
+      "size": 67108864,
+      "loses_files": false,
+      "steps": [
+        "write-recovery"
+      ]
     }
   ],
-  "untouched_partitions": 40,
+  "untouched_partitions": 0,
+  "imaged_partitions": 45,
   "boot_settings": [
     {
       "id": "boot-loader",
@@ -215,6 +160,32 @@
       ]
     }
   ],
+  "backup": {
+    "choice": "full",
+    "default": true,
+    "images": [
+      {
+        "disk": "disk 0",
+        "index": 0,
+        "kind": null,
+        "disk_size": null,
+        "holds": "the partition table and every partition",
+        "stored": "compressed; only the used blocks where the file system tells them, every block elsewhere",
+        "estimate": "about",
+        "estimate_bytes": 8600000000,
+        "mode": "ram",
+        "means": "glassine-read",
+        "check": "read-back-compare",
+        "step": "back-up"
+      }
+    ],
+    "target": {
+      "kind": "computer",
+      "disk": null
+    },
+    "consequence": null,
+    "escapes_lost": []
+  },
   "keeps": {
     "unit_values": [],
     "device_files": [],
@@ -226,10 +197,8 @@
     ]
   },
   "space": {
-    "backup_bytes": 4196466688,
-    "backup_unknown": [
-      "partition table"
-    ],
+    "backup_bytes": 8600000000,
+    "backup_unknown": [],
     "artifact_bytes": 0,
     "artifacts_unknown": [
       "base",
@@ -238,7 +207,7 @@
       "partition-layout",
       "recovery"
     ],
-    "total_at_least": 4196466688,
+    "total_at_least": 8600000000,
     "exact": false
   },
   "capabilities": [

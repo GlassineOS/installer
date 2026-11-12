@@ -5,13 +5,14 @@ Status: ready
 Choices:
   target-disk = first (default)
   systems.1 = replace
+  backup = full (default)
+  backup-to = installer-media (default)
 
 Systems:
   system 1 (windows): replaced
 
 Partitions:
-  disk 0 partition 1 (back-up, 100.0 MiB): backs-up
-  partition table (replace): backs-up, writes
+  partition table (replace): writes
   disk 0 partition 2 (remove, 16.0 MiB): removes
     Everything on it is deleted: files on it are lost.
   disk 0 partition 3 (remove, 300.0 GiB): removes
@@ -21,16 +22,19 @@ Partitions:
   disk 0 free space (create, 200.0 GiB): creates
   glassine-boot (create): creates, writes
   glassine-system (create): creates, writes
-  1 other partitions are not touched.
+  1 other partitions are only read, into the backup; 1 are not touched.
+
+Backup (default), to the installer's USB stick, checked by reading it back before the first write:
+  disk 0 (nvme, 512.0 GiB), whole: the partition table and every partition; at most 512.0 GiB, stored compressed; only the used blocks where the file system tells them, every block elsewhere
 
 How the machine starts:
   boot-entries (firmware-boot-entry): back-up, change
   boot-order (firmware-boot-order): back-up, change
 
 Space on the computer:
-  backup 101.1 MiB
+  backup 512.0 GiB
   artifacts 0 B plus base, kernel of unknown size
-  at least 101.1 MiB
+  at least 512.0 GiB
 
 Afterwards the device:
   have start-kernel [untried]
@@ -39,7 +43,7 @@ Afterwards the device:
 
 Steps:
   1. back-up (back-up, in local) [safe stop]
-     Back up the partition table, the EFI system partition and the firmware's boot entries to the installer's stick.
+     Back up every disk GlassineOS changes, whole, and the firmware's boot entries, then check the backup by reading it back.
      if it fails: previous-system-starts via step back-up
      if cut off after it: previous-system-starts via step back-up
   2. remove-system.1 (remove-partitions, in local) [untried, point of no return]
