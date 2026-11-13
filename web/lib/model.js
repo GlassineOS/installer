@@ -3,7 +3,7 @@
 // device description's texts. Pure functions of a session: { report, plan, desc, kind, ... }.
 
 import {
-  LEAVES, BOOT_SETTING, DEVICE_DATA, SYSTEM_KIND, MODE, PARTITION_FOR, cap, list, human,
+  LEAVES, BOOT_SETTING, SYSTEM_KIND, MODE, PARTITION_FOR, cap, list, human,
 } from './words.js';
 
 export function machineOf(report, desc) {
@@ -139,7 +139,7 @@ export function fate(s) {
     return human(sum(known)) + (known.length < xs.length ? ' and more' : '');
   };
   const keep = keptSystems(p).map((x) => `${x.display}: kept, and it still starts`);
-  if (p.keeps.device_data.length) keep.push(`Its device data: ${list(p.keeps.device_data.map((d) => DEVICE_DATA[d] || d.replace(/-/g, ' ')))}`);
+  if (p.keeps.device_data.length) keep.push(`Its device data: ${list(p.keeps.device_data)}`);
   if (p.keeps.unit_values.length) keep.push(`Values unique to ${s.m.the}: ${p.keeps.unit_values.length}`);
   if (p.imaged_partitions && p.backup.choice !== 'off') keep.push(`${p.imaged_partitions} other ${parts(p.imaged_partitions)} of the storage: only read, into the backup`);
   if (p.untouched_partitions) keep.push(`${p.untouched_partitions} other ${parts(p.untouched_partitions)} of the storage, not touched`);

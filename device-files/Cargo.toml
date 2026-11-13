@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+[package]
+name = "glassine-device-files"
+description = "Derives the installed system's device files (device-data list, kept system's slot) from a device description"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+# Only the core: a device's package builds this at its own build (spec 002 FR-030),
+# so it stays small and needs no USB or system libraries.
+[dependencies]
+glassine-installer = { path = "../core" }

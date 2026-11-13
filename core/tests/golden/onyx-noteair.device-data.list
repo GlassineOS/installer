@@ -1,0 +1,27 @@
+format=1
+# The Onyx Boox Note Air's device data: files the seed copies once from the device's own
+# partitions (read-only) to glassine/ on the board's DEVICE_PART. The format is in
+# GlassineOS/boot docs/kernel-artifacts.md.
+# Derived from the device's description (/usr/share/glassine/device.toml,
+# [[device_data]]) when its package is built: change the description, never this file.
+# NAME                                                SOURCE                                                 CHECK
+# display waveform
+waveform.wbf                                          system_a:/waveform/eink_waveform.wbf                   wbf
+# modem and audio processor firmware
+firmware/qcom/sdm636/onyx/noteair/mba.mbn             modem:/image/mba.mbn
+firmware/qcom/sdm636/onyx/noteair/modem.*             modem:/image/modem.*
+firmware/qcom/sdm636/onyx/noteair/adsp.*              modem:/image/adsp.*
+firmware/qcom/sdm636/onyx/noteair/wlanmdsp.mbn        modem:/image/wlanmdsp.mbn
+# Wi-Fi board file
+firmware/ath10k/WCN3990/hw1.0/onyx_noteair/board.bin  modem:/image/bdwlan.bin
+# Bluetooth firmware
+firmware/qca/crbtfw21.tlv                             bluetooth:/image/crbtfw21.tlv
+firmware/qca/crnv21.bin                               bluetooth:/image/crnv21.bin
+# graphics firmware
+firmware/qcom/sdm636/onyx/noteair/a512_zap.*          vendor_a:/firmware/a512_zap.*
+# speaker tuning
+firmware/qcom/sdm636/onyx/noteair/aw88194_spk_reg.bin vendor_a:/firmware/awinic/aw881xx_pid_xx_l_spk_reg.bin
+firmware/qcom/sdm636/onyx/noteair/aw88194_spk_fw.bin  vendor_a:/firmware/awinic/aw881xx_pid_03_l_spk_fw.bin
+firmware/qcom/sdm636/onyx/noteair/aw88194_spk_cfg.bin vendor_a:/firmware/awinic/aw881xx_pid_03_l_spk_cfg.bin
+# sensor calibration
+firmware/qcom/sensors/sns.reg                         persist:/sensors/sns.reg

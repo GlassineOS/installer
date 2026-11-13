@@ -189,10 +189,13 @@
     "unit_values": [],
     "device_files": [],
     "device_data": [
-      "gpu-firmware",
-      "sensor-calibration",
-      "modem-firmware",
-      "wifi-firmware"
+      "display waveform",
+      "modem and audio processor firmware",
+      "Wi-Fi board file",
+      "Bluetooth firmware",
+      "graphics firmware",
+      "speaker tuning",
+      "sensor calibration"
     ]
   },
   "space": {

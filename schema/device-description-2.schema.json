@@ -310,10 +310,45 @@
       "type": "array"
     },
     "device_data": {
-      "description": "the device-data files the installed system needs (boot 006)",
+      "description": "the device-data files the installed system needs; its device-data list is derived from them (FR-018, FR-030)",
       "items": {
-        "pattern": "^[A-Za-z0-9_./-]+$",
-        "type": "string"
+        "additionalProperties": false,
+        "description": "a device-data file the installed system takes from the device's own partitions (FR-018, boot 006)",
+        "properties": {
+          "check": {
+            "description": "how it is checked besides its sha256",
+            "enum": [
+              "wbf"
+            ],
+            "type": "string"
+          },
+          "name": {
+            "description": "its name in the seed: relative, may have directories, NAME.* for a split image",
+            "pattern": "^[A-Za-z0-9_.+*-]+(/[A-Za-z0-9_.+*-]+)*$",
+            "type": "string"
+          },
+          "partition": {
+            "description": "the partition it is read from, read-only",
+            "pattern": "^[A-Za-z0-9_.-]+$",
+            "type": "string"
+          },
+          "path": {
+            "description": "its path on that partition, from /; PATH.* when the name is a pattern",
+            "pattern": "^(/[A-Za-z0-9_.+*-]+)+$",
+            "type": "string"
+          },
+          "what": {
+            "description": "what it is, shown in the plan; consecutive files with the same text are one group",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "partition",
+          "path",
+          "what"
+        ],
+        "type": "object"
       },
       "type": "array"
     },
@@ -2841,6 +2876,12 @@
             "type": "Text"
           }
         ]
+      }
+    ],
+    "device_data_checks": [
+      {
+        "doc": "a display waveform: the WBF header's length matches the file",
+        "id": "wbf"
       }
     ],
     "escape_leaves": [

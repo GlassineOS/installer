@@ -4,7 +4,7 @@
 
 import { html, Actions, Page, Tick, Owed, Admonition } from '../lib/parts.js';
 import { keptSystems } from '../lib/model.js';
-import { cap, list, DEVICE_DATA } from '../lib/words.js';
+import { cap, list } from '../lib/words.js';
 
 export function Done({ s, state }) {
   const p = s.plan;
@@ -18,7 +18,7 @@ export function Done({ s, state }) {
       ...(kept.length ? [['Still there', `${list(kept.map((k) => k.display))}: kept, and it still starts.`]] : []),
       ['The backup', `Keep it: with it ${s.m.the} can be repaired, or the installation undone.`],
       ['The record', `A record of this installation is on ${s.m.the} and next to the backup: the machine, the versions, the layout, its capabilities and where the backup is.`],
-      ...(p.keeps.device_data.length ? [['Its device data', `${cap(list(p.keeps.device_data.map((d) => DEVICE_DATA[d] || d)))}: kept on ${s.m.the}.`]] : []),
+      ...(p.keeps.device_data.length ? [['Its device data', `${cap(list(p.keeps.device_data))}: kept on ${s.m.the}.`]] : []),
       ['Nothing left behind', pc ? 'Nothing was copied off this PC.' : 'The files GlassineOS needed from the device were deleted from this computer.'],
     ];
   return html`<${Page} s=${s} step="done" eyebrow=${stock ? 'Back to stock · done' : 'Verify · accepted'}

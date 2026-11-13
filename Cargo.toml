@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 [workspace]
 resolver = "3"
-members = ["core", "usb", "pc", "cli", "wasm"]
+members = ["core", "usb", "pc", "cli", "wasm", "device-files"]
 
 [workspace.package]
 version = "0.1.0"
