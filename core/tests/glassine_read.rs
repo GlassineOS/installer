@@ -400,3 +400,22 @@ fn over_asking_times_out_in_the_simulation() {
     assert_eq!(run(d.recv_max(64)).unwrap().len(), 64, "the header: a short packet");
     assert!(matches!(run(d.recv_max(2048)), Err(FbError::Timeout(_))), "1024 bytes left, 2048 asked");
 }
+
+/// The wire format, pinned: the same bytes are in the RAM environment's unit test
+/// (GlassineOS/images `ramenv/test/unit.c`), so this reader and the device's daemon
+/// agree on them without a device.
+#[test]
+fn wire_format_pinned() {
+    fn unhex(s: &str) -> Vec<u8> {
+        (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect()
+    }
+    let request = unhex("4752525101000200040302010200000000100000000000000002000000000000");
+    assert_eq!(encode_request(OP_READ, 0x0102_0304, 2, 0x1000, 0x200).to_vec(), request);
+    let response = unhex(concat!(
+        "475252530100020004030201000000000002000000000000001000000000000",
+        "0000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
+    ));
+    let h = parse_header(&response).unwrap();
+    assert_eq!((h.op, h.tag, h.status, h.length, h.offset), (OP_READ, 0x0102_0304, 0, 0x200, 0x1000));
+    assert_eq!(h.sha256.to_vec(), (0u8..32).collect::<Vec<_>>());
+}
