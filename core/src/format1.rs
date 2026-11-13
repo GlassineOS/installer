@@ -724,7 +724,7 @@ pub fn shape_for(format: i64) -> Table {
             Table::new(
                 "a departure from the mode's standard protocol (FR-011)",
                 tried(vec![
-                    f("kind", se(&kinds_ids(vocab::DEPARTURES), "the departure")),
+                    f("kind", se(&kinds_ids(vocab::departures(format)), "the departure")),
                     opt(
                         "told_by",
                         condition(
@@ -736,7 +736,7 @@ pub fn shape_for(format: i64) -> Table {
                 ]),
             ),
             "kind",
-            vocab::DEPARTURES,
+            vocab::departures(format),
             format,
         )
         .one_of(&["verified", "untried"]),
@@ -1044,7 +1044,7 @@ pub fn vocabularies_json(format: i64) -> serde_json::Value {
     json!({
         "fact_keys": vocab::FACT_KEYS.iter().map(|k| json!({ "key": k.pattern, "type": format!("{:?}", k.ty), "kind": k.kind.name(), "modes": k.modes, "unit_unique": k.unit_unique, "doc": k.doc })).collect::<Vec<_>>(),
         "mode_kinds": vocab::MODE_KINDS.iter().map(|m| json!({ "id": m.id, "doc": m.doc, "backends": m.backends, "operations": m.operations })).collect::<Vec<_>>(),
-        "departures": kinds(vocab::DEPARTURES),
+        "departures": kinds(vocab::departures(format)),
         "step_kinds": kinds(vocab::STEP_KINDS),
         "boot_setting_kinds": kinds(vocab::BOOT_SETTING_KINDS),
         "backup_means": kinds(vocab::BACKUP_MEANS),
