@@ -43,6 +43,9 @@ Space on the computer:
   artifacts 0 B plus base, boot-loader, kernel, partition-layout, recovery of unknown size
   at least 8.6 GiB
 
+Least sizes from the release:
+  system_b (for the base): 3.0 GiB; what the release asks is not known yet
+
 Afterwards the device:
   have start-kernel [untried]
   have fallback-boot [untried]

@@ -625,6 +625,11 @@ fn check_step(ck: &mut Ck, i: usize, s: &Step) {
                 (vocab::ParamType::Partition, toml::Value::String(part)) if !s.writes.contains(part) && !s.creates.contains(part) => {
                     ck.p(format!("{path}.params.{}", p.name), format!("{part:?} is not in the step's writes or creates"));
                 }
+                (vocab::ParamType::NewPartitions, toml::Value::Array(news)) => {
+                    for (j, n) in news.iter().enumerate() {
+                        check_new_partition(ck, s, n, &format!("{path}.params.{}[{j}]", p.name));
+                    }
+                }
                 _ => {}
             }
         }
@@ -703,6 +708,33 @@ fn check_step(ck: &mut Ck, i: usize, s: &Step) {
 }
 
 /// `after` references exist, stay in the job, and make no cycle.
+/// One partition a step creates, with its size (FR-014a): it is in the step's
+/// `creates`, a literal `at_least` goes only with a relative size, and
+/// `release:<role>` names an artifact of the description (FR-019a).
+fn check_new_partition(ck: &mut Ck, s: &Step, n: &toml::Value, path: &str) {
+    let Some(t) = n.as_table() else { return };
+    if let Some(toml::Value::String(name)) = t.get("name")
+        && !s.creates.contains(name)
+    {
+        ck.p(format!("{path}.name"), format!("{name:?} is not in the step's creates"));
+    }
+    let fixed = match t.get("size") {
+        Some(toml::Value::Integer(_)) => true,
+        Some(toml::Value::String(x)) => regex_lite::Regex::new(format1::FIXED_SIZE_PATTERN).is_ok_and(|r| r.is_match(x)),
+        _ => false,
+    };
+    match t.get("at_least") {
+        Some(toml::Value::String(x)) if x.starts_with("release:") => {
+            let role = &x["release:".len()..];
+            if !ck.d.artifacts.iter().any(|a| a.role == role) {
+                ck.p(format!("{path}.at_least"), format!("no artifact with role {role:?}"));
+            }
+        }
+        Some(_) if fixed => ck.p(format!("{path}.at_least"), "a fixed size is its own least: only `release:<role>` goes with it"),
+        _ => {}
+    }
+}
+
 fn check_order(ck: &mut Ck) {
     let d = ck.d;
     for (i, s) in d.steps.iter().enumerate() {

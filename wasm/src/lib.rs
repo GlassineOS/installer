@@ -16,6 +16,7 @@
 use glassine_installer::facts::Snapshot;
 use glassine_installer::format1::Description;
 use glassine_installer::plan::{self, Input};
+use glassine_installer::release::Release;
 use glassine_installer::validate::{self, Loaded};
 use glassine_installer::{recognize, report};
 use serde_json::{Value, json};
@@ -62,7 +63,8 @@ pub fn check_record(facts: &str) -> Result<String, String> {
 }
 
 /// The plan's input from a page: `{"choices": {K: V}, "hardware": {H: bool},
-/// "developer": bool, "job": ID, "free_bytes": N}`, every key optional.
+/// "developer": bool, "job": ID, "free_bytes": N, "release": MANIFEST}`, every
+/// key optional; MANIFEST is the installer release's manifest (002 FR-019a).
 pub fn input(json: &str) -> Result<Input, String> {
     let bad = |what: &str| {
         error(
@@ -93,6 +95,7 @@ pub fn input(json: &str) -> Result<Input, String> {
             "developer" => i.developer = v.as_bool().ok_or_else(|| bad("developer is not true or false"))?,
             "job" => i.job = Some(v.as_str().ok_or_else(|| bad("job is not text"))?.to_string()),
             "free_bytes" => i.free_bytes = Some(v.as_u64().ok_or_else(|| bad("free_bytes is not a number"))?),
+            "release" => i.release = Some(Release::parse(&v.to_string()).map_err(|e| bad(&e))?),
             other => return Err(bad(&format!("unknown key {other:?}"))),
         }
     }

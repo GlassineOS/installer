@@ -3,7 +3,7 @@
 // device description's texts. Pure functions of a session: { report, plan, desc, kind, ... }.
 
 import {
-  LEAVES, BOOT_SETTING, DEVICE_DATA, SYSTEM_KIND, MODE, cap, list, human,
+  LEAVES, BOOT_SETTING, DEVICE_DATA, SYSTEM_KIND, MODE, PARTITION_FOR, cap, list, human,
 } from './words.js';
 
 export function machineOf(report, desc) {
@@ -188,6 +188,18 @@ export function spaceRows(s) {
     : `${human(sp.backup_bytes)}${sp.backup_at_most ? (sp.backup_bytes ? ', and ' : '') + 'up to ' + human(sp.backup_at_most) + ' for the disk images (the used part is known once a disk is read)' : ''}${sp.backup_unknown.length ? ', plus ' + list(sp.backup_unknown.map((x) => 'the ' + x)) + ', of a size not known yet' : ''}`]);
   rows.push(['For what the installer downloads', sp.artifacts_unknown.length && !sp.artifact_bytes ? 'Not known yet' : human(sp.artifact_bytes) + (sp.artifacts_unknown.length ? ' and more' : '')]);
   rows.push([s.m.kind === 'pc' ? 'In all' : 'On this computer, in all', `${sp.exact ? '' : 'At least '}${human(sp.total_at_least)}`]);
+  // On the machine: the disk the new partitions go on, and each fixed partition the release's
+  // least size applies to. A least size no release states yet is "not known yet", never a refusal.
+  const mins = sp.minimums || [];
+  const part = (m) => PARTITION_FOR[m.role] || 'the partition for the ' + m.role;
+  const short = (n) => `: ${human(n)} too little`;
+  if (sp.disk) {
+    const d = sp.disk, open = mins.filter((m) => m.size === null && m.at_least === null);
+    rows.push([`On disk ${d.disk}`, `${human(d.needs)}${open.length ? ' and ' + list(open.map(part)) + ', whose size is not known yet' : ''}, of ${human(d.free)} free${d.lacks ? short(d.lacks) : ''}`]);
+  }
+  for (const m of mins.filter((x) => x.size !== null)) {
+    rows.push([cap(part(m)), `${human(m.size)}; ${m.at_least === null ? 'what this release needs there is not known yet' : 'this release needs at least ' + human(m.at_least) + (m.lacks ? short(m.lacks) : '')}`]);
+  }
   return rows;
 }
 

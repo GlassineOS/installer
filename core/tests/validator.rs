@@ -159,6 +159,18 @@ fn format_1_has_no_disk_role() {
     rejects(&t, "partitions[6].select.role");
 }
 
+/// FR-003: a layout's partitions with their sizes (FR-014a) are format 2's.
+#[test]
+fn format_1_has_no_layout_partitions() {
+    let t = text("core/tests/fixtures/descriptions/onyx-noteair-format1.toml");
+    let t = mutate(
+        &t,
+        "renames = { boot = \"boot_a\", system = \"system_a\", vendor = \"vendor_a\" } }",
+        "renames = { boot = \"boot_a\", system = \"system_a\", vendor = \"vendor_a\" }, partitions = [{ name = \"system_b\", size = \"3GiB\" }] }",
+    );
+    rejects(&t, "steps[2].params.partitions");
+}
+
 // ---- FR-025: names the vocabularies or the backend don't have ----------------------
 
 #[test]
@@ -606,4 +618,47 @@ fn no_hashes_or_unit_values() {
     let t = format!("{t}\n# 0123456789abcdef0123456789abcdef01234567\n");
     let line = t.lines().count();
     rejects(&t, &format!("line {line}"));
+}
+
+// ---- FR-014a, FR-019a: least sizes ----------------------------------------------
+
+#[test]
+fn a_release_least_names_an_artifact_of_the_description() {
+    pcm(
+        "at_least = \"release:base\"",
+        "at_least = \"release:recovery\"",
+        "steps[2].params.partitions[1].at_least",
+    );
+}
+
+#[test]
+fn a_least_size_has_its_form() {
+    pcm(
+        "at_least = \"release:base\"",
+        "at_least = \"release\"",
+        "steps[2].params.partitions[1].at_least",
+    );
+    pcm(
+        "at_least = \"release:base\"",
+        "at_least = \"rest-of-disk\"",
+        "steps[2].params.partitions[1].at_least",
+    );
+}
+
+#[test]
+fn a_fixed_size_takes_only_the_release_least() {
+    na(
+        "size = \"3GiB\", at_least = \"release:base\"",
+        "size = \"3GiB\", at_least = \"2GiB\"",
+        "steps[2].params.partitions[0].at_least",
+    );
+}
+
+#[test]
+fn a_sized_partition_is_one_the_step_creates() {
+    na(
+        "{ name = \"system_b\", size",
+        "{ name = \"userdata\", size",
+        "steps[2].params.partitions[0].name",
+    );
 }

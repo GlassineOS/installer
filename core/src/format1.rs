@@ -19,6 +19,9 @@ pub const ID_PATTERN: &str = "^[a-z0-9]+(-[a-z0-9]+)*$";
 pub const PART_REF_PATTERN: &str = "^(role:[a-z-]+|[A-Za-z0-9_.-]+)$";
 /// A size in bytes with a unit, never relative.
 pub const FIXED_SIZE_PATTERN: &str = "^[0-9]+(KiB|MiB|GiB|TiB)$";
+/// The least a new partition may be: a fixed size, or what the release states
+/// for an artifact role (FR-014a, FR-019a).
+pub const LEAST_SIZE_PATTERN: &str = "^([0-9]+(KiB|MiB|GiB|TiB)|release:[a-z]+(-[a-z]+)*)$";
 pub const SIZE_PATTERN: &str = "^([0-9]+(KiB|MiB|GiB|TiB)|rest-of-free-space|rest-of-disk|unknown|after:[A-Za-z0-9_.-]+)$";
 pub const RECORD_PATTERN: &str = "^([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[0-9]+|https://docs\\.glassine\\.org/[A-Za-z0-9_./#-]*)$";
 pub const USB_ID_PATTERN: &str = "^[0-9a-f]{4}$";
@@ -551,6 +554,7 @@ fn condition(doc: &str, with_mode: bool, identity: bool) -> Shape {
 fn params_table(id: &str, params: &[vocab::Param], format: i64) -> (String, Table) {
     let fields = params
         .iter()
+        .filter(|p| p.since <= format)
         .map(|p| Field {
             name: p.name,
             shape: param_shape(p.ty, p.doc, format),
@@ -583,7 +587,11 @@ fn param_shape(ty: ParamType, doc: &str, format: i64) -> Shape {
                 "a partition to create",
                 [
                     vec![
-                        f("name", sp("^[a-z0-9-]+$", "the partition's name (GlassineOS's own)")),
+                        if format >= 2 {
+                            f("name", sp("^[A-Za-z0-9_.-]+$", "the partition's name"))
+                        } else {
+                            f("name", sp("^[a-z0-9-]+$", "the partition's name (GlassineOS's own)"))
+                        },
                         f(
                             "size",
                             Shape::IntOrStr {
@@ -596,8 +604,8 @@ fn param_shape(ty: ParamType, doc: &str, format: i64) -> Shape {
                         vec![opt(
                             "at_least",
                             Shape::IntOrStr {
-                                pattern: FIXED_SIZE_PATTERN,
-                                doc: "for a relative size, the least it may be: a disk whose free space can't give it is refused".into(),
+                                pattern: LEAST_SIZE_PATTERN,
+                                doc: "the least it may be: a fixed size (with a relative size only), or `release:<role>`, what the installer's release states for that artifact role (FR-019a); a disk whose free space can't give it, or a fixed size below it, is refused".into(),
                             },
                         )]
                     } else {
@@ -1029,7 +1037,7 @@ pub fn vocabularies_json(format: i64) -> serde_json::Value {
         l.iter()
             .map(|k| {
                 json!({ "id": k.id, "doc": k.doc, "backends": k.backends, "modes": k.modes,
-                    "params": k.params.iter().map(|p| json!({ "name": p.name, "type": format!("{:?}", p.ty), "required": p.required, "doc": p.doc })).collect::<Vec<_>>() })
+                    "params": k.params.iter().filter(|p| p.since <= format).map(|p| json!({ "name": p.name, "type": format!("{:?}", p.ty), "required": p.required, "doc": p.doc })).collect::<Vec<_>>() })
             })
             .collect::<Vec<_>>()
     };

@@ -188,9 +188,19 @@
     "disk": {
       "disk": 0,
       "free": 537621692416,
-      "needs": 9663676416,
-      "lacks": 0
-    }
+      "needs": 1073741824,
+      "lacks": 0,
+      "exact": false
+    },
+    "minimums": [
+      {
+        "partition": "glassine-system",
+        "role": "base",
+        "at_least": null,
+        "size": null,
+        "lacks": 0
+      }
+    ]
   },
   "capabilities": [
     {

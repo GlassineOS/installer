@@ -88,6 +88,14 @@ export const MODE = {
   installer: 'The installer',
 };
 
+// The partition an artifact role goes to, for a least size the release states
+// (plan space.minimums[].role; vocab ARTIFACT_ROLES).
+export const PARTITION_FOR = {
+  base: 'GlassineOS’s system partition',
+  kernel: 'GlassineOS’s boot partition',
+  recovery: 'the recovery partition',
+};
+
 // Operating systems found (report systems[].kind; plan systems[].system is "system N (kind)").
 export const SYSTEM_KIND = { windows: 'Windows', linux: 'Linux', macos: 'macOS', android: 'Android', other: 'Another system' };
 

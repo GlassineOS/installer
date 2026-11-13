@@ -3,8 +3,9 @@
 # The guest's /init for the PC check in QEMU (tests/qemu/run.py): a live
 # system as the installer finds one. It mounts the firmware's variables
 # read-write (so a write would land), mounts the installer's USB stick
-# read-only and runs glassine-install from it, printing the facts, the check
-# and the plans to the serial console between markers. The host hashes the
+# read-only and runs glassine-install from it, with the release manifest the
+# stick holds, printing the facts, the check and the plans to the serial
+# console between markers. The host hashes the
 # disks and the variable store at @@READY and @@DONE; the guest waits for a
 # line from the host at each. glassine.mode=control writes one byte to a
 # disk and one variable instead, so the host can see a write is caught.
@@ -46,6 +47,7 @@ done
 part=$(ls -d /sys/block/"$stick"/"$stick"* 2>/dev/null | head -n 1)
 mount -t vfat -o ro "/dev/${part##*/}" /media/stick || echo "@@FAIL the stick didn't mount"
 B=/media/stick/glassine-install
+R=/media/stick/release.json
 
 echo "@@READY"
 read -r _
@@ -69,11 +71,11 @@ if [ "$mode" = control ]; then
 	echo "@@WROTE $target"
 else
 	emit facts "$B" inspect --pc --json
-	emit check "$B" check --pc --json
-	emit plan "$B" plan --dry-run --pc --developer --json
+	emit check "$B" check --pc --release "$R" --json
+	emit plan "$B" plan --dry-run --pc --release "$R" --developer --json
 	n=0
 	for d in $(disks); do
-		emit "plan-disk$n" "$B" plan --dry-run --pc --developer --choice "target-disk=disk$n" --json
+		emit "plan-disk$n" "$B" plan --dry-run --pc --release "$R" --developer --choice "target-disk=disk$n" --json
 		n=$((n + 1))
 	done
 	sync
