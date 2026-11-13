@@ -7,13 +7,21 @@
 //   description(id)           -> { id, name, backend, texts } of a device description, or null
 //   connect(kind)             -> the machine "connecting" gives at once, or null (a live device)
 //   connectDevice()           -> a live device: the browser's chooser, then the core's inspect
+//   device()                  -> the live device's session: { machine, state, error }, or null
+//   restart()                 -> restarts the live device in its session (the person's action)
+//   onDevice(fn)              -> calls fn whenever device() changes; returns the unsubscribe
 //
 // Two sources, chosen by the page's address:
 //
 // - Live (the default): the core itself, built for the browser (web/pkg, `make web-pkg`). The
 //   person picks the device in the browser's chooser; the core inspects it over WebUSB (reads
-//   only: getvar, never reboot from here) and gives a facts snapshot, kept in this page's memory
-//   as machine `live-N`. Every check report and plan is the core's answer for those facts and
+//   only: getvar) and gives a facts snapshot, kept in this page's memory as machine `live-N`,
+//   with the fastboot session still open. The one command besides getvar ever sent is
+//   `reboot`, in that session: when the person clicks Restart it, or, best effort, when the
+//   page is closed or reloaded while the session is open (pagehide). The session is kept
+//   because the Note Air's boot loader only answers a fresh start: once it is closed, the page
+//   can't restart the device any more, and it stays in its USB mode until its power button is
+//   held. Every check report and plan is the core's answer for those facts and
 //   the person's choices. The descriptions are the copies the core carries. Nothing is fetched
 //   but the core: the site works without the rest of the repository.
 //
@@ -139,15 +147,77 @@ function failure(e) {
 }
 const call = (f) => { try { return JSON.parse(f()); } catch (e) { throw failure(e); } };
 
+// The live device whose session is open, or was: { machine, conn, state, error }. state:
+//   open        the session is open: Restart it can send `reboot`
+//   restarting  `reboot` was sent, no answer yet
+//   restarted   the device answered OKAY (or the page sent it on pagehide)
+//   failed      the restart got no OKAY (error: why); the session is gone
+//   unplugged   the device went away with the session open; nothing was sent
+//   closed      another device was chosen; nothing was sent
+let current = null;
+const watchers = new Set();
+const changed = () => { for (const f of watchers) f(device()); };
+
+export function device() {
+  return current ? { machine: current.machine, state: current.state, error: current.error } : null;
+}
+
+export function onDevice(fn) {
+  watchers.add(fn);
+  return () => watchers.delete(fn);
+}
+
+// Ends the session without sending anything. A device that is gone is left alone: letting go of
+// its interface would only fail (and the browser has already let go of it).
+function drop(state) {
+  if (!current || current.state !== 'open') return;
+  if (state !== 'unplugged') current.conn.close();
+  current.state = state;
+  changed();
+}
+
+// Sends `reboot` in the open session, once: the session leaves `current` before the core is
+// called, so a second click, or the page closing after it, sends nothing.
+export function restart() {
+  if (!current || current.state !== 'open') return Promise.resolve(device());
+  const got = current;
+  got.state = 'restarting';
+  const sent = got.conn.reboot();
+  changed();
+  return sent.then(
+    () => { got.state = 'restarted'; changed(); return device(); },
+    (e) => { got.state = 'failed'; got.error = failure(e).message; changed(); return device(); },
+  );
+}
+
+const FASTBOOT = (d) => !!d && (d.configurations || []).some((c) => c.interfaces.some((i) => i.alternates.some((a) =>
+  a.interfaceClass === 0xff && a.interfaceSubclass === 0x42 && a.interfaceProtocol === 0x03)));
+
+if (!FIXTURES && typeof navigator !== 'undefined' && navigator.usb) {
+  // A fastboot device unplugged: the session is gone with it (no way to restart it from here).
+  navigator.usb.addEventListener('disconnect', (ev) => { if (FASTBOOT(ev.device)) drop('unplugged'); });
+  // The page closing or reloading with the session open: the last chance to restart the device.
+  // Best effort: the browser may tear the page down before the transfer goes out.
+  addEventListener('pagehide', () => {
+    if (!current || current.state !== 'open') return;
+    current.state = 'restarted';
+    current.conn.reboot().catch(() => {});
+  });
+}
+
 // Asks the browser for the device and inspects it (call from a click: the chooser needs one).
 // Resolves with its machine; rejects with an error whose `kind` is the core's (no-device when
-// the chooser was closed, not-fresh, busy, permission, usb, timeout, device, ...).
+// the chooser was closed, not-fresh, busy, permission, usb, timeout, device, ...). A session
+// still open from an earlier device is closed first (its interface would stay claimed).
 export async function connectDevice() {
   const m = await wasm();
-  let facts;
-  try { facts = await m.inspect(false); } catch (e) { throw failure(e); }
+  drop('closed');
+  let conn;
+  try { conn = await m.inspect(); } catch (e) { throw failure(e); }
   const machine = `live-${++inspected}`;
-  live.set(machine, { facts, report: null });
+  live.set(machine, { facts: conn.facts, report: null });
+  current = { machine, conn, state: 'open', error: null };
+  changed();
   return machine;
 }
 

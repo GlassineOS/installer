@@ -9,6 +9,7 @@
 import { useState } from 'preact/hooks';
 import { html, Admonition, Actions, Page, Owed, CapRow, Caps, Tick, Bang } from '../lib/parts.js';
 import { cap } from '../lib/words.js';
+import { useDevice, DeviceCard } from '../lib/device.js';
 
 function ways(desc) {
   if (!desc) return {};
@@ -54,6 +55,7 @@ const FAILED = {
 function LiveReach({ s, state }) {
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(null);
+  const dev = useDevice(s);
   const st = state === 'notfresh' ? 'notfresh' : 'chooser';
   const choose = async () => {
     setBusy(true); setFailed(null);
@@ -73,6 +75,7 @@ function LiveReach({ s, state }) {
     notfresh: ['The device needs a fresh restart', 'Almost: the installer needs it freshly started into its boot loader’s USB mode.'],
   }[st];
   return html`<${Page} s=${{ ...s, m: null }} step="check" eyebrow="Check · reach the device" title=${T[0]} lead=${T[1]}>
+    <${DeviceCard} s=${s} dev=${dev} offer />
     ${st === 'notfresh' ? html`<${Admonition} kind="warning" seal="G" label="Start it again" title="Not freshly started">
       <p>The device answered, but it wasn’t started freshly into its boot loader’s USB mode. It has to be, for the check. Nothing was changed.</p>
       <p><strong>Way out:</strong> turn it off, start it again into its boot loader’s USB mode, keep it connected, and choose it again. Or stop here: it starts its system when you turn it off and on.</p>

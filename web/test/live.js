@@ -4,7 +4,9 @@
 // make web-site assembles it. The person's path: Start, Connect a device, the browser's chooser,
 // the core's inspect over WebUSB, the check, the plan and its answers. What the core answers is
 // compared with what the core's own tests say for the same facts, and every transfer the page
-// sent is checked: reads only (getvar), never reboot, nothing but GET_DESCRIPTOR on control.
+// sent is checked: reads only (getvar), nothing but GET_DESCRIPTOR on control, and the one
+// other command, `reboot`, only in the session of the inspect, once, after the person's Restart
+// it or the page closing (pagehide); never after the device was unplugged.
 //
 //   node web/test/live.js SITE_DIR
 'use strict';
@@ -29,8 +31,9 @@ function answers(fixture) {
   return out;
 }
 const BROWSER = { platform: 'browser', connections: ['usb-web'] };
-// The pkg's exports: the three records and the descriptions' source, nothing that writes.
-const EXPORTS = ['check', 'default', 'description', 'initSync', 'inspect', 'plan'];
+// The pkg's exports: the three records, the descriptions' source and the inspect's Connection
+// (its facts, and reboot in its session), nothing that writes.
+const EXPORTS = ['Connection', 'check', 'default', 'description', 'initSync', 'inspect', 'plan'];
 // What the site may load: its own files. Never the repository's records or descriptions.
 const FORBIDDEN = /^(core|devices|fixtures|web|test)\//;
 
@@ -78,6 +81,13 @@ async function main() {
     return r[f](...a);
   }, fn, args);
 
+  // The ids of the action bar's first buttons (those that have one), in order.
+  const buttons = (page) => page.$$eval('.ins-actions .il-btn', (xs) => xs.map((x) => x.id).filter(Boolean).slice(0, 2));
+  const outs = async (page) => (await usbLog(page)).outs.length;
+  const pagehide = (page) => page.evaluate(() => { window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: false })); });
+  // Lets queued work run (the core's futures, the fake's timers), for a check that nothing came.
+  const settle = (page, ms = 500) => page.evaluate((t) => new Promise((r) => setTimeout(r, t)), ms);
+
   // From Start to the check, the way a person goes: two clicks in the page (the chooser is
   // the fake's, and answers at once).
   async function connect(page) {
@@ -89,9 +99,11 @@ async function main() {
   }
 
   // Every transfer is the opening, the warm-up's dummy or one readable getvar NUL-padded to
-  // the one length; only GET_DESCRIPTOR on control; no reboot, no other request of any kind.
+  // the one length, and `reboot` exactly `reboots` times (0 or 1), last; the simulated device
+  // decoded each as it was meant (its length bug included); only GET_DESCRIPTOR on control;
+  // no other request of any kind.
   const ALLOWED_CALLS = ['requestDevice', 'open', 'controlTransferIn', 'claimInterface', 'releaseInterface', 'close'];
-  function readOnly(log) {
+  function readOnly(log, { reboots = 0 } = {}) {
     assert.ok(log.outs.length >= 1, 'nothing was sent');
     assert.strictEqual(log.outs[0].cmd, 'getvar:product', 'the opening');
     assert.strictEqual(log.outs[0].len, 'getvar:product'.length, 'the opening is plain');
@@ -101,10 +113,13 @@ async function main() {
       if (i === 1) { assert.ok(t.allX && t.len === LEN, 'the warm-up dummy'); continue; }
       assert.strictEqual(t.len, LEN, `transfer ${i} (${t.cmd}) is not ${LEN} bytes`);
       assert.ok(t.nulPadded, `transfer ${i} is padded with something other than NUL`);
+      assert.strictEqual(t.seen, t.cmd, `the device read transfer ${i} as ${t.seen}, not ${t.cmd}`);
+      if (t.cmd === 'reboot') { assert.strictEqual(i, log.outs.length - 1, 'something was sent after the reboot'); continue; }
       assert.match(t.cmd, /^getvar:[A-Za-z0-9_.-]+(:[A-Za-z0-9_.-]+)?$/, `transfer ${i} is not one read: ${t.cmd}`);
       assert.notStrictEqual(t.cmd, 'getvar:all');
       assert.ok(!/serial/.test(t.cmd), `reads ${t.cmd}`);
     }
+    assert.strictEqual(log.outs.filter((t) => t.cmd === 'reboot').length, reboots, 'reboots sent');
     for (const c of log.calls) assert.ok(ALLOWED_CALLS.includes(c.name), `the page called ${c.name}`);
     for (const c of log.calls.filter((x) => x.name === 'controlTransferIn')) {
       const [s] = c.args;
@@ -169,6 +184,10 @@ async function main() {
     for (const [k, v] of Object.entries(machine.fastboot.values)) assert.strictEqual(v, k in wantMachine.fastboot.values ? wantMachine.fastboot.values[k] : null, k);
     for (const k of Object.keys(wantMachine.fastboot.values)) assert.ok(k in machine.fastboot.values, `${k} not read`);
     assert.match(await text(page), /can run GlassineOS|^This is /m);
+    // The session stays open: Restart it comes first, beside the plan (which stays the main way).
+    assert.deepStrictEqual(await buttons(page), ['restart', 'plan']);
+    assert.ok(!(await page.$eval('#restart', (x) => x.classList.contains('ins-primary'))));
+    assert.match(await text(page), /left in its boot loader’s USB mode/);
     const sent = (await usbLog(page)).outs.length;
     await page.click('#plan');
     await rendered(page, 'plan');
@@ -193,6 +212,124 @@ async function main() {
     assert.strictEqual(log.requested, 1);
     readOnly(log);
     assert.deepStrictEqual(problems, []);
+    await page.close();
+  });
+
+  await test('Restart it after the check: one padded reboot in the same session, nothing else', async () => {
+    const { page, problems } = await open({ vars: answers('noteair-recorded-glassine-fastboot') });
+    await connect(page);
+    await rendered(page, 'check');
+    // The device has to be reached in another mode: Restart it is the first and the main action.
+    assert.deepStrictEqual(await buttons(page), ['restart', 'reach-again']);
+    assert.ok(await page.$eval('#restart', (x) => x.classList.contains('ins-primary')));
+    assert.ok(!(await page.$eval('#reach-again', (x) => x.classList.contains('ins-primary'))));
+    const way = await page.$eval('#left-in-usb-mode', (x) => x.textContent);
+    assert.match(way, /left in its boot loader’s USB mode/);
+    assert.match(way, /Closing or reloading this page tries to restart it/);
+    const before = await usbLog(page);
+    readOnly(before);
+    const n = before.outs.length, calls = before.calls.length;
+    await page.click('#restart');
+    await page.waitForSelector('#device-restarted', { timeout: 15000 });
+    let log = await usbLog(page);
+    assert.strictEqual(log.outs.length, n + 1, 'Restart it sent more or less than one transfer');
+    const last = log.outs[n];
+    assert.deepStrictEqual([last.cmd, last.seen, last.len, last.nulPadded], ['reboot', 'reboot', LEN, true]);
+    readOnly(log, { reboots: 1 });
+    // Not a new session: no new chooser, open or claim; only the interface let go afterwards.
+    assert.deepStrictEqual(log.calls.slice(calls).map((c) => c.name).filter((x) => x !== 'releaseInterface'), []);
+    assert.strictEqual(log.requested, 1);
+    assert.strictEqual(await page.$('#restart'), null, 'Restart it is still offered');
+    // The device leaves the bus; closing the page now sends nothing.
+    await page.waitForFunction(() => window.__fakeUsb.gone, { timeout: 5000 });
+    await pagehide(page);
+    await settle(page);
+    log = await usbLog(page);
+    assert.strictEqual(log.outs.length, n + 1, 'something was sent after the restart');
+    assert.ok(!log.calls.some((c) => c.name === 'transferOut-unplugged'));
+    assert.ok(await page.$('#device-restarted'));
+    // Stop here: Start says what became of it, and offers no restart.
+    await page.click('#stop');
+    await rendered(page, 'start');
+    assert.ok(await page.$('#device-restarted'));
+    assert.strictEqual(await page.$('#restart'), null);
+    assert.deepStrictEqual(problems, []);
+    await page.close();
+  });
+
+  await test('Stop here and Reach it again with the session open: Restart it comes first there too', async () => {
+    const { page, problems } = await open({ vars: answers('noteair-recorded-glassine-fastboot') });
+    await connect(page);
+    await rendered(page, 'check');
+    const n = await outs(page);
+    await page.click('#stop');
+    await rendered(page, 'start');
+    assert.ok(await page.$('#device-open #restart'), 'Start offers no restart');
+    assert.match(await page.$eval('#device-open', (x) => x.textContent), /left in its USB mode.*Closing or reloading this page tries to restart it/s);
+    await go(page, '#/check?machine=live-1', 'check');
+    await page.click('#reach-again');
+    await rendered(page, 'reach');
+    assert.ok(await page.$('#device-open #restart'), 'Reach offers no restart');
+    assert.strictEqual(await outs(page), n, 'leaving the check sent something');
+    await page.click('#device-open #restart');
+    await page.waitForSelector('#device-restarted', { timeout: 15000 });
+    const log = await usbLog(page);
+    assert.strictEqual(log.outs.length, n + 1);
+    readOnly(log, { reboots: 1 });
+    assert.deepStrictEqual(problems, []);
+    await page.close();
+  });
+
+  await test('unplugged after the check: the session ends, nothing is sent, the page says how to get out', async () => {
+    const { page, problems } = await open({ vars: answers('noteair-recorded-glassine-fastboot') });
+    await connect(page);
+    await rendered(page, 'check');
+    const n = await outs(page);
+    await page.evaluate(() => window.__fakeUsb.unplug());
+    await page.waitForSelector('#device-unplugged', { timeout: 15000 });
+    assert.match(await text(page), /Hold its power button/);
+    assert.strictEqual(await page.$('#restart'), null, 'Restart it offered for a device that is gone');
+    assert.strictEqual(await page.$('#left-in-usb-mode'), null);
+    // Closing the page now tries nothing either.
+    await pagehide(page);
+    await settle(page);
+    const log = await usbLog(page);
+    assert.strictEqual(log.outs.length, n, 'something was sent after the unplug');
+    assert.ok(!log.calls.some((c) => c.name === 'transferOut-unplugged'), 'the page tried to send to the unplugged device');
+    readOnly(log);
+    assert.deepStrictEqual(problems, []);
+    await page.close();
+  });
+
+  await test('the page closed with the session open: pagehide sends one padded reboot, once', async () => {
+    const { page, problems } = await open({ vars: answers('noteair-stock-fastboot') });
+    await connect(page);
+    await rendered(page, 'check');
+    const n = await outs(page);
+    await pagehide(page);
+    await page.waitForFunction((k) => window.__fakeUsb.outs.length > k, { timeout: 15000 }, n);
+    await pagehide(page);
+    await settle(page);
+    const log = await usbLog(page);
+    assert.strictEqual(log.outs.length, n + 1, 'pagehide sent more or less than one transfer');
+    readOnly(log, { reboots: 1 });
+    assert.deepStrictEqual(problems, []);
+    await page.close();
+  });
+
+  await test('the page reloaded with the session open: the reboot goes out before it is gone', async () => {
+    const { page } = await open({ vars: answers('noteair-stock-fastboot') });
+    await connect(page);
+    await rendered(page, 'check');
+    const n = await outs(page);
+    await page.reload({ waitUntil: 'load' });
+    // What the fake recorded as each transfer was made, kept across the reload.
+    const kept = await page.evaluate(() => JSON.parse(sessionStorage.getItem('fakeUsb.outs') || '[]'));
+    assert.strictEqual(kept.length, n + 1, `${kept.length - n} transfers on reload`);
+    const last = kept[kept.length - 1];
+    assert.deepStrictEqual([last.cmd, last.seen, last.len, last.nulPadded], ['reboot', 'reboot', LEN, true]);
+    assert.strictEqual(kept.filter((t) => t.cmd === 'reboot').length, 1);
+    assert.ok(kept.slice(2, -1).every((t) => /^getvar:/.test(t.cmd) && t.seen === t.cmd), 'not reads before the reboot');
     await page.close();
   });
 
