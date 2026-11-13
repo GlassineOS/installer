@@ -151,7 +151,8 @@ export function Check({ s }) {
   // The live device's session, still open after the check: Restart it comes first, and the way
   // out says what happens without it.
   const dev = got && got.machine === s.machine ? got : null, open = isOpen(dev);
-  const out = variant === 'supported' ? 'Stop here: a dry run ends with this report. Nothing was changed; ' + unchanged : `Close the installer${pc ? '' : ' and unplug ' + s.m.the}. Nothing was changed.`;
+  const out = variant === 'supported' ? 'Stop here: a dry run ends with this report. Nothing was changed; ' + (open ? 'restart it, and ' + unchanged : unchanged)
+    : `${open ? 'Restart it, then close' : 'Close'} the installer${pc ? '' : ' and unplug ' + s.m.the}. Nothing was changed.`;
   const buttons = variant === 'supported'
     ? [{ label: 'Make the plan', href: s.link('plan'), primary: true, id: 'plan' }, { label: 'Save this report', onClick: () => saveJson('glassine-check-report.json', r) }, { label: 'Stop here', href: s.link('start'), push: true }]
     : variant === 'mode' ? [{ label: 'Reach it again', href: s.link('reach'), primary: !open, id: 'reach-again' }, { label: 'Stop here', href: s.link('start'), push: true, id: 'stop' }]

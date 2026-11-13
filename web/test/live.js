@@ -270,12 +270,36 @@ async function main() {
     await page.click('#reach-again');
     await rendered(page, 'reach');
     assert.ok(await page.$('#device-open #restart'), 'Reach offers no restart');
+    // It can't be read again before the restart: choosing would let go of its session.
+    assert.ok(await page.$eval('#choose', (x) => x.disabled), 'Choose the device is offered with the session open');
     assert.strictEqual(await outs(page), n, 'leaving the check sent something');
     await page.click('#device-open #restart');
     await page.waitForSelector('#device-restarted', { timeout: 15000 });
+    assert.ok(!(await page.$eval('#choose', (x) => x.disabled)), 'Choose the device stays off after the restart');
+    assert.strictEqual((await usbLog(page)).requested, 1);
     const log = await usbLog(page);
     assert.strictEqual(log.outs.length, n + 1);
     readOnly(log, { reboots: 1 });
+    assert.deepStrictEqual(problems, []);
+    await page.close();
+  });
+
+  await test('a boot loader that restarts without answering: the page says it is restarting', async () => {
+    const { page, problems } = await open({ vars: answers('noteair-recorded-glassine-fastboot'), silentReboot: true });
+    await connect(page);
+    await rendered(page, 'check');
+    const n = await outs(page);
+    await page.click('#restart');
+    await page.waitForSelector('#device-restarted', { timeout: 15000 });
+    // The core's wait for the answer ends when the device leaves; it must not turn into a failure.
+    await page.waitForFunction(() => window.__fakeUsb.calls.some((c) => c.name === 'releaseInterface' && window.__fakeUsb.gone), { timeout: 15000 });
+    await settle(page);
+    assert.strictEqual(await page.$('#device-failed'), null);
+    assert.ok(await page.$('#device-restarted'));
+    const log = await usbLog(page);
+    assert.strictEqual(log.outs.length, n + 1);
+    assert.strictEqual(log.calls.filter((c) => c.name === 'transferIn-unanswered').length, 1, 'the wait for the reboot’s answer');
+    readOnly({ ...log, calls: log.calls.filter((c) => c.name !== 'transferIn-unanswered') }, { reboots: 1 });
     assert.deepStrictEqual(problems, []);
     await page.close();
   });

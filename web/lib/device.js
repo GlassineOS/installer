@@ -21,7 +21,7 @@ export const isOpen = (dev) => !!dev && dev.state === 'open';
 export const restartButton = (s, dev, primary = true) => ({ label: 'Restart it', onClick: () => s.restart(), primary, id: 'restart', disabled: !isOpen(dev) });
 
 // The way-out line while the session is open.
-export const LEFT_IN_USB_MODE = 'Restart it first: otherwise it is left in its boot loader’s USB mode, and only holding its power button gets it out. Closing or reloading this page tries to restart it too, but may not reach it.';
+export const LEFT_IN_USB_MODE = 'Without a restart it is left in its boot loader’s USB mode, and only holding its power button gets it out. Closing or reloading this page tries to restart it too, but may not reach it.';
 
 // What became of the session; with `offer`, the open session too, with its own button (the
 // screens whose actions are about something else: Start, Reach).
@@ -31,7 +31,7 @@ export function DeviceCard({ s, dev, offer }) {
   if (st === 'open') {
     if (!offer) return null;
     return html`<${Admonition} kind="warning" seal="G" label="Still connected" title="The device from the check is still in its boot loader’s USB mode" id="device-open">
-      <p>Restart it, and it starts its system again. Otherwise it is left in its USB mode, and only holding its power button gets it out. Closing or reloading this page tries to restart it too, but may not reach it. Choosing a device again lets go of it without restarting it.</p>
+      <p>Restart it, and it starts its system again. Otherwise it is left in its USB mode, and only holding its power button gets it out. Closing or reloading this page tries to restart it too, but may not reach it. It can’t be read again before it is restarted.</p>
       <div class="ins-buttons"><button type="button" class="il-btn ins-primary" id="restart" onClick=${() => s.restart()}>Restart it</button></div>
     </${Admonition}>`;
   }

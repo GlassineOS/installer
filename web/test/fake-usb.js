@@ -14,12 +14,13 @@
 //           (seen: the command the simulated device decoded from it, under its length bug)
 //   calls:  every other call on the device or navigator.usb, by name, with its arguments
 //   unplug(): the device goes away: a disconnect event, and every later call on it fails
-// A device that answered `reboot` goes away the same way shortly after. Every OUT transfer is
+// A device that answered `reboot` goes away the same way shortly after (with silentReboot it
+// goes without answering, as a boot loader may). A transfer still waiting fails when it goes. Every OUT transfer is
 // also appended, as it is made, to sessionStorage['fakeUsb.outs'], which outlives a reload of
 // the page (the pagehide test reads it there).
 'use strict';
 
-function installFakeUsb({ vars, warm = false, cancel = false, serial = 'SECRET-UNIT-1234' }) {
+function installFakeUsb({ vars, warm = false, cancel = false, silentReboot = false, serial = 'SECRET-UNIT-1234' }) {
   const log = { outs: [], calls: [], requested: 0, gone: false };
   window.__fakeUsb = log;
   const keep = (o) => {
@@ -29,6 +30,7 @@ function installFakeUsb({ vars, warm = false, cancel = false, serial = 'SECRET-U
     } catch { /* no storage in this document */ }
   };
   const listeners = { connect: [], disconnect: [] };
+  const waiting = [];
   const enc = new TextEncoder(), dec = new TextDecoder();
   const sim = { n: warm ? 5 : 0, prev: warm ? 30 : 0, cmdbuf: new Uint8Array(64), replies: [] };
   if (warm) sim.cmdbuf.set(enc.encode('getvar:max-download-size'));
@@ -69,6 +71,7 @@ function installFakeUsb({ vars, warm = false, cancel = false, serial = 'SECRET-U
   const unplug = () => {
     if (log.gone) return;
     log.gone = true; iface.claimed = false; device.opened = false;
+    for (const fail of waiting.splice(0)) fail(new DOMException('The device was disconnected.', 'NotFoundError'));
     const ev = { type: 'disconnect', device };
     for (const f of listeners.disconnect) f(ev);
     if (typeof usb.ondisconnect === 'function') usb.ondisconnect(ev);
@@ -110,15 +113,16 @@ function installFakeUsb({ vars, warm = false, cancel = false, serial = 'SECRET-U
       const o = { endpoint: n, len: d.length, cmd: dec.decode(d.subarray(0, Math.min(end, 64))), nulPadded: d.subarray(end).every((b) => b === 0), allX: d.every((b) => b === 0x78), seen: c };
       log.outs.push(o); keep(o);
       sim.n += 1; sim.prev = d.length;
-      sim.replies.push(enc.encode(answer(c)));
-      // It restarts: off the bus a moment after its answer.
-      if (c === 'reboot') setTimeout(unplug, 300);
+      // It restarts: off the bus a moment after its answer (or, silently, without one).
+      if (c === 'reboot' && silentReboot) setTimeout(unplug, 300);
+      else sim.replies.push(enc.encode(answer(c)));
+      if (c === 'reboot' && !silentReboot) setTimeout(unplug, 300);
       return { status: 'ok', bytesWritten: d.length };
     },
     async transferIn(n, length) {
       if (log.gone) return gone();
       const r = sim.replies.shift();
-      if (!r) { called('transferIn-unanswered', [n, length]); return never(); }
+      if (!r) { called('transferIn-unanswered', [n, length]); return new Promise((_, fail) => waiting.push(fail)); }
       return { status: 'ok', data: view(r) };
     },
   };

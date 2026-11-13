@@ -9,7 +9,7 @@
 import { useState } from 'preact/hooks';
 import { html, Admonition, Actions, Page, Owed, CapRow, Caps, Tick, Bang } from '../lib/parts.js';
 import { cap } from '../lib/words.js';
-import { useDevice, DeviceCard } from '../lib/device.js';
+import { useDevice, isOpen, DeviceCard } from '../lib/device.js';
 
 function ways(desc) {
   if (!desc) return {};
@@ -91,7 +91,7 @@ function LiveReach({ s, state }) {
     </${Admonition}>` : null}
     <${Actions} next="After you choose, the check starts. It only reads."
       out="Stop here and unplug the device. Nothing has changed; it starts its system when you turn it off and on."
-      buttons=${[{ label: st === 'notfresh' || failed ? 'Choose the device again' : 'Choose the device', onClick: choose, primary: true, id: 'choose', disabled: busy },
+      buttons=${[{ label: st === 'notfresh' || failed ? 'Choose the device again' : 'Choose the device', onClick: choose, primary: true, id: 'choose', disabled: busy || isOpen(dev) },
         { label: 'Stop here', href: s.link('start'), push: true }]} />
   </${Page}>`;
 }

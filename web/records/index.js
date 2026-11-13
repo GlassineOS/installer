@@ -167,11 +167,10 @@ export function onDevice(fn) {
   return () => watchers.delete(fn);
 }
 
-// Ends the session without sending anything. A device that is gone is left alone: letting go of
-// its interface would only fail (and the browser has already let go of it).
+// Ends the session without sending anything.
 function drop(state) {
   if (!current || current.state !== 'open') return;
-  if (state !== 'unplugged') current.conn.close();
+  current.conn.close();
   current.state = state;
   changed();
 }
@@ -186,7 +185,11 @@ export function restart() {
   changed();
   return sent.then(
     () => { got.state = 'restarted'; changed(); return device(); },
-    (e) => { got.state = 'failed'; got.error = failure(e).message; changed(); return device(); },
+    (e) => {
+      // Gone from the bus before its answer was read: it is restarting (the disconnect said so).
+      if (got.state !== 'restarted') { got.state = 'failed'; got.error = failure(e).message; changed(); }
+      return device();
+    },
   );
 }
 
@@ -195,7 +198,11 @@ const FASTBOOT = (d) => !!d && (d.configurations || []).some((c) => c.interfaces
 
 if (!FIXTURES && typeof navigator !== 'undefined' && navigator.usb) {
   // A fastboot device unplugged: the session is gone with it (no way to restart it from here).
-  navigator.usb.addEventListener('disconnect', (ev) => { if (FASTBOOT(ev.device)) drop('unplugged'); });
+  // One that leaves while its restart waits for the answer is restarting.
+  navigator.usb.addEventListener('disconnect', (ev) => {
+    if (!FASTBOOT(ev.device) || !current) return;
+    if (current.state === 'restarting') { current.state = 'restarted'; changed(); } else drop('unplugged');
+  });
   // The page closing or reloading with the session open: the last chance to restart the device.
   // Best effort: the browser may tear the page down before the transfer goes out.
   addEventListener('pagehide', () => {
