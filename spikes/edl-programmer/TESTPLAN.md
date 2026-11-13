@@ -229,3 +229,45 @@ morning layout (XBL_SEC at file 0x8000). New shas:
 
 Earlier run-3 shas (p `5708b42b`, m `f4962767`, k `1d23c792`, s `06e87d48`, …) are VOID: built
 before the layout fix, they all hang at the LOAD1 wall (RESEARCH §8.7).
+
+### Device run 3 VALIDATION (session 68): the layout fix WORKS
+
+Rebuilt E (bd5a0489) completed the Sahara handshake: LOAD1 read to file 0x7680, XBL_SEC read
+at 0x8000, END_IMAGE_TX 0, DONE, DONE_RESP complete ("10 reads, 24728 bytes, done Complete").
+The layout fix is confirmed; our code reaches the hand-over again.
+
+NOTE: rebuilt E (unmasked spin, `b .`) reset at T0+7.562 s, not the 4 ms the morning E/D/F
+showed — same XBL_SEC bytes, only LOAD1 content differs. So 4 ms vs 7.56 s is NOT simply
+mask-dependent; 7.56 s looks like a FIXED external boot-ROM timeout, with a faster interrupt
+path that sometimes wins (morning E/D/F). This bears on B's 7.56 s (now reopened): run U + G.
+
+### Device run 3 results after the layout fix (session 68) — valid runs
+
+All three completed the Sahara handshake (END_IMAGE_TX, DONE, DONE_RESP complete): the layout
+fix holds. The device auto-reset to a fresh 9008 after each, so runs chained with no power
+hold.
+
+| image | XBL_SEC | reset | record? |
+|---|---|---|---|
+| E (bd5a0489) unmasked spin | `b .` | T0+7.562 s | n/a |
+| G (ec280c6d) mask + spin | `msr daifset; b .` | T0+0.004 s | n/a |
+| S (8b5e5f9c) trampoline + fixed main | `ldr;ldr;br _start` | T0+0.004 s (x2, consistent) | NONE |
+
+Reset-timing table across ALL valid runs is self-contradictory on the mask:
+  morning no-mask (E/D/F) = 4 ms, morning mask+main (B) = 7.56 s;
+  evening no-mask (E) = 7.56 s, evening mask (G, S) = 4 ms.
+=> 4 ms vs 7.56 s is NOT caused by the interrupt mask; it is a host/device interaction (likely
+a race on the client's first post-DONE_RESP bulk-IN poll vs an internal timeout), not our code.
+B's 7.56 s is therefore NOT explained by its own code OR cleanly by an external timer; it is one
+sample of the same racy reset. §8.3 stays open and the timing is not a reliable signal channel.
+
+KEY RESULT: the fixed status image S hands over to main (our code runs) but the SoC resets at
+~4 ms, consistently, before main can emit the GLSNPRG0 record. New wall: keep the device alive
+long enough (or emit the record fast enough) to get bytes out. The ~4 ms reset survives the
+interrupt mask (S and G both mask), so it is not an IRQ/SError our DAIF can block — it is an
+external reset (boot-ROM watchdog, or the host tearing the link down on the first failed poll).
+
+Directions (host work, to discuss): (a) change the client to NOT poll bulk-IN immediately after
+DONE_RESP (test whether the poll triggers the reset, giving main time); (b) have main reuse the
+boot ROM's already-enumerated bulk-IN endpoint and queue a TRB immediately, emitting the record
+in <4 ms instead of re-initialising DWC3; (c) find and pet/disable the boot-ROM watchdog.
