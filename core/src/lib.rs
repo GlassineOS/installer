@@ -19,6 +19,7 @@ pub mod inspect;
 pub mod lock;
 pub mod pcfacts;
 pub mod plan;
+pub mod ram_backup;
 pub mod recognize;
 pub mod report;
 pub mod shape;

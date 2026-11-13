@@ -178,6 +178,13 @@ fn completed(status: Result<(), TransferError>, what: &str) -> Result<(), FbErro
 }
 
 impl UsbTransport {
+    /// Changes the bound on every single transfer: the RAM environment's
+    /// device-side hashes may take longer than a getvar's
+    /// [`TRANSFER_TIMEOUT`] on a slow disk.
+    pub fn set_timeout(&mut self, timeout: Duration) {
+        self.timeout = timeout;
+    }
+
     fn dead() -> FbError {
         FbError::Usb("the connection was closed after a timeout".into())
     }

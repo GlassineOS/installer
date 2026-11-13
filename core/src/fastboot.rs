@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-//! The fastboot protocol, read-only: the reply parser, the transport an edge
-//! supplies, the framings of FR-011 and a session that only sends `getvar`
-//! and `reboot`. No USB and no clocks here: the transport bounds every wait
-//! and answers [`FbError::Timeout`] when one runs out.
+//! The fastboot protocol: the reply parser, the transport an edge supplies,
+//! the framings of FR-011 and a session that sends `getvar` and `reboot`. No
+//! USB and no clocks here: the transport bounds every wait and answers
+//! [`FbError::Timeout`] when one runs out.
 //!
-//! `download`, `flash`, `boot` and `erase` don't exist in this module yet;
-//! they come with the install steps and their write-failure tests.
+//! One more pair exists only inside the crate: `download` + `boot` of a boot
+//! image, for [`crate::ram_backup`] alone (the RAM environment of the
+//! backup). `flash` and `erase` don't exist yet; they come with the install
+//! steps and their write-failure tests.
 
 use std::fmt;
 
@@ -264,6 +266,47 @@ impl<T: Transport> Session<T> {
         match self.finish().await? {
             Some(_) => Ok(()),
             None => Err(FbError::Fail("reboot".into())),
+        }
+    }
+
+    /// `download` of `image`, then `boot`: the boot loader starts the image
+    /// from memory. Only [`crate::ram_backup`] calls this; no public session
+    /// sends either command. Under equal-length framing the image is
+    /// NUL-padded to a whole number of transfers, each one exactly the
+    /// framing's length, and the download announces the padded size.
+    pub(crate) async fn download_and_boot(&mut self, image: &[u8]) -> Result<(), FbError> {
+        let (chunk, size) = match self.framing {
+            Framing::Plain => (1 << 20, image.len()),
+            Framing::EqualLength { len } => (len, image.len().div_ceil(len) * len),
+        };
+        let size32 = u32::try_from(size).map_err(|_| FbError::Refused(format!("a download of {size} bytes")))?;
+        self.command(&format!("download:{size32:08x}")).await?;
+        loop {
+            match parse_reply(&self.t.recv().await?)? {
+                Reply::Data(n) if n == size32 => break,
+                Reply::Data(n) => return Err(FbError::Fail(format!("download: the boot loader takes {n} bytes, not {size32}"))),
+                Reply::Fail(w) => return Err(FbError::Fail(format!("download: {w}"))),
+                Reply::Okay(_) => return Err(FbError::Malformed(b"OKAY before the download's data".to_vec())),
+                Reply::Info(_) | Reply::Text(_) => {}
+            }
+        }
+        let mut buf = vec![0u8; chunk];
+        let mut off = 0;
+        while off < size {
+            let n = chunk.min(size - off);
+            let have = image.len().saturating_sub(off).min(n);
+            buf[..have].copy_from_slice(&image[off..off + have]);
+            buf[have..n].fill(0);
+            self.t.send(&buf[..n]).await?;
+            off += n;
+        }
+        if self.finish().await?.is_none() {
+            return Err(FbError::Fail("download: the boot loader refused the data".into()));
+        }
+        self.command("boot").await?;
+        match self.finish().await? {
+            Some(_) => Ok(()),
+            None => Err(FbError::Fail("boot".into())),
         }
     }
 

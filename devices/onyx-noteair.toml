@@ -120,9 +120,10 @@ untried = "seen in development; not a recorded run"
 [[modes]]
 id = "ram"
 kind = "glassine-ram"
+usb = { vendor_id = "1d6b", product_id = "0104", interface = "ff-47-52" }
 can = ["identify", "read"]
 restarts_into = ["fastboot-stock", "android"]
-untried = "the RAM environment isn't built yet"
+untried = "the RAM environment is built (GlassineOS/images, ramenv) and passes its QEMU test, but it hasn't run on the device"
 
 [[modes]]
 id = "android"
