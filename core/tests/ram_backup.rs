@@ -296,16 +296,12 @@ fn setup(fixture: &str) -> (Boot, Edge) {
 }
 
 #[test]
-fn the_glassine_boot_loader_on_two_slots_is_refused_without_acceptance() {
+fn two_slots_without_published_flags_are_refused_without_acceptance() {
     let (mut boot, mut edge) = setup("noteair-recorded-glassine-fastboot");
     let e = run_backup(&mut boot, &mut edge, &ram_image(), false).unwrap_err();
     let BackupError::SlotFlags(why) = &e else { panic!("{e}") };
-    assert!(why.contains("reports 2 slots"), "{why}");
+    assert!(why.contains("reports 2 slots but doesn't publish slot b's flags"), "{why}");
     assert!(why.contains("onyx-noteair mode fastboot says not to boot an image here"), "{why}");
-    assert!(
-        why.contains("clears the active slot's unbootable flag") && why.contains("primary and the backup GPT"),
-        "{why}"
-    );
     only_reads(&boot.commands());
     assert!(!boot.booted.get());
     assert!(edge.asked.is_none() && edge.files.is_empty() && edge.manifest.is_none());
@@ -368,6 +364,57 @@ fn the_ram_environment_is_only_read_and_then_rebooted_normally() {
     assert_eq!(d.ops.last(), Some(&glassine_installer::glassine_read::OP_REBOOT));
     assert_eq!(d.ops.iter().filter(|&&o| o == glassine_installer::glassine_read::OP_REBOOT).count(), 1);
     assert_eq!(d.rebooted, Some(0));
+}
+
+fn with_flags(fixture: &str, successful: &str, unbootable: &str, retry: &str) -> (Boot, Edge) {
+    let (mut boot, edge) = setup(fixture);
+    boot.vars.insert("slot-successful:b".into(), successful.into());
+    boot.vars.insert("slot-unbootable:b".into(), unbootable.into());
+    boot.vars.insert("slot-retry-count:b".into(), retry.into());
+    (boot, edge)
+}
+
+#[test]
+fn a_successful_bootable_slot_boots_without_acceptance() {
+    let (mut boot, mut edge) = with_flags("noteair-recorded-glassine-fastboot", "yes", "no", "7");
+    let done = run_backup(&mut boot, &mut edge, &ram_image(), false).unwrap();
+    assert!(done.prepared.slot_flags.is_none());
+    assert!(!edge.notes.iter().any(|n| n.starts_with("accepted:")));
+    let cmds = boot.commands();
+    for v in ["slot-successful:b", "slot-unbootable:b", "slot-retry-count:b"] {
+        assert!(cmds.contains(&format!("getvar:{v}")), "{v} read");
+    }
+    let k = cmds.iter().position(|c| c.starts_with("download:")).unwrap();
+    only_reads(&cmds[..k]);
+    assert_eq!(edge.files.len(), 3);
+}
+
+#[test]
+fn an_unbootable_slot_is_refused_and_the_cleared_bit_named() {
+    let (mut boot, mut edge) = with_flags("noteair-recorded-glassine-fastboot", "yes", "yes", "7");
+    let e = run_backup(&mut boot, &mut edge, &ram_image(), false).unwrap_err();
+    let BackupError::SlotFlags(why) = &e else { panic!("{e}") };
+    assert!(why.contains("slot b is marked unbootable: booting an image clears that bit"), "{why}");
+    only_reads(&boot.commands());
+}
+
+#[test]
+fn a_slot_not_marked_successful_is_refused() {
+    let (mut boot, mut edge) = with_flags("noteair-recorded-glassine-fastboot", "no", "no", "3");
+    let e = run_backup(&mut boot, &mut edge, &ram_image(), false).unwrap_err();
+    let BackupError::SlotFlags(why) = &e else { panic!("{e}") };
+    assert!(why.contains("isn't marked successful (retry count 3)"), "{why}");
+    assert!(why.contains("an image from fastboot skips that"), "{why}");
+    only_reads(&boot.commands());
+}
+
+#[test]
+fn a_slot_without_retries_left_is_refused_with_the_fallback_named() {
+    let (mut boot, mut edge) = with_flags("noteair-recorded-glassine-fastboot", "no", "no", "0");
+    let e = run_backup(&mut boot, &mut edge, &ram_image(), false).unwrap_err();
+    let BackupError::SlotFlags(why) = &e else { panic!("{e}") };
+    assert!(why.contains("no retries left") && why.contains("falls back to the other slot"), "{why}");
+    only_reads(&boot.commands());
 }
 
 #[test]

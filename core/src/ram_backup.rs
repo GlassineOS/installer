@@ -9,8 +9,10 @@
 //! 1. A fresh inspect of the boot loader, in the framing its description
 //!    tells ([`inspect::inspect_open`]).
 //! 2. The RAM environment's image is downloaded and booted. On a layout with
-//!    two slots, or where the description says booting an image changes the
-//!    slot flags, only when the caller accepted that ([`BackupOptions`]).
+//!    two slots the active slot's flags are read first: booting changes
+//!    nothing when the slot is marked successful and not unbootable; any
+//!    other state (or flags the boot loader doesn't publish) needs the
+//!    caller's acceptance ([`BackupOptions`], [`slot_flag_changes`]).
 //! 3. The RAM environment comes up as its own USB device: the description's
 //!    `glassine-ram` mode names its ids.
 //! 4. Every disk it lists is read whole into a stored copy, each chunk
@@ -194,18 +196,98 @@ pub fn download_size(len: u64, framing: Framing) -> u64 {
     }
 }
 
-/// What booting an image changes on a device whose boot loader keeps A/B slot
-/// flags, from the boot loader's source (the `boot` command clears the active
-/// slot's unbootable flag and marks the slot active before it starts the
-/// image).
-pub const SLOT_FLAG_CHANGES: &str = "the boot loader rewrites the slot flags in the partition table (GPT) before it starts the image: \
-it clears the active slot's unbootable flag, may lower that slot's boot retry count, marks the active slot's partitions active and \
-the other slot's inactive, and writes the primary and the backup GPT. No partition's contents change, and the active slot stays the same";
+/// The active slot's flags as the boot loader publishes them
+/// (`slot-successful:<s>`, `slot-unbootable:<s>`, `slot-retry-count:<s>`),
+/// read live before the boot. `None` where it didn't answer.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SlotFlags {
+    pub slot: String,
+    pub successful: Option<bool>,
+    pub unbootable: Option<bool>,
+    pub retry_count: Option<u64>,
+}
+
+/// The variables that read the flags of `slot`.
+pub fn slot_flag_variables(slot: &str) -> [String; 3] {
+    [
+        format!("slot-successful:{slot}"),
+        format!("slot-unbootable:{slot}"),
+        format!("slot-retry-count:{slot}"),
+    ]
+}
+
+fn yes_no(v: Option<&str>) -> Option<bool> {
+    match v {
+        Some("yes") => Some(true),
+        Some("no") => Some(false),
+        _ => None,
+    }
+}
+
+impl SlotFlags {
+    /// From the answers to [`slot_flag_variables`], in that order.
+    pub fn from_answers(slot: &str, answers: [Option<String>; 3]) -> SlotFlags {
+        let [s, u, r] = answers;
+        SlotFlags {
+            slot: slot.to_string(),
+            successful: yes_no(s.as_deref()),
+            unbootable: yes_no(u.as_deref()),
+            retry_count: r.as_deref().and_then(parse_size),
+        }
+    }
+}
+
+/// What `boot` would change in the slot flags, from the boot loader's source
+/// (CmdBoot: ClearUnbootable, then LoadImageAndAuth → FindBootableSlot;
+/// UpdatePartitionAttributes writes the GPT only where an attribute differs
+/// from the table on the disk). `None`: nothing.
+///
+/// - A slot marked successful and not unbootable: nothing changes.
+/// - Unbootable: CmdBoot clears that bit, a GPT write.
+/// - Not successful, retries left: FindBootableSlot lowers the retry count,
+///   except for an image from fastboot (CmdBoot sets BootDevImage first), so
+///   by the source nothing changes; refused anyway, since that is not tried.
+/// - Not successful, no retries left: the slot counts as unbootable and the
+///   boot loader falls back to the other slot, rewriting the slot flags.
+/// - Flags not published: the change can't be told.
+pub fn slot_flag_changes(slot_count: u64, flags: Option<&SlotFlags>) -> Option<String> {
+    if slot_count < 2 {
+        return None;
+    }
+    let Some(f) = flags.filter(|f| f.successful.is_some() && f.unbootable.is_some()) else {
+        let slot = flags.map(|f| f.slot.as_str()).unwrap_or("?");
+        return Some(format!(
+            "the boot loader reports {slot_count} slots but doesn't publish slot {slot}'s flags (slot-successful, slot-unbootable), \
+so whether booting an image rewrites them in the partition table (GPT) can't be told"
+        ));
+    };
+    let s = &f.slot;
+    match (f.successful, f.unbootable, f.retry_count) {
+        (Some(true), Some(false), _) => None,
+        (_, Some(true), _) => Some(format!(
+            "slot {s} is marked unbootable: booting an image clears that bit in the partition table (GPT), both copies{}",
+            if f.successful == Some(false) && f.retry_count == Some(0) {
+                "; with no retries left the boot loader then falls back to the other slot and rewrites its flags too"
+            } else {
+                ""
+            }
+        )),
+        (_, _, Some(0)) => Some(format!(
+            "slot {s} isn't marked successful and has no retries left: the boot loader treats it as unbootable, \
+falls back to the other slot and rewrites the slot flags in the partition table (GPT)"
+        )),
+        (_, _, n) => Some(format!(
+            "slot {s} isn't marked successful (retry count {}): a normal start uses one retry and writes the \
+partition table (GPT); by the boot loader's source an image from fastboot skips that, so nothing should change, but that isn't tried",
+            n.map_or("not published".to_string(), |n| n.to_string())
+        )),
+    }
+}
 
 /// The checks before anything but reads is sent: the description and its
 /// RAM environment mode, the image, and whether booting it changes the slot
 /// flags.
-pub fn prepare(ds: &[&Description], snapshot: &Snapshot, framing: Framing, image: &[u8]) -> Result<Prepared, BackupError> {
+pub fn prepare(ds: &[&Description], snapshot: &Snapshot, framing: Framing, image: &[u8], flags: Option<&SlotFlags>) -> Result<Prepared, BackupError> {
     let vars = &snapshot.fastboot.as_ref().ok_or(BackupError::Refused("no fastboot facts".into()))?.variables;
     let var = |k: &str| vars.get(k).cloned().flatten();
     let table = inspect::framing_table(ds)?;
@@ -262,17 +344,17 @@ pub fn prepare(ds: &[&Description], snapshot: &Snapshot, framing: Framing, image
         None => return Err(BackupError::Refused("the boot loader didn't say how much it takes (max-download-size)".into())),
     }
 
-    let slots = var("slot-count").as_deref().and_then(parse_size).unwrap_or(0);
-    let slot_flags = (slots >= 2 || never.is_some()).then(|| {
-        let mut why = Vec::new();
-        if slots >= 2 {
-            why.push(format!("the boot loader reports {slots} slots"));
-        }
+    let slots = slot_count(snapshot);
+    // A description that says not to boot an image here names the slot-flag
+    // hazard; the flags read live tell whether it applies.
+    let slots = if never.is_some() { slots.max(2) } else { slots };
+    let slot_flags = slot_flag_changes(slots, flags).map(|w| {
+        let mut m = format!("booting the RAM environment changes the device: {w}");
         if let Some(n) = never {
             let reason = n.params.get("reason").and_then(|v| v.as_str()).unwrap_or("no reason given");
-            why.push(format!("{} mode {} says not to boot an image here ({reason})", d.id, mode.id));
+            m += &format!(" ({} mode {} says not to boot an image here: {reason})", d.id, mode.id);
         }
-        format!("booting the RAM environment changes the device: {}. Here {SLOT_FLAG_CHANGES}", why.join("; "))
+        m
     });
     Ok(Prepared {
         description: d.id.clone(),
@@ -281,6 +363,36 @@ pub fn prepare(ds: &[&Description], snapshot: &Snapshot, framing: Framing, image
         ram,
         slot_flags,
         download_size: size,
+    })
+}
+
+fn snapshot_var(snapshot: &Snapshot, k: &str) -> Option<String> {
+    snapshot.fastboot.as_ref()?.variables.get(k).cloned().flatten()
+}
+
+fn slot_count(snapshot: &Snapshot) -> u64 {
+    snapshot_var(snapshot, "slot-count").as_deref().and_then(parse_size).unwrap_or(0)
+}
+
+/// The active slot without its underscore (`a`), as the flag variables name it.
+fn current_slot(snapshot: &Snapshot) -> Option<String> {
+    let s = snapshot_var(snapshot, "current-slot")?;
+    let s = s.trim_start_matches('_');
+    (!s.is_empty() && s.bytes().all(|b| b.is_ascii_alphanumeric())).then(|| s.to_string())
+}
+
+/// Whether the mode the boot loader is in says never-use boot-image.
+fn never_boot_image(ds: &[&Description], snapshot: &Snapshot) -> bool {
+    let Ok(table) = inspect::framing_table(ds) else { return false };
+    let Ok((_, holding)) = inspect::choose_framing(&table, snapshot_var(snapshot, "product").as_deref()) else {
+        return false;
+    };
+    holding.iter().any(|r| {
+        ds.iter()
+            .filter(|d| d.id == r.description)
+            .flat_map(|d| d.modes.iter().filter(|m| m.id == r.mode))
+            .flat_map(|m| m.departures.iter())
+            .any(|x| x.kind == "never-use" && x.params.get("operation").and_then(|v| v.as_str()) == Some("boot-image"))
     })
 }
 
@@ -326,7 +438,25 @@ pub async fn back_up_device<T: Transport, E: BackupEdge>(
     edge: &mut E,
 ) -> Result<BackupDone, BackupError> {
     let (got, mut s) = inspect::inspect_open(ds, fastboot, ids, host).await?;
-    let prepared = prepare(ds, &got.snapshot, got.framing, opts.image)?;
+    // The active slot's flags, read now: what `boot` would change depends on them.
+    let flags = match current_slot(&got.snapshot) {
+        Some(slot) if slot_count(&got.snapshot) >= 2 || never_boot_image(ds, &got.snapshot) => {
+            let mut answers: [Option<String>; 3] = Default::default();
+            for (a, v) in answers.iter_mut().zip(slot_flag_variables(&slot)) {
+                *a = s.getvar(&v).await.map_err(InspectError::from)?;
+            }
+            s.check_product("after the slot flags").await.map_err(InspectError::from)?;
+            Some(SlotFlags::from_answers(&slot, answers))
+        }
+        _ => None,
+    };
+    if let Some(f) = &flags {
+        edge.note(&format!(
+            "slot {}: successful {:?}, unbootable {:?}, retry count {:?}",
+            f.slot, f.successful, f.unbootable, f.retry_count
+        ));
+    }
+    let prepared = prepare(ds, &got.snapshot, got.framing, opts.image, flags.as_ref())?;
     if let Some(w) = &prepared.slot_flags {
         if !opts.accept_slot_flags {
             return Err(BackupError::SlotFlags(w.clone()));

@@ -23,8 +23,16 @@ pub const FB_CLASS: u8 = 0xff;
 pub const FB_SUBCLASS: u8 = 0x42;
 pub const FB_PROTOCOL: u8 = 0x03;
 
-/// The variables with a parameter that a read may name: `partition-size:boot`.
-pub const PARAM_VARIABLES: &[&str] = &["partition-size", "partition-type", "has-slot"];
+/// The variables with a parameter that a read may name: `partition-size:boot`,
+/// and a slot's flags (`slot-successful:a`).
+pub const PARAM_VARIABLES: &[&str] = &[
+    "partition-size",
+    "partition-type",
+    "has-slot",
+    "slot-successful",
+    "slot-unbootable",
+    "slot-retry-count",
+];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Reply {
