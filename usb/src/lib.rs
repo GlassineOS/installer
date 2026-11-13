@@ -261,13 +261,54 @@ mod native {
         Ok((endpoints(intf, o, i)?, ids))
     }
 
+    /// `GLASSINE_USB_TRACE=1`: every bulk transfer on stderr, for debugging
+    /// any boot loader's (or boot ROM's) replies, whatever the interface's
+    /// kind. Native only: a browser has no environment.
+    fn trace(dir: &str, data: &[u8], r: &Result<(), FbError>) {
+        use std::sync::OnceLock;
+        use std::time::Instant;
+        static ON: OnceLock<Option<Instant>> = OnceLock::new();
+        let Some(t0) = ON.get_or_init(|| std::env::var_os("GLASSINE_USB_TRACE").filter(|v| v == "1").map(|_| Instant::now())) else {
+            return;
+        };
+        eprintln!("{}", trace_line(t0.elapsed().as_secs_f64(), dir, data, r));
+    }
+
+    /// How many bytes of a transfer a trace line shows.
+    const TRACE_HEAD: usize = 32;
+
+    /// One trace line: time since the first transfer, direction, length,
+    /// the length without trailing NULs, the result and the first bytes:
+    /// as text when they are printable ASCII up to the NUL padding (fastboot
+    /// answers), else as hex (Sahara packets, image data).
+    pub(super) fn trace_line(at: f64, dir: &str, data: &[u8], r: &Result<(), FbError>) -> String {
+        let nz = data.iter().rposition(|&b| b != 0).map_or(0, |i| i + 1);
+        let head = &data[..data.len().min(TRACE_HEAD)];
+        let text = &data[..nz.min(TRACE_HEAD)];
+        let shown = if data.is_empty() {
+            String::new()
+        } else if !text.is_empty() && text.iter().all(|&b| b == b' ' || b.is_ascii_graphic()) {
+            format!("{:?}{}", String::from_utf8_lossy(text), if nz > TRACE_HEAD { "..." } else { "" })
+        } else {
+            let hex: Vec<String> = head.iter().map(|b| format!("{b:02x}")).collect();
+            format!("{}{}", hex.join(" "), if data.len() > TRACE_HEAD { " ..." } else { "" })
+        };
+        let res = match r {
+            Ok(()) => "ok".to_string(),
+            Err(e) => format!("ERR ({e})"),
+        };
+        format!("usb {at:>9.3} {dir} {:>7} B (non-NUL {nz:>7}) {res} {shown}", data.len())
+    }
+
     impl Transport for UsbTransport {
         async fn send(&mut self, data: &[u8]) -> Result<(), FbError> {
             let timeout = self.timeout;
             let o = self.open.as_mut().ok_or_else(UsbTransport::dead)?;
             // transfer_blocking cancels the transfer when the wait runs out.
             let c = o.out.transfer_blocking(data.to_vec().into(), timeout);
-            completed(c.status, "sending a command")
+            let r = completed(c.status, "sending a command");
+            trace("OUT", data, &r);
+            r
         }
 
         async fn recv(&mut self) -> Result<Vec<u8>, FbError> {
@@ -280,7 +321,9 @@ mod native {
             let mps = o.inp.max_packet_size().max(1);
             let buf = o.inp.allocate(max.max(1).div_ceil(mps) * mps);
             let c = o.inp.transfer_blocking(buf, timeout);
-            completed(c.status, "waiting for an answer")?;
+            let r = completed(c.status, "waiting for an answer");
+            trace(" IN", &c.buffer[..c.actual_len], &r);
+            r?;
             Ok(c.buffer[..c.actual_len].to_vec())
         }
     }
@@ -413,3 +456,47 @@ mod web {
 
 #[cfg(target_arch = "wasm32")]
 pub use web::{request, request_kind};
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use super::native::trace_line;
+    use super::*;
+
+    #[test]
+    fn a_fastboot_answer_is_text_without_its_padding() {
+        let mut d = b"OKAY0x1000".to_vec();
+        d.resize(64, 0);
+        assert_eq!(
+            trace_line(1.5, " IN", &d, &Ok(())),
+            r#"usb     1.500  IN      64 B (non-NUL      10) ok "OKAY0x1000""#
+        );
+    }
+
+    #[test]
+    fn a_long_text_is_cut() {
+        let d = vec![b'a'; 40];
+        let l = trace_line(0.0, "OUT", &d, &Ok(()));
+        assert!(l.ends_with(&format!("{:?}...", "a".repeat(32))), "{l}");
+    }
+
+    #[test]
+    fn a_sahara_packet_is_hex() {
+        // END_IMAGE_TX, image 0x0d, status 0x28.
+        let d: Vec<u8> = [4u32, 0x10, 0x0d, 0x28].iter().flat_map(|w| w.to_le_bytes()).collect();
+        let l = trace_line(0.25, " IN", &d, &Ok(()));
+        assert!(l.ends_with("ok 04 00 00 00 10 00 00 00 0d 00 00 00 28 00 00 00"), "{l}");
+        let big = vec![0xffu8; 100];
+        assert!(trace_line(0.0, "OUT", &big, &Ok(())).ends_with(&format!("{} ...", ["ff"; 32].join(" "))));
+    }
+
+    #[test]
+    fn errors_and_empty_transfers() {
+        let l = trace_line(2.0, " IN", &[], &Err(FbError::Timeout("waiting for an answer".into())));
+        assert_eq!(
+            l,
+            "usb     2.000  IN       0 B (non-NUL       0) ERR (the device didn't answer in time (waiting for an answer)) "
+        );
+        // All NULs: not text.
+        assert!(trace_line(0.0, " IN", &[0; 4], &Ok(())).ends_with("ok 00 00 00 00"));
+    }
+}

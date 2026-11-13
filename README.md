@@ -54,6 +54,14 @@ make docker-web-check           # every screen with every record, and the site a
 web/tools/vendor check|libs|interleaf UI_DIR
 ```
 
+## Debugging
+
+`GLASSINE_USB_TRACE=1` makes the command line log every USB bulk transfer on stderr, whatever the
+mode it talks to (fastboot, the RAM environment, the emergency download mode): time, direction,
+length, result and the first 32 bytes, as text or hex. The browser has no such switch. A trace
+can hold the unit's serial number (fastboot answers it to getvar, the boot ROM to its query):
+check it before sharing.
+
 ## License
 
 GPL-2.0-or-later (`LICENSE`).
