@@ -209,7 +209,8 @@
       "recovery"
     ],
     "total_at_least": 9200000000,
-    "exact": false
+    "exact": false,
+    "disk": null
   },
   "capabilities": [
     {

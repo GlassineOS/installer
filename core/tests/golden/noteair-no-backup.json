@@ -189,7 +189,8 @@
       "recovery"
     ],
     "total_at_least": 0,
-    "exact": false
+    "exact": false,
+    "disk": null
   },
   "capabilities": [
     {

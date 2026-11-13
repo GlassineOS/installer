@@ -87,6 +87,20 @@ pub struct Storage {
     /// labels a person may have chosen (a PC).
     pub names: String,
     pub disks: Vec<Disk>,
+    /// The disk the installer runs from, when inspecting could tell. The plan
+    /// never writes to it, nor puts a backup of a disk it writes on it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub installer_disk: Option<InstallerDisk>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InstallerDisk {
+    pub index: u32,
+    /// How it was told: `executable` (the disk holding the running program),
+    /// `root` (the disk holding the running root file system) or
+    /// `boot-entry` (the disk the firmware's current boot entry started from).
+    pub by: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -105,6 +119,9 @@ pub struct Disk {
     pub model: Option<String>,
     #[serde(default)]
     pub serial: Option<String>,
+    /// The logical sector size, in bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sector_size: Option<u64>,
     pub partitions: Vec<Partition>,
     /// Unpartitioned regions, in bytes.
     #[serde(default)]
@@ -117,6 +134,9 @@ pub struct Partition {
     pub index: u32,
     #[serde(default)]
     pub name: Option<String>,
+    /// Where it starts on its disk, in bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start: Option<u64>,
     pub size: u64,
     #[serde(default, rename = "type")]
     pub type_guid: Option<String>,
@@ -134,6 +154,10 @@ pub struct Filesystem {
     pub uuid: Option<String>,
     #[serde(default)]
     pub label: Option<String>,
+    /// The bytes it uses, where its superblock tells them cheaply (an
+    /// estimate: a mounted file system updates its counts late).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub used: Option<u64>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -144,6 +168,15 @@ pub struct Firmware {
     pub secure_boot: Option<String>,
     #[serde(default)]
     pub boot_entries: Vec<BootEntry>,
+    /// The firmware's variable store as inspecting found it: `readable`,
+    /// `not-mounted` (the system hasn't made it readable) or `none`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub variables: Option<String>,
+    /// The entry the machine started from this time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub boot_current: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub boot_order: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -154,6 +187,8 @@ pub struct BootEntry {
     pub label: Option<String>,
     #[serde(default)]
     pub path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
