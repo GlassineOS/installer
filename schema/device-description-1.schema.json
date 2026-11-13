@@ -686,6 +686,44 @@
                   "if": {
                     "properties": {
                       "kind": {
+                        "const": "check-slot-flags"
+                      }
+                    },
+                    "required": [
+                      "kind"
+                    ]
+                  },
+                  "then": {
+                    "properties": {
+                      "params": {
+                        "additionalProperties": false,
+                        "description": "parameters of check-slot-flags",
+                        "properties": {
+                          "operation": {
+                            "description": "the operation",
+                            "type": "string"
+                          },
+                          "reason": {
+                            "description": "what it may change, and when, in plain words",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "operation",
+                          "reason"
+                        ],
+                        "type": "object"
+                      }
+                    },
+                    "required": [
+                      "params"
+                    ]
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "kind": {
                         "const": "single-variables-only"
                       }
                     },
@@ -727,6 +765,7 @@
                     "equal-length-transfers",
                     "fresh-boot-only",
                     "never-use",
+                    "check-slot-flags",
                     "single-variables-only"
                   ],
                   "type": "string"
@@ -2695,6 +2734,30 @@
           },
           {
             "doc": "why, in plain words",
+            "name": "reason",
+            "required": true,
+            "type": "Text"
+          }
+        ]
+      },
+      {
+        "backends": [
+          "android-bootloader"
+        ],
+        "doc": "an operation that may change the A/B slot flags: before it is sent, the active slot's flags are read, and it goes on without the person's acceptance only when they show it changes nothing",
+        "id": "check-slot-flags",
+        "modes": [
+          "fastboot"
+        ],
+        "params": [
+          {
+            "doc": "the operation",
+            "name": "operation",
+            "required": true,
+            "type": "Operation"
+          },
+          {
+            "doc": "what it may change, and when, in plain words",
             "name": "reason",
             "required": true,
             "type": "Text"
