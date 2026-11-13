@@ -282,8 +282,8 @@ of the interface right after it):
 ### 8.2 The immediate reset in E, D, F
 
 - [device] E, D, F differ from B only in the 32 bytes of the XBL_SEC segment, and B
-  survives 7.56 s. So the boot ROM executes the XBL_SEC segment (it does not merely hash
-  it), and `ret` (F) does not lead on to `e_entry`.
+  survives 7.56 s. [inferred] So the boot ROM executes the XBL_SEC segment (it does not
+  merely hash it), and `ret` (F) does not lead on to `e_entry`.
 - [src] B's first five instructions are `ldr x19; ldr x16; br x16` (trampoline), then
   `mrs x20, daif; msr daifset, #0xf` in `_start`. E/D/F never mask.
 - [inferred] Best candidate: the boot ROM hands over with interrupts (or SError) unmasked
@@ -333,9 +333,9 @@ watchdog bite 0.1 s after 17 s. Its clock: `CNTPCT_EL0` divided by `CNTFRQ_EL0 /
   comes first.
 - Probe U (if it shows 7.56 s, not 1.0 s) or probe G (mask and spin, nothing else)
   separates the two: a reset at 7.56 s with none of our code running is reading 2.
-- [src] Probe R reads the APSS watchdog's enable bit at entry and shifts its timings by
-  0.2 s if it was set: a set bit would make the APSS watchdog the prime suspect for
-  reading 2.
+- [src] Probe R reads the APSS watchdog's enable bit (at 0.8 s, before touching it) and
+  delays its bite by 0.2 s if it was set: a set bit would make the APSS watchdog the prime
+  suspect for reading 2.
 
 ### 8.4 Why B sent nothing: the endpoint command never reached the controller
 
@@ -359,10 +359,12 @@ watchdog bite 0.1 s after 17 s. Its clock: `CNTPCT_EL0` divided by `CNTFRQ_EL0 /
   - The clock is a fixed 19.2 MHz (CNTFRQ only recorded): no division by a value the boot
     ROM left behind, no panic path that calls itself.
   - The status record grows to 192 bytes: adds GUSB2PHYCFG, GCTL, DEVTEN, the boot ROM's
-    SP and LR at the hand-over, the APSS watchdog's enable/bite registers at entry, the
-    DEPCMD value after a successful START, and the raw CNTFRQ.
+    SP and LR at the hand-over, the APSS watchdog's enable/bite registers at entry, and the
+    raw CNTFRQ. A variant without any watchdog access (`programmer-n`) covers the case
+    that probe R finds those registers fault.
 - [unknown] Still open, and recorded in the record: which physical endpoint carries bulk
-  IN (assumed the lowest enabled odd one ≥ 3: `0x81`); whether the controller can DMA
+  IN (the image takes the lowest enabled IN endpoint other than ep0; with Sahara's one IN
+  endpoint, expected `0x81`, that is it); whether the controller can DMA
   from our image's RAM at `0x140168xx` (the boot ROM's event buffer address in the record
   shows where its own DMA memory is).
 

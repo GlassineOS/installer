@@ -27,8 +27,11 @@ what was sent):
    `journalctl -k -o short-precise -f` running: it shows the disconnect ~0.09–0.25 s after X
    and the new 9008 ~0.17–0.2 s after that (a check, not the measurement).
 3. Once, with the unit in 9008 and before any upload: `lsusb -v -d 05c6:9008` and note the
-   bulk-IN endpoint address (`bEndpointAddress`). The status image assumes `0x81`
-   (physical endpoint 3). Reading the cached descriptors sends nothing to the device.
+   endpoint addresses (`bEndpointAddress`). The status image takes the lowest enabled IN
+   endpoint other than ep0 (physical ≥ 3); with one IN endpoint (expected: `0x81`) that is
+   the right one. If the interface has more than one IN endpoint, note it: a code 8 then
+   may mean the record went to the wrong one (word 23 / DALEPENA in a later record says
+   which was used). Reading the cached descriptors sends nothing to the device.
 4. Every reset so far landed in a fresh 9008 whose HELLO waited for minutes, so the runs
    can follow each other without a power hold. A hang (no reset within 20 s) or a 900E
    needs a long press on power (~10 s), then EDL entry again.
@@ -37,14 +40,16 @@ what was sent):
 
 | image | sha256 | what it is |
 |---|---|---|
-| `programmer-u-v5.mbn` | `1a9d6852bb1bf4f482d69a90929ec262a32a99f79fd014135efb90050314a5b5` | probe U: mask, wait 1.0 s (counter), unmask, spin |
-| `programmer-r-v5.mbn` | `2fc98d9d253c33c481750cefc571d789705abd41ad3ab9b9aab9ce8a3ffccb23` | probe R: PS_HOLD at 0.5 s, watchdog bite 0.4 s armed at 0.8 s, unmask at 2.0 s |
-| `programmer-s-v5.mbn` | `e4a6c4c0932e345f2dd55f8e44a3e8ec9114ed7fe89b7cd7039b685371e23024` | status image: B's trampoline + the fixed main; record on bulk IN, then a reset at the stage code's time |
-| `programmer-g-v5.mbn` | `2383dece7064fe77691d952163de18b535dd9cc37299a35a3c930c0bec162dc9` | probe G (optional): mask, spin forever |
+| `programmer-u-v5.mbn` | `904d967d849980a4092b9952d27780b90909ebca27dc702aab12be835d7fe197` | probe U: mask, wait 1.0 s (counter), unmask, spin |
+| `programmer-r-v5.mbn` | `0a1e607cb39b331e26e567796a57f50d143d32a3e72134f32412ddcf11297e3c` | probe R: PS_HOLD at 0.5 s, watchdog bite 0.4 s armed at 0.8 s, unmask at 2.0 s |
+| `programmer-s-v5.mbn` | `06e87d4834dcaa0ca8bd74e30ddfa2584850d3c086ccd7822ede8af8ad0f5a75` | status image: B's trampoline (same 32 bytes) + the fixed main; record on bulk IN, then a reset at the stage code's time |
+| `programmer-n-v5.mbn` | `00e281ae3ea0bbff0cc9d3acb2938fcdc29d9d334aa3cf8f28d382fcbb23d7b8` | the status image without any watchdog access (instead of S if R shows the watchdog faults) |
+| `programmer-g-v5.mbn` | `451609aae0837c016eb186424bcd3fe822897dfe8b19465c35fa9488e906e01f` | probe G: mask, spin forever (no counter, no MMIO) |
 
 (Also built, not for this session: `programmer-a-v5.mbn`, `programmer-a-v3.mbn`, and E/D/F
-again; their XBL_SEC bytes are the ones that ran, the main code inside them is the new one
-and is never reached.)
+again: their XBL_SEC bytes are the ones that ran (checked at this commit), the main code
+inside them is the new one and is never reached. `build.sh` no longer emits a
+`programmer-b`: the B that ran exists only at `738f4b0`; its successor is S.)
 
 ## Run order
 
@@ -56,7 +61,7 @@ No MMIO, no main; tests the masking theory, the counter rate and the E path.
 
 | X | means | next |
 |---|---|---|
-| ~0.004 s | masking is not what keeps B alive | skip run 2 (it would read the same); run 3 |
+| ~0.004 s | masking is not what keeps B alive, **or** reading the counter faults (U's first instruction after the mask) | run G next (no counter: breaks the tie), then run 3 |
 | **~1.0 s** (0.95–1.05) | masking keeps it alive; unmasking resets (the E path); the counter runs at 19.2 MHz | run 2 |
 | other X < 7 s | as above, but the counter runs at 19.2 MHz / X | run 2; all timings below scale by X |
 | ~7.56 s | masking keeps it alive; unmasking does not reset or the counter is ≥ 7× slow; 7.56 s is not our code | run 2, then 3 |
@@ -64,19 +69,17 @@ No MMIO, no main; tests the masking theory, the counter rate and the E path.
 
 ### Run 2: probe R
 
-Needs U's E path and counter. All times shift by +0.2 s if the APSS watchdog was already
-enabled at entry (by the boot ROM).
+Needs U's E path and counter. The watchdog is first touched at 0.8 s, so a fault there
+can't hide the PS_HOLD result.
 
-| X | means |
-|---|---|
-| ~0.004 s | reading the watchdog's enable register faults (into the boot ROM's vectors) |
-| 0.5 s / 0.7 s | **PS_HOLD low resets** (watchdog was off / on at entry) |
-| 0.8 s / 1.0 s | PS_HOLD does nothing; writing the watchdog faults |
-| 1.2 s / 1.4 s | PS_HOLD does nothing; **the watchdog bite resets** (note: 9008 or 900E afterwards?) |
-| 2.0 s / 2.2 s | neither resets; the E path does |
-
-A 0.7 / 1.0 / 1.4 / 2.2 s reading also says the boot ROM left the APSS watchdog running,
-which makes it the prime suspect for B's 7.56 s.
+| X | means | then run 3 with |
+|---|---|---|
+| 0.5 s | **PS_HOLD low resets** (the watchdog stays untested) | S |
+| 0.8 s | PS_HOLD does nothing; touching the watchdog faults | **N** (no watchdog) |
+| 1.2 s | PS_HOLD does nothing; **the watchdog bite resets**; it was off before (note: 9008 or 900E afterwards?) | S |
+| 1.4 s | as 1.2 s, but the boot ROM had left the watchdog **on**: prime suspect for B's 7.56 s | S |
+| 2.0 s | neither resets; the E path does | S |
+| ~0.004 s | should not happen after U ~1.0 s (same instructions up to 0.5 s) | S |
 
 ### Run 3: the status image
 
@@ -84,7 +87,8 @@ Expected on success: within ~0.1 s a 192-byte record on bulk IN starting `GLSNPR
 (record version 2, table below), then the bulk IN fails at **5.1 s** (code 9).
 
 Otherwise X gives the stage code: **T(code) = 0.6 + 0.5 × code**, plus the mechanism
-offset: **+0** PS_HOLD, **+0.15** watchdog, **+0.3** E path (run 2 says which ones work).
+offset: **+0** PS_HOLD, **+0.15** watchdog, **+0.3** E path (run 2 says which ones work;
+N has no +0.15 and no marker readings).
 Marker codes (0, 1, 2, 6) only ever show with the watchdog offset: they mean "hung right
 after this marker".
 
@@ -135,11 +139,11 @@ nothing in 20 s: it was our old code (power hold).
 | 24 | its DEPCMD before our command (the boot ROM's last command, resource index) |
 | 25, 26 | attempt number; DEPCMD of a failed START |
 | 27–30 | event buffer 0: address lo/hi, size, count (where the boot ROM keeps it) |
-| 31 | address of `glassine_main` (sanity: `0x14016618`) |
+| 31 | address of `glassine_main` (sanity: S `0x14016610`, N `0x14016534`) |
 | 32–33, 34–35 | the boot ROM's SP and x30 at the hand-over |
 | 36, 37, 38 | GUSB2PHYCFG(0), GCTL, DEVTEN |
-| 39, 40 | APSS watchdog WDT_EN, WDT_BITE_TIME at entry |
-| 41 | DEPCMD after the START that worked (resource index) |
+| 39, 40 | APSS watchdog WDT_EN, WDT_BITE_TIME at entry (N: `0xffffffff`) |
+| 41 | 0 |
 | 42, 43, 44 | stage code at send time (8), ms since entry, GEVNTCOUNT before the START |
 | 45–46 | CNTPCT_EL0 at entry |
 | 47 | 0 |
