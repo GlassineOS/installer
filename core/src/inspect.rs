@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //! Live inspect over fastboot: the probe of 002 FR-012 and the reads that
 //! fill a facts snapshot. It reads only: `getvar` (never `getvar:all`, which
-//! no description can call safe in format 1), and `reboot` when asked. The
+//! no description can call safe in format 1), and `reboot` when asked (at
+//! the end, or later in the session [`inspect_open`] leaves open). The
 //! descriptions decide what is read; nothing here names a device.
 //!
 //! The probe: one short plain `getvar:product` (safe under every framing),
@@ -282,7 +283,22 @@ pub struct Inspected {
 
 /// Inspects one fastboot device over `t`. Every transfer is a read but the
 /// final `reboot` when `reboot` is set.
-pub async fn inspect<T: Transport>(ds: &[&Description], mut t: T, usb: &UsbIds, host: &Host, reboot: bool) -> Result<Inspected, InspectError> {
+pub async fn inspect<T: Transport>(ds: &[&Description], t: T, usb: &UsbIds, host: &Host, reboot: bool) -> Result<Inspected, InspectError> {
+    let (mut got, mut s) = inspect_open(ds, t, usb, host).await?;
+    if reboot {
+        match s.reboot().await {
+            Ok(()) => got.rebooted = true,
+            Err(e) => got.reboot_error = Some(e.to_string()),
+        }
+    }
+    Ok(got)
+}
+
+/// [`inspect`] without the reboot, and the session still open: a caller that
+/// restarts the device later (on the person's action) does it in this same
+/// session, as a boot loader that only answers a fresh start needs. Every
+/// transfer is a read; nothing is sent after the final check of `product`.
+pub async fn inspect_open<T: Transport>(ds: &[&Description], mut t: T, usb: &UsbIds, host: &Host) -> Result<(Inspected, Session<T>), InspectError> {
     let usb = usb.facts();
     let table = framing_table(ds)?;
     let product = match fastboot::opening(&mut t).await? {
@@ -310,14 +326,7 @@ pub async fn inspect<T: Transport>(ds: &[&Description], mut t: T, usb: &UsbIds, 
     // An allow-list by construction: only what was asked, and never a name
     // that reads a value unique to the unit.
     variables.retain(|k, _| !vocab::looks_unit_unique(k));
-    let (mut rebooted, mut reboot_error) = (false, None);
-    if reboot {
-        match s.reboot().await {
-            Ok(()) => rebooted = true,
-            Err(e) => reboot_error = Some(e.to_string()),
-        }
-    }
-    Ok(Inspected {
+    let got = Inspected {
         snapshot: Snapshot {
             facts_format: FACTS_FORMAT,
             mode: "fastboot".into(),
@@ -331,7 +340,8 @@ pub async fn inspect<T: Transport>(ds: &[&Description], mut t: T, usb: &UsbIds, 
         },
         framing,
         told_by,
-        rebooted,
-        reboot_error,
-    })
+        rebooted: false,
+        reboot_error: None,
+    };
+    Ok((got, s))
 }
