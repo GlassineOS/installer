@@ -17,6 +17,10 @@ bench = false
 [features]
 # Variant B: add the XBL_SEC-typed trampoline segment (link-xblsec.ld).
 xbl-sec-trampoline = []
+# Probes from the first device run (TESTPLAN.md): only the XBL_SEC segment differs from B.
+probe-spin = ["xbl-sec-trampoline"]   # E: b .
+probe-pshold = ["xbl-sec-trampoline"] # D: PS_HOLD low, b .
+probe-ret = ["xbl-sec-trampoline"]    # F: ret
 
 [profile.release]
 opt-level = "s"
