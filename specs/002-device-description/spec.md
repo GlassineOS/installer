@@ -259,12 +259,11 @@ pinned to,
   release's rule, owned by the release side (GlassineOS/images, which builds the base and
   records it in its artifacts folder, produces it with each release; the installer never
   computes it). For `base` the rule is: the system partition holds the base snapshots
-  on btrfs (the current base, at least one older one to roll back to, and the new one
-  staged during an update) and each deployment's own changes, so its least is 3 × the
-  base's size as received on btrfs (its used bytes, counted as if the bases shared
-  nothing; not the compressed send stream), plus 1 GiB for the deployments' own changes
-  and the file system's metadata, rounded up to a whole MiB. The person's home and
-  Flatpak data are on the data partition and don't count.
+  on btrfs, which share most of their blocks, and the kernel modules, so its least is one
+  base's size as received on btrfs (its used bytes, not the compressed send stream), plus
+  64 MiB for each of 4 kept updates, plus the kernel modules' size, all × 1.25 for the
+  file system's metadata and slack; at least 1 GiB, rounded up to a whole MiB. The
+  person's home and Flatpak data are on the data partition and don't count.
 - **FR-020**: `[[capabilities]]` states each capability the installed device has (choose a
   kernel, a one-shot trial boot, a recovery, keep the stock system, ...): `have`, `lack`, or
   `needs` (with what), each with `verified`. The ids are shared by all descriptions.
