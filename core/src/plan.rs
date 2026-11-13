@@ -1077,7 +1077,7 @@ pub fn plan(ds: &[&Description], facts: &Snapshot, rec: &Recognition, input: &In
         keeps: Keeps {
             unit_values: d.unit_values.iter().map(|u| u.what.clone()).collect(),
             device_files: d.device_files.iter().map(|f| f.what.clone()).collect(),
-            device_data: d.device_data.clone(),
+            device_data: device_data_shown(d),
         },
         space,
         capabilities: caps,
@@ -1492,4 +1492,16 @@ pub fn render(p: &Plan, d: Option<&Description>) -> String {
         }
     }
     o
+}
+
+/// What the plan shows of the device data: format 1's names, or each group of
+/// format 2's files (consecutive files with one `what`) once.
+fn device_data_shown(d: &Description) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for x in &d.device_data {
+        if out.last().map(String::as_str) != Some(x.what()) {
+            out.push(x.what().to_string());
+        }
+    }
+    out
 }
