@@ -83,6 +83,10 @@ async function openSession(route, q) {
   // comes with the answers. With fixtures the machine is known before (s.connect).
   s.liveDevice = !records.FIXTURES;
   s.connectDevice = records.connectDevice;
+  // Live: the device's session after the check, kept open for Restart it (lib/device.js).
+  s.device = records.device;
+  s.restart = records.restart;
+  s.onDevice = records.onDevice;
   s.param = (k, d) => (q.get(k) === null ? d : q.get(k));
   s.num = (k, d) => (q.get(k) === null || !/^\d+$/.test(q.get(k)) ? d : Number(q.get(k)));
   s.live = q.get('live') === '1';

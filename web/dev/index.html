@@ -20,10 +20,11 @@
 <body>
 <h1>Installer core (dev)</h1>
 <p>Inspect reads only (getvar) and needs the device in a fresh start of its boot loader's
-fastboot mode. Only with the device owner's go.</p>
+fastboot mode. The session stays open afterwards: Restart sends reboot in it (the Note Air
+answers nothing else once the session is closed). Only with the device owner's go.</p>
 <p>
-  <label><input type="checkbox" id="reboot"> restart the device at the end</label><br>
   <button id="inspect">Inspect over USB</button>
+  <button id="restart" disabled>Restart the device</button>
   <button id="check">Check</button>
   <button id="plan">Plan (dry run)</button>
 </p>
@@ -42,6 +43,7 @@ fastboot mode. Only with the device owner's go.</p>
     try { shown = JSON.stringify(JSON.parse(text), null, 1); } catch (_) {}
     $("out").textContent = (ms === undefined ? "" : `(${ms.toFixed(0)} ms)\n`) + shown;
   };
+  let conn = null;
   const run = async (f) => {
     const t0 = performance.now();
     try { return [await f(), performance.now() - t0]; }
@@ -49,8 +51,16 @@ fastboot mode. Only with the device owner's go.</p>
   };
   $("inspect").onclick = async () => {
     show("choose the device ...");
-    const [facts, ms] = await run(() => inspect($("reboot").checked));
-    if (facts) { $("facts").value = JSON.stringify(JSON.parse(facts), null, 1); show(facts, ms); }
+    if (conn) conn.close();
+    const [c, ms] = await run(() => inspect());
+    conn = c;
+    $("restart").disabled = !c;
+    if (c) { $("facts").value = JSON.stringify(JSON.parse(c.facts), null, 1); show(c.facts, ms); }
+  };
+  $("restart").onclick = async () => {
+    $("restart").disabled = true;
+    const [r, ms] = await run(() => conn.reboot());
+    if (r) show('"restarted"', ms);
   };
   $("check").onclick = async () => {
     const [r, ms] = await run(() => check($("facts").value));

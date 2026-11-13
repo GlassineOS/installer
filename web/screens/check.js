@@ -7,6 +7,7 @@
 import { html, Admonition, Actions, Page, Caps, CapRow, Table, Cross, Owed, saveJson } from '../lib/parts.js';
 import { CAPABILITY, CAPABILITY_STATUS, STATE, CONNECTION, MODE, cap, list, human } from '../lib/words.js';
 import { fate, erase, spaceRows, factRows, techRows, reportLines, stepList, systemView } from '../lib/model.js';
+import { useDevice, isOpen, restartButton, DeviceCard, LEFT_IN_USB_MODE } from '../lib/device.js';
 
 export function capView(c) {
   const w = CAPABILITY[c.id] || { name: c.id, body: '' };
@@ -130,7 +131,7 @@ function OtherMode({ s }) {
 }
 
 export function Check({ s }) {
-  const r = s.report;
+  const r = s.report, got = useDevice(s);
   if (!r) return html`<${Page} s=${s} step="check" eyebrow="Check" title="No machine yet"><p><a class="il-link" href=${s.link('start')}>Start again</a></p></${Page}>`;
   const rec = r.recognition, pc = s.m.kind === 'pc';
   const variant = r.supported ? 'supported' : rec.result === 'none' || rec.result === 'conflict' ? 'not' : 'mode';
@@ -147,6 +148,14 @@ export function Check({ s }) {
   }[variant];
   const unchanged = pc ? 'the PC starts as before.' : 'the device starts its system as before.';
   const facts = factRows(s), tech = techRows(s);
+  // The live device's session, still open after the check: Restart it comes first, and the way
+  // out says what happens without it.
+  const dev = got && got.machine === s.machine ? got : null, open = isOpen(dev);
+  const out = variant === 'supported' ? 'Stop here: a dry run ends with this report. Nothing was changed; ' + unchanged : `Close the installer${pc ? '' : ' and unplug ' + s.m.the}. Nothing was changed.`;
+  const buttons = variant === 'supported'
+    ? [{ label: 'Make the plan', href: s.link('plan'), primary: true, id: 'plan' }, { label: 'Save this report', onClick: () => saveJson('glassine-check-report.json', r) }, { label: 'Stop here', href: s.link('start'), push: true }]
+    : variant === 'mode' ? [{ label: 'Reach it again', href: s.link('reach'), primary: !open, id: 'reach-again' }, { label: 'Stop here', href: s.link('start'), push: true, id: 'stop' }]
+    : [{ label: 'Close the installer', href: s.link('start'), primary: !open, id: 'stop' }];
   return html`<${Page} s=${s} step="check" eyebrow=${variant === 'supported' ? 'Check · done, nothing was changed' : 'Check · nothing was changed'} title=${title} lead=${lead}>
     <section class="ins-stack">
       <h2 class="ins-h2">What it is</h2>
@@ -154,13 +163,11 @@ export function Check({ s }) {
       ${tech.length ? html`<details class="il-details"><summary>Technical details</summary><${Table} mono rows=${tech} /></details>` : null}
     </section>
     ${variant === 'supported' ? html`<${Supported} s=${s} />` : variant === 'not' ? html`<${NotSupported} s=${s} />` : html`<${OtherMode} s=${s} />`}
+    <${DeviceCard} s=${s} dev=${dev} />
     <${Actions}
       next=${variant === 'supported' ? 'The plan: every step in order, with what you can choose. Still nothing is written.' : variant === 'mode' ? 'Restart it as above, then reach it again.' : 'Nothing more to do here.'}
-      out=${variant === 'supported' ? 'Stop here: a dry run ends with this report. Nothing was changed; ' + unchanged : `Close the installer${pc ? '' : ' and unplug ' + s.m.the}. Nothing was changed.`}
-      buttons=${variant === 'supported'
-        ? [{ label: 'Make the plan', href: s.link('plan'), primary: true, id: 'plan' }, { label: 'Save this report', onClick: () => saveJson('glassine-check-report.json', r) }, { label: 'Stop here', href: s.link('start'), push: true }]
-        : variant === 'mode' ? [{ label: 'Reach it again', href: s.link('reach'), primary: true }, { label: 'Stop here', href: s.link('start'), push: true }]
-        : [{ label: 'Close the installer', href: s.link('start'), primary: true }]} />
+      out=${open ? html`${out} <span id="left-in-usb-mode">${LEFT_IN_USB_MODE}</span>` : out}
+      buttons=${open ? [restartButton(s, dev, variant !== 'supported'), ...buttons] : buttons} />
   </${Page}>`;
 }
 
