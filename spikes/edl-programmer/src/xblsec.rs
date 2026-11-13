@@ -19,7 +19,10 @@ use core::arch::global_asm;
     feature = "probe-ret",
     feature = "probe-unmask",
     feature = "probe-resets",
-    feature = "probe-mask"
+    feature = "probe-mask",
+    feature = "probe-pshold-masked",
+    feature = "probe-unmask-now",
+    feature = "probe-wdt"
 )))]
 global_asm!(
     r#"
@@ -184,6 +187,85 @@ glassine_xblsec_entry:
     wait_ticks 38400000                 // 2.0 s
     msr     daifclr, #0xf
     isb
+1:  b       1b
+    .ltorg
+"#
+);
+
+// --- Signal-channel probes (device run 2 found no working signal on masked code) ---------
+// Counter-free, each tests one deliberate "I reached here" mechanism from behind a mask.
+// Each is self-contained in the XBL_SEC segment and never reaches `_start`/`main`. The
+// client never sees END_IMAGE_TX for these (same as U/S); the measurement is whether the
+// device resets (client bulk-IN read fails < 20 s and a fresh 9008 re-enumerates) or hangs
+// (full 20 s timeout, 9008 stays, power hold to leave). See TESTPLAN.md "Device run 3".
+
+// Probe P: mask, pull PS_HOLD low, spin. D did this but never masked, so its 4 ms reset is
+// confounded with the unmasked-interrupt path; masking isolates PS_HOLD.
+//   reset to 9008      : PS_HOLD is a reset from masked code -> usable as the ACK signal
+//   device powers off  : PS_HOLD powers the chip off (power button to return); still a
+//                        (manual) signal
+//   nothing in 20 s    : the write had no effect (MMIO store lost, or a fault that hangs)
+#[cfg(feature = "probe-pshold-masked")]
+global_asm!(
+    r#"
+    .section .xblsec_tramp, "ax"
+    .global glassine_xblsec_entry
+glassine_xblsec_entry:
+    msr     daifset, #0xf
+    movz    x0, #0xc000
+    movk    x0, #0x010a, lsl #16        // PS_HOLD 0x010ac000
+    str     wzr, [x0]
+    dsb     sy
+1:  b       1b
+"#
+);
+
+// Probe M: mask, then immediately unmask, spin. Tests the unmask->interrupt->reset ACK
+// directly, with no counter in the way. Resolves U's null result:
+//   reset at ~4 ms     : unmasking resets (U hung earlier, in its CNTPCT wait -> counter
+//                        is frozen at this stage) -> unmask is usable as the ACK signal
+//   nothing in 20 s    : unmasking does not reset here (no pending interrupt, or the source
+//                        was cleared) -> U's null was not a frozen counter
+#[cfg(feature = "probe-unmask-now")]
+global_asm!(
+    r#"
+    .section .xblsec_tramp, "ax"
+    .global glassine_xblsec_entry
+glassine_xblsec_entry:
+    msr     daifset, #0xf
+    isb
+    msr     daifclr, #0xf
+    isb
+1:  b       1b
+"#
+);
+
+// Probe K: mask, arm the APSS watchdog for a ~0.3 s bite (9830 ticks at 32768 Hz), spin.
+// now=0, counter-free (same register order as main's wdt_bite_at). Does the watchdog bite
+// at all at this stage?
+//   reset at ~0.3 s    : the watchdog works -> S's silence means it hung before arming one
+//                        (i.e. before/at glassine_main), not that the watchdog is dead
+//   reset at ~0 ms     : the WDT register access faults into the boot ROM's vectors
+//   nothing in 20 s    : the watchdog does not bite here (sleep clock off / writes lost)
+#[cfg(feature = "probe-wdt")]
+global_asm!(
+    r#"
+    .section .xblsec_tramp, "ax"
+    .global glassine_xblsec_entry
+glassine_xblsec_entry:
+    msr     daifset, #0xf
+    movz    x13, #0x7000
+    movk    x13, #0x1781, lsl #16       // APSS watchdog 0x17817000
+    str     wzr, [x13, #0x8]            // WDT_EN = 0
+    mov     w0, #1
+    str     w0, [x13, #0x4]             // WDT_RST
+    ldr     w0, =0x0fffffff
+    str     w0, [x13, #0x10]            // WDT_BARK_TIME: never (FIQ is masked anyway)
+    ldr     w0, =9830                   // ~0.3 s at 32768 Hz
+    str     w0, [x13, #0x14]            // WDT_BITE_TIME
+    mov     w0, #1
+    str     w0, [x13, #0x8]             // WDT_EN
+    dsb     sy
 1:  b       1b
     .ltorg
 "#

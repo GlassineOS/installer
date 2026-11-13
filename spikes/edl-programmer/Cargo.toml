@@ -24,6 +24,11 @@ probe-ret = ["xbl-sec-trampoline"]    # F: ret
 probe-unmask = ["xbl-sec-trampoline"] # U: mask, 1.0 s, unmask
 probe-resets = ["xbl-sec-trampoline"] # R: PS_HOLD at 0.5 s, watchdog armed at 0.8 s, unmask at 2 s
 probe-mask = ["xbl-sec-trampoline"]   # G: mask, spin
+# Signal-channel probes from device run 2 (TESTPLAN.md "Device run 3"): counter-free, each
+# tests one deliberate reset mechanism from behind the mask.
+probe-pshold-masked = ["xbl-sec-trampoline"] # P: mask, PS_HOLD low, spin
+probe-unmask-now = ["xbl-sec-trampoline"]    # M: mask, unmask, spin
+probe-wdt = ["xbl-sec-trampoline"]           # K: mask, arm the watchdog (~0.3 s), spin
 # The status image without any APSS watchdog access (in case probe R shows it faults).
 no-wdt = []
 

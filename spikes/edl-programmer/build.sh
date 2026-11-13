@@ -20,6 +20,9 @@ n:xbl-sec-trampoline,no-wdt
 u:probe-unmask
 r:probe-resets
 g:probe-mask
+p:probe-pshold-masked
+m:probe-unmask-now
+k:probe-wdt
 e:probe-spin
 d:probe-pshold
 f:probe-ret
