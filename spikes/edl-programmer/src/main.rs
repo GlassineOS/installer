@@ -14,6 +14,8 @@
 //!    the host learns that even when USB stays silent: the bulk-IN read fails at
 //!    T(code) = 0.6 s + 0.5 s x code after DONE_RESP. See [`Code`] and TESTPLAN.md.
 //!
+//! With the `no-wdt` feature (image `programmer-n`) the watchdog is never touched.
+//!
 //! The reset at T(code) goes through a chain, because which mechanism works is still being
 //! measured: PS_HOLD low at T; the APSS watchdog, armed at every stage marker, bites at
 //! T + 0.15 s (it also catches a hang right after a marker); at T + 0.3 s the boot ROM's
@@ -181,7 +183,6 @@ global_asm!(
 _start:
     mrs     x20, daif           // as the boot ROM left it
     msr     daifset, #0xf
-    mrs     x21, cntpct_el0     // T0
     mov     x22, sp             // the boot ROM's stack and return address, for the record
     mov     x23, x30
     ldr     x0, =__stack_top
@@ -206,6 +207,7 @@ _start:
     b       4f
 3:  mov     x1, #0
 4:  isb
+    mrs     x21, cntpct_el0     // T0, read with our vectors in place (as B's main did)
     mov     x2, x19             // = TRAMPOLINE_MAGIC when entered through the XBL_SEC trampoline
     mov     x3, x20
     mov     x4, x21
@@ -285,8 +287,12 @@ fn delay_ms(d: u64) {
 
 /// Arm the APSS watchdog to bite at `at` ms after entry (qcom-wdt.c qcom_wdt_start order).
 /// Without a running counter "now" is taken as 0: all markers but the send wait come
-/// within milliseconds of entry.
+/// within milliseconds of entry. A no-op with the `no-wdt` feature (if probe R shows the
+/// watchdog's registers fault).
 fn wdt_bite_at(at: u64) {
+    if cfg!(feature = "no-wdt") {
+        return;
+    }
     let now = if ticking() { ms() } else { 0 };
     let ticks = (at.saturating_sub(now).max(5) * WDT_HZ / 1000) as u32;
     wr(APSS_WDT + WDT_EN, 0);
@@ -479,7 +485,6 @@ fn send_status(ep: usize, flags: &mut u32) -> Code {
             delay_ms(1);
             continue;
         }
-        put(41, r.unwrap_or(0));
 
         mark(Code::NotTaken);
         let end = ms() + SEND_TIMEOUT_MS;
@@ -515,8 +520,11 @@ extern "C" fn glassine_main(
         (*s).loops = 0;
         (*s).ticking = 0;
     }
-    let wdt_en = rd(APSS_WDT + WDT_EN);
-    let wdt_bite = rd(APSS_WDT + WDT_BITE_TIME);
+    let (wdt_en, wdt_bite) = if cfg!(feature = "no-wdt") {
+        (0xffff_ffff, 0xffff_ffff)
+    } else {
+        (rd(APSS_WDT + WDT_EN), rd(APSS_WDT + WDT_BITE_TIME))
+    };
     mark(Code::Entered);
 
     let t = counter();

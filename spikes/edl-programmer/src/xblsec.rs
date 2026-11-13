@@ -141,13 +141,14 @@ glassine_xblsec_entry:
 );
 
 // Probe R: which of PS_HOLD and the APSS watchdog resets? (after U: needs the E path and
-// the 19.2 MHz counter). Masked throughout until the last step. x14 = 0.2 s if the
-// watchdog was already enabled at entry (by the boot ROM), else 0.
-//   0.5 s (+0.2) : PS_HOLD low resets
-//   0.8 s (+0.2) : the watchdog register access faults (into the boot ROM's vectors)
-//   1.2 s (+0.2) : PS_HOLD does nothing; the watchdog bite (0.4 s, sleep clock) resets
-//   2.0 s (+0.2) : neither does; unmasking resets (the E path)
-//   ~4 ms        : reading the watchdog's enable register at entry faults
+// the 19.2 MHz counter). Masked throughout until the last step. The watchdog is first
+// touched at 0.8 s, so a fault there cannot hide the PS_HOLD result. x14 = 0.2 s if the
+// watchdog was already enabled at 0.8 s (by the boot ROM), else 0: it delays the bite.
+//   0.5 s        : PS_HOLD low resets
+//   0.8 s        : the watchdog register access faults (into the boot ROM's vectors)
+//   1.2 s / 1.4 s: PS_HOLD does nothing; the watchdog bite (sleep clock) resets; it was
+//                  off / already on before we touched it
+//   2.0 s        : neither does; unmasking resets (the E path)
 #[cfg(feature = "probe-resets")]
 global_asm!(
     r#"
@@ -156,25 +157,27 @@ global_asm!(
 glassine_xblsec_entry:
     msr     daifset, #0xf
     mrs     x9, cntpct_el0
-    movz    x13, #0x7000
-    movk    x13, #0x1781, lsl #16       // APSS watchdog 0x17817000
-    ldr     w12, [x13, #0x8]            // WDT_EN
-    and     x12, x12, #1
-    ldr     x14, =3840000               // 0.2 s
-    mul     x14, x14, x12
+    mov     x14, #0
     wait_ticks 9600000                  // 0.5 s
     movz    x0, #0xc000
     movk    x0, #0x010a, lsl #16        // PS_HOLD 0x010ac000
     str     wzr, [x0]
     dsb     sy
     wait_ticks 15360000                 // 0.8 s
+    movz    x13, #0x7000
+    movk    x13, #0x1781, lsl #16       // APSS watchdog 0x17817000
+    ldr     w12, [x13, #0x8]            // WDT_EN as the boot ROM left it
+    and     w12, w12, #1
+    ldr     w15, =6554                  // 0.2 s at 32768 Hz
+    mul     w15, w15, w12
+    ldr     w0, =13107                  // 0.4 s at 32768 Hz
+    add     w15, w15, w0
     str     wzr, [x13, #0x8]            // WDT_EN = 0
     mov     w0, #1
     str     w0, [x13, #0x4]             // WDT_RST
     ldr     w0, =0x0fffffff
     str     w0, [x13, #0x10]            // WDT_BARK_TIME: never (FIQ is masked anyway)
-    ldr     w0, =13107                  // 0.4 s at 32768 Hz
-    str     w0, [x13, #0x14]            // WDT_BITE_TIME
+    str     w15, [x13, #0x14]           // WDT_BITE_TIME: 0.4 s (+0.2 s if it was on)
     mov     w0, #1
     str     w0, [x13, #0x8]             // WDT_EN
     dsb     sy

@@ -16,6 +16,7 @@ mkdir -p "$here/out"
 variants='
 a:
 s:xbl-sec-trampoline
+n:xbl-sec-trampoline,no-wdt
 u:probe-unmask
 r:probe-resets
 g:probe-mask
