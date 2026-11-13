@@ -161,3 +161,39 @@ nothing in 20 s: it was our old code (power hold).
 ## Not part of this test
 
 eMMC access, any Firehose command, any write. Re-enumeration with our own VID/PID.
+
+## Device run 2 (2026-11-13, session 68): U and S both hang at entry, no END_IMAGE_TX
+
+| image | sha256 | what happened |
+|---|---|---|
+| `programmer-u-v5.mbn` | `904d967d…` | boot ROM read all segments (to file off 0x7a00, last READ_DATA_64 off 0x7000 len 0xa00); then **silence: no END_IMAGE_TX, no reset, 9008 stays** for 20 s+ (client times out waiting for END_IMAGE_TX). |
+| `programmer-s-v5.mbn` | `06e87d48…` | **byte-for-byte the same trace as U**: all segments read, no END_IMAGE_TX, no record on bulk IN, no reset in 20 s, 9008 stays. |
+
+Key contrast with B (738f4b0): B reached END_IMAGE_TX 0 + DONE_RESP **complete**, then ran
+and reset at T0+7.56 s. U and S never reach END_IMAGE_TX — the hang is **before** the boot
+ROM finishes the image transfer, i.e. at/just after the jump into XBL_SEC, in code common
+to both images (trampoline / `_start` entry), not in either `main`. Both recovered with a
+~10 s power hold → GlassineOS. No counter tick evidenced; no working watchdog reached.
+Reads: client `glassine-install emergency-try-program` built from installer `origin/main`.
+
+## Device run 3 (prepared): find a signal that works from masked code
+
+Run 2 left us with no proven way for masked code to say "I got here": U/S hung silently, the
+watchdog did not bite, the counter may be frozen. These three probes each test one
+deliberate reset mechanism, counter-free, one image per 9008 session. Same harness as before
+(try-run.sh with the lock + peer announce). Measurement: the client's bulk-IN read fails at
+**< 20 s** and a fresh 9008 re-enumerates (the USB watch shows it) = the device reset; the
+full 20 s timeout with 9008 still present = a hang (long-press power ~10 s to leave). None of
+these reach END_IMAGE_TX (expected, as with U/S).
+
+| order | image | sha256 | what a reset tells us |
+|---|---|---|---|
+| 1 | `programmer-p-v5.mbn` | `5708b42bcc539470…` | PS_HOLD low resets from behind the mask -> use PS_HOLD as the ACK. (Device powers off instead = also a usable, manual signal; nothing in 20 s = the store was lost.) |
+| 2 | `programmer-m-v5.mbn` | `f496276795c08665…` | unmasking resets (~4 ms) -> unmask is the ACK, and U hung in its CNTPCT wait (counter frozen). Nothing in 20 s = unmask is not a signal here. |
+| 3 | `programmer-k-v5.mbn` | `1d23c792377fe618…` | the APSS watchdog bites (~0.3 s) -> it works, so S hung before arming one (before/at glassine_main). ~0 ms = the WDT access faults; nothing in 20 s = the watchdog is dead here. |
+
+Stop after the first clean reset: that mechanism becomes the ACK. Then (host work) a
+bisection set inserts that ACK at points along _start -> glassine_main -> first DWC3 access,
+to find exactly where S's main hangs. If none of P/M/K resets, no masked-code signal exists
+at this stage and the status image must instead run with interrupts left unmasked (accept the
+~4 ms reset) and lean entirely on the USB record for output.

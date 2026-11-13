@@ -399,3 +399,38 @@ a code. The timebase is the arch counter at 19.2 MHz, which probe U checks first
   `sahara_defs.py`); linux-msm/qdl <https://github.com/linux-msm/qdl>.
 - Qualcomm ABL (CodeLinaro `clo/la/abl/tianocore/edk2`), `LinuxLoaderLib.c`,
   `FastbootCmds.c` (the `secure` variable).
+
+### 8.4 Device run 2 (2026-11-13, session 68): the 7.56 s is B's own code; the fixed main hangs
+
+[device] Images U (mask, read the counter in a loop, unmask, spin) and S (B's trampoline +
+the DWC3-fixed main) gave the **same** trace: the boot ROM read every segment, then went
+silent — **no END_IMAGE_TX, no record on bulk IN, no reset within 20 s**, 9008 stayed up.
+Both recovered with a ~10 s power hold. Program headers (readelf): both are [main LOAD @
+file 0x1000 / vaddr 0x14015000, filesz 0x5a00, RWE] + [XBL_SEC LOAD @ file 0x7000 / vaddr
+0x14699000, 0x20–0x40 B, R+E, type flags 0x05000005]; e_entry = 0x14015000 (in main). The
+B/S XBL_SEC trampoline (src/xblsec.rs) is a one-way `ldr x19,magic; ldr x16,_start; br x16`
+— it never returns to the boot ROM, so once it jumps to _start the boot ROM cannot send
+END_IMAGE_TX. That the handshake does not complete is expected for the trampoline; it tells
+us only that our code is reached.
+
+Conclusions:
+- [inferred, firm] **B's 7.56 s reset was B's own `main`** executing its PS_HOLD/watchdog
+  timeline on a timebase ~2× off (RESEARCH §8.3 "Reading 1"), **not an external timer.**
+  Proof: B masks interrupts in `_start` and still reset at 7.56 s; U and S also run masked
+  (or hang masked) and do **not** reset within 20 s. A masked spin with no self-reset code
+  is never reset here, so the 7.56 s can only have come from B's own (mis-timed) reset code,
+  which the fixed main never reaches. This retires probe G (its purpose-built question is
+  answered) and, per TESTPLAN run-1/run-2 gates, R and N as well (preconditions unmet).
+- [device] **The DWC3-fixed status image (S) hangs before emitting the record**, with no
+  reset. Exact hang point is unresolved: with no counter tick evidenced, the watchdog not
+  biting, and no USB output, every in-band feedback channel the probes relied on is dead.
+- [unknown] Whether the counter (CNTPCT_EL0) ticks at this stage, and whether unmasking
+  resets — U's null result (no reset) is ambiguous (it may have hung in the counter loop
+  before reaching its unmask).
+
+Next (host work, no device): the only feedback channel proven to work on masked code is the
+boot ROM's own ~4 ms interrupt reset seen in E/D/F when interrupts are left unmasked. A
+redesigned probe/status image should **unmask after each step as a 1-bit ACK** (a ~4 ms
+reset = "reached here"; no reset = "hung in the previous step"), bisecting where `main`
+hangs without relying on the counter, the watchdog, or USB. TESTPLAN run order is superseded
+by this for the next device session.
