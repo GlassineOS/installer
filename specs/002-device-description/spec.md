@@ -187,8 +187,18 @@ pinned to,
   is derived from the steps the choices select, and the check rejects a step that would go
   beyond its partition's rule. A size may be relative (the rest of a disk, the free space,
   what is left after another partition), and a relative size may name the least it can be
-  (`at_least`). A plan whose disk can't give the new partitions their fixed sizes and
-  those least sizes is refused, with the space it lacks.
+  (`at_least`): a fixed size, or `release:<role>`, the least the installer's release
+  states for that artifact role (FR-019a). What GlassineOS itself needs is the release's
+  to state, so a system partition's least is `release:base`; a fixed `at_least` is for
+  what the release doesn't know. A partition of fixed size may name `release:<role>` as
+  well; a step that writes a partition table from its layout lists, with their fixed
+  sizes, the partitions of the layout whose size the plan checks. A plan is refused, with
+  the space it lacks, when its disk can't give the new partitions their fixed sizes and
+  those least sizes, or when a fixed partition is smaller than the least its release
+  states (the size inspecting found, where it found the partition, else the
+  description's). A least the release doesn't state (there is no release, as in a dry run
+  or a test, or one that doesn't state it) is not known yet: the plan says so, counts the
+  disk's space as at least what is known, and never refuses for it.
 - **FR-014b**: Renaming a partition is not an action: it is a parameter of the step that
   writes the partition table (old name = new name), and that step writes the table. The
   rules select a renamed partition by both its names.
@@ -230,6 +240,20 @@ pinned to,
   device, by role (the base, the kernel, the boot loader, the recovery, the partition
   layout), never by version or address: the installer's release supplies each role and
   checks its integrity. A size is marked unknown until the release supplies it.
+- **FR-019a**: The installer's release has a manifest, a JSON object whose
+  `release_format` is 1, that states per artifact role what the plan reads:
+  `artifacts.<role>.min_partition_bytes`, the least size in bytes of the partition that
+  role's artifact goes to. A reader ignores keys it doesn't know and refuses a later
+  `release_format`. The installer only reads the number; how it is worked out is the
+  release's rule, owned by the release side (GlassineOS/images, which builds the base and
+  records it in its artifacts folder, produces it with each release; the installer never
+  computes it). For `base` the rule is: the system partition holds the base snapshots
+  on btrfs (the current base, at least one older one to roll back to, and the new one
+  staged during an update) and each deployment's own changes, so its least is 3 × the
+  base's size as received on btrfs (its used bytes, counted as if the bases shared
+  nothing; not the compressed send stream), plus 1 GiB for the deployments' own changes
+  and the file system's metadata, rounded up to a whole MiB. The person's home and
+  Flatpak data are on the data partition and don't count.
 - **FR-020**: `[[capabilities]]` states each capability the installed device has (choose a
   kernel, a one-shot trial boot, a recovery, keep the stock system, ...): `have`, `lack`, or
   `needs` (with what), each with `verified`. The ids are shared by all descriptions.
@@ -294,6 +318,8 @@ pinned to,
 - **Partition rule**: a selection and the most any job may do; unselected means never
   written. The rule for the role `disk` says how the whole-disk backup is read.
 - **Step**: a kind from the backend, its parameters, its `done` condition and its escape.
+- **Release manifest**: what the installer's release states per artifact role, such as
+  the least size of the partition the base goes to.
 - **Lock entry**: which version of a device repository's description the installer ships.
 
 ## Success criteria

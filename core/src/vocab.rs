@@ -352,6 +352,8 @@ pub struct Param {
     pub ty: ParamType,
     pub required: bool,
     pub doc: &'static str,
+    /// The first format it is in.
+    pub since: i64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -369,14 +371,31 @@ pub enum ParamType {
     Slot,
     /// A table of partition renames, old name = new name.
     Renames,
-    /// A list of partitions to create, each `{ name, size, role? }`.
+    /// A list of partitions to create, each `{ name, size, at_least?, role? }`.
     NewPartitions,
     /// An operation of the mode kind.
     Operation,
 }
 
 pub const fn p(name: &'static str, ty: ParamType, required: bool, doc: &'static str) -> Param {
-    Param { name, ty, required, doc }
+    Param {
+        name,
+        ty,
+        required,
+        doc,
+        since: 1,
+    }
+}
+
+/// A parameter from format `since` on.
+pub const fn p_since(since: i64, name: &'static str, ty: ParamType, required: bool, doc: &'static str) -> Param {
+    Param {
+        name,
+        ty,
+        required,
+        doc,
+        since,
+    }
 }
 
 /// A mode kind with what it can do and the protocol operations a departure
@@ -680,6 +699,13 @@ pub const STEP_KINDS: &[Kind] = &[
         params: &[
             p("artifact", T::Artifact, true, "the layout"),
             p("renames", T::Renames, false, "partitions the layout renames in place, old = new"),
+            p_since(
+                2,
+                "partitions",
+                T::NewPartitions,
+                false,
+                "partitions the layout creates whose size the plan checks, each with its fixed size",
+            ),
         ],
     },
     Kind {

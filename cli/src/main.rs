@@ -5,6 +5,7 @@
 use glassine_installer::facts::Snapshot;
 use glassine_installer::format1::{self, Description};
 use glassine_installer::inspect::{self, Host, Inspected};
+use glassine_installer::release::Release;
 use glassine_installer::validate::{self, Loaded};
 use glassine_installer::{lock, plan, recognize, report};
 use glassine_installer_pc as pc;
@@ -20,9 +21,10 @@ const OWN_REPOSITORY: &str = "GlassineOS/installer";
 const USAGE: &str = "usage:
   glassine-install validate FILE... [--lock LOCKFILE [--require-pins]]
   glassine-install inspect [--json] [--out FACTS.json] [--reboot | --pc [--root DIR]] [--devices DIR]
-  glassine-install check [--facts FACTS.json | --reboot | --pc [--root DIR]] [--json] [--devices DIR]
+  glassine-install check [--facts FACTS.json | --reboot | --pc [--root DIR]] [--release RELEASE.json] [--json] [--devices DIR]
   glassine-install plan --dry-run [--facts FACTS.json | --reboot | --pc [--root DIR]] [--choice K=V]...
-                        [--hardware H=yes|no]... [--developer] [--free BYTES] [--job JOB] [--json] [--devices DIR]
+                        [--hardware H=yes|no]... [--developer] [--free BYTES] [--job JOB] [--release RELEASE.json]
+                        [--json] [--devices DIR]
   glassine-install schema
   glassine-install lock-unpinned LOCKFILE
 
@@ -34,7 +36,8 @@ mounted; --root DIR reads a tree standing for one (sys/, dev/, proc/) instead of
 never inspected without --pc: no device connected doesn't mean this computer. check and plan read a facts snapshot, or without --facts
 inspect the connected device first. A boot loader that only answers in a fresh start of its
 mode needs restarting before the next live command: use --reboot, or keep the facts with --out
-and pass them with --facts.";
+and pass them with --facts. --release reads the installer release's manifest (the least sizes
+its artifacts need); without it, those sizes are not known yet and never refuse a plan.";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -426,11 +429,23 @@ fn plan_input(o: &Opts) -> Result<plan::Input, String> {
     if let Some(n) = o.one("--free") {
         input.free_bytes = Some(n.parse().map_err(|_| format!("--free takes a number of bytes, not {n:?}"))?);
     }
+    input.release = release(o)?;
     Ok(input)
 }
 
+/// The release manifest of --release, if given.
+fn release(o: &Opts) -> Result<Option<Release>, String> {
+    o.one("--release")
+        .map(|f| Release::parse(&read(Path::new(f))?).map_err(|e| format!("{f}: {e}")))
+        .transpose()
+}
+
 fn check_cmd(args: &[String]) -> Result<ExitCode, String> {
-    let o = opts(args, &["--json", "--reboot", "--pc"], &["--facts", "--devices", "--root"])?;
+    let o = opts(args, &["--json", "--reboot", "--pc"], &["--facts", "--devices", "--root", "--release"])?;
+    let input = plan::Input {
+        release: release(&o)?,
+        ..Default::default()
+    };
     let ds = descriptions(&o)?;
     let refs: Vec<&Description> = ds.iter().collect();
     let f = match facts(&o, &refs)? {
@@ -438,7 +453,7 @@ fn check_cmd(args: &[String]) -> Result<ExitCode, String> {
         Err(code) => return Ok(code),
     };
     let rec = recognize::recognize(&refs, &f);
-    let p = plan::plan(&refs, &f, &rec, &plan::Input::default());
+    let p = plan::plan(&refs, &f, &rec, &input);
     let r = report::report(&refs, &f, &rec, Some(&p));
     if o.has("--json") {
         println!("{}", serde_json::to_string_pretty(&r).unwrap());
@@ -452,7 +467,7 @@ fn plan_cmd(args: &[String]) -> Result<ExitCode, String> {
     let o = opts(
         args,
         &["--json", "--dry-run", "--developer", "--reboot", "--pc"],
-        &["--facts", "--devices", "--choice", "--hardware", "--free", "--job", "--root"],
+        &["--facts", "--devices", "--choice", "--hardware", "--free", "--job", "--root", "--release"],
     )?;
     if !o.has("--dry-run") {
         return Err("only the dry run exists: plan --dry-run".into());

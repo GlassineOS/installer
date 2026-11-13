@@ -1413,6 +1413,61 @@
                       ],
                       "type": "string"
                     },
+                    "partitions": {
+                      "description": "partitions the layout creates whose size the plan checks, each with its fixed size",
+                      "items": {
+                        "additionalProperties": false,
+                        "description": "a partition to create",
+                        "properties": {
+                          "at_least": {
+                            "description": "the least it may be: a fixed size (with a relative size only), or `release:<role>`, what the installer's release states for that artifact role (FR-019a); a disk whose free space can't give it, or a fixed size below it, is refused",
+                            "oneOf": [
+                              {
+                                "minimum": 0,
+                                "type": "integer"
+                              },
+                              {
+                                "pattern": "^([0-9]+(KiB|MiB|GiB|TiB)|release:[a-z]+(-[a-z]+)*)$",
+                                "type": "string"
+                              }
+                            ]
+                          },
+                          "name": {
+                            "description": "the partition's name",
+                            "pattern": "^[A-Za-z0-9_.-]+$",
+                            "type": "string"
+                          },
+                          "role": {
+                            "description": "what it is for",
+                            "enum": [
+                              "esp",
+                              "system"
+                            ],
+                            "type": "string"
+                          },
+                          "size": {
+                            "description": "bytes, or relative",
+                            "oneOf": [
+                              {
+                                "minimum": 0,
+                                "type": "integer"
+                              },
+                              {
+                                "pattern": "^([0-9]+(KiB|MiB|GiB|TiB)|rest-of-free-space|rest-of-disk|unknown|after:[A-Za-z0-9_.-]+)$",
+                                "type": "string"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "name",
+                          "size"
+                        ],
+                        "type": "object"
+                      },
+                      "minItems": 1,
+                      "type": "array"
+                    },
                     "renames": {
                       "additionalProperties": {
                         "pattern": "^[A-Za-z0-9_.-]+$",
@@ -1596,21 +1651,21 @@
                         "description": "a partition to create",
                         "properties": {
                           "at_least": {
-                            "description": "for a relative size, the least it may be: a disk whose free space can't give it is refused",
+                            "description": "the least it may be: a fixed size (with a relative size only), or `release:<role>`, what the installer's release states for that artifact role (FR-019a); a disk whose free space can't give it, or a fixed size below it, is refused",
                             "oneOf": [
                               {
                                 "minimum": 0,
                                 "type": "integer"
                               },
                               {
-                                "pattern": "^[0-9]+(KiB|MiB|GiB|TiB)$",
+                                "pattern": "^([0-9]+(KiB|MiB|GiB|TiB)|release:[a-z]+(-[a-z]+)*)$",
                                 "type": "string"
                               }
                             ]
                           },
                           "name": {
-                            "description": "the partition's name (GlassineOS's own)",
-                            "pattern": "^[a-z0-9-]+$",
+                            "description": "the partition's name",
+                            "pattern": "^[A-Za-z0-9_.-]+$",
                             "type": "string"
                           },
                           "role": {
@@ -3230,6 +3285,12 @@
             "name": "renames",
             "required": false,
             "type": "Renames"
+          },
+          {
+            "doc": "partitions the layout creates whose size the plan checks, each with its fixed size",
+            "name": "partitions",
+            "required": false,
+            "type": "NewPartitions"
           }
         ]
       },
