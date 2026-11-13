@@ -3,10 +3,14 @@
 # make targets   the core and the program for every target the installer runs on
 # make docker-check / docker-targets   the same inside the toolchain image (Dockerfile)
 # make golden    rewrite the golden files, the screens' check reports and the schema (review the diff)
-# make web-dev   the browser build and its test page in web/dev (needs wasm-bindgen-cli
-#                at the version Cargo.lock pins for wasm-bindgen)
-# make web-check         the web screens in headless Chromium (CHROMIUM=path) and their vendored files
-# make docker-web-check  the same inside the web test image (web/Dockerfile)
+# make web-pkg   the core built for the browser, in web/pkg (needs wasm-bindgen-cli at the
+#                version Cargo.lock pins for wasm-bindgen; the CI image has it: make docker-web-pkg)
+# make web-site  the site as it is published, in $(SITE): the screens and web/pkg, nothing else
+# make web-serve the site on http://127.0.0.1:$(PORT)/, with the core built in the CI image
+#                (open it in a Chromium-based browser; Connect a device reaches a real one)
+# make web-check         the web screens in headless Chromium (CHROMIUM=path) with the core's test
+#                        records, the site with the core against simulated devices, the vendored files
+# make docker-web-check  the core built in the CI image, then web-check inside the web test image
 # make web-records       rewrite the check reports the screens read (web/fixtures/reports/)
 
 CARGO ?= cargo
@@ -15,7 +19,7 @@ IMAGE ?= glassine-installer-ci
 WEB_IMAGE ?= glassine-installer-web
 FACTS = $(wildcard core/tests/fixtures/facts/*.json)
 
-.PHONY: check test lint descriptions targets golden web-dev docker-image web-check web-records web-image docker-web-check
+.PHONY: check test lint descriptions targets golden web-pkg web-dev web-site web-serve docker-image web-check web-records web-image docker-web-check
 
 check: lint test descriptions
 
@@ -51,17 +55,35 @@ targets:
 
 WASM = $(or $(CARGO_TARGET_DIR),target)/wasm32-unknown-unknown/release/glassine_installer_web.wasm
 
-web-dev:
+web-pkg:
 	$(CARGO) rustc --release -p glassine-installer-web --target wasm32-unknown-unknown --crate-type cdylib
-	wasm-bindgen --target web --out-dir web/dev/pkg $(WASM)
+	wasm-bindgen --target web --out-dir web/pkg $(WASM)
+
+# The developer's page (web/dev) uses the same build.
+web-dev: web-pkg
+
+# The site: what the pages load, and only that. The core's test records stay out, so the site
+# runs on the core alone (?fixtures=1 needs the checkout: web/test/serve.js without --root).
+SITE ?= $(or $(CARGO_TARGET_DIR),target)/web-site
+SITE_FILES = index.html app.js installer.css interleaf lib records screens vendor pkg
+PORT ?= 8790
+
+web-site:
+	@test -f web/pkg/glassine_installer_web.js || { echo "web/pkg is missing: make web-pkg (or make docker-web-pkg)" >&2; exit 1; }
+	rm -rf $(SITE) && mkdir -p $(SITE)
+	cd web && cp -R $(SITE_FILES) $(abspath $(SITE))/
+
+web-serve: docker-web-pkg web-site
+	node web/test/serve.js --root $(SITE) $(PORT)
 
 golden: web-records
 	UPDATE_GOLDEN=1 $(CARGO) test --workspace
 
-web-check:
+web-check: web-site
 	web/tools/vendor check
 	cd web && npm ci --ignore-scripts --no-audit --no-fund
 	node web/test/screens.js
+	node web/test/live.js $(SITE)
 
 docker-image:
 	docker build -t $(IMAGE) .
@@ -69,7 +91,7 @@ docker-image:
 web-image:
 	docker build -t $(WEB_IMAGE) web
 
-docker-web-check: web-image
+docker-web-check: web-image docker-web-pkg
 	docker run --rm -u "$$(id -u):$$(id -g)" -e HOME=/tmp -e npm_config_cache=/tmp/.npm -e CHROMIUM=/usr/bin/chromium \
 		-e WEB_NO_SANDBOX=1 -v "$$PWD":/w -w /w $(WEB_IMAGE) make web-check
 
