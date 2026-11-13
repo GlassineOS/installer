@@ -10,6 +10,7 @@
 //! synchronous but the fastboot and Sahara sessions and inspect, which are async only so
 //! that the browser's USB can drive them; the transport is the edge's.
 
+pub mod derive;
 pub mod efivar;
 pub mod facts;
 pub mod fastboot;

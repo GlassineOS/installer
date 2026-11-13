@@ -63,14 +63,6 @@ export const BOOT_SETTING = {
   'firmware-boot-order': 'The order of the start-up entries',
 };
 
-// Device data the installation keeps (descriptions' device_data).
-export const DEVICE_DATA = {
-  'gpu-firmware': 'graphics firmware',
-  'sensor-calibration': 'sensor calibration',
-  'modem-firmware': 'modem firmware',
-  'wifi-firmware': 'Wi-Fi firmware',
-};
-
 // How the installer reaches the machine (report runs_on.connections; mode kinds).
 export const CONNECTION = {
   'usb-native': { name: 'USB, from this computer', note: 'The installer talks to the device over USB.' },

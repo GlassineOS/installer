@@ -32,10 +32,13 @@ How the machine starts:
   slot-flags (slot-flags): change
 
 Kept from the device:
-  device data: gpu-firmware
-  device data: sensor-calibration
-  device data: modem-firmware
-  device data: wifi-firmware
+  device data: display waveform
+  device data: modem and audio processor firmware
+  device data: Wi-Fi board file
+  device data: Bluetooth firmware
+  device data: graphics firmware
+  device data: speaker tuning
+  device data: sensor calibration
 
 Space on the computer:
   backup 0 B

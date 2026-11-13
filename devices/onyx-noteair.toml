@@ -11,7 +11,6 @@ format = 2
 id = "onyx-noteair"
 name = "Onyx Boox Note Air"
 backend = "android-bootloader"
-device_data = ["gpu-firmware", "sensor-calibration", "modem-firmware", "wifi-firmware"]
 
 # ---- who the device is --------------------------------------------------------
 
@@ -287,6 +286,101 @@ back_up = { with = "role:disk" }
 id = "slot-flags"
 kind = "slot-flags"
 back_up = { with = "role:disk" }
+
+# ---- what it keeps -------------------------------------------------------------
+
+# The device's own files the installed system takes from its partitions (FR-018):
+# its device-data list (/usr/share/glassine/device-data.list) is derived from
+# these. Paths on the vfat partitions (modem, bluetooth) are lower case. The
+# modem's live file systems (modemst1, modemst2, fsc, fsg) are never device
+# data: the modem service copies them into memory at each boot.
+
+# the panel's waveform
+[[device_data]]
+name = "waveform.wbf"
+partition = "system_a"
+path = "/waveform/eink_waveform.wbf"
+check = "wbf"
+what = "display waveform"
+
+# the modem (with the WLAN firmware's DSP image) and the ADSP, by the names the
+# kernel's device tree requests
+[[device_data]]
+name = "firmware/qcom/sdm636/onyx/noteair/mba.mbn"
+partition = "modem"
+path = "/image/mba.mbn"
+what = "modem and audio processor firmware"
+
+[[device_data]]
+name = "firmware/qcom/sdm636/onyx/noteair/modem.*"
+partition = "modem"
+path = "/image/modem.*"
+what = "modem and audio processor firmware"
+
+[[device_data]]
+name = "firmware/qcom/sdm636/onyx/noteair/adsp.*"
+partition = "modem"
+path = "/image/adsp.*"
+what = "modem and audio processor firmware"
+
+[[device_data]]
+name = "firmware/qcom/sdm636/onyx/noteair/wlanmdsp.mbn"
+partition = "modem"
+path = "/image/wlanmdsp.mbn"
+what = "modem and audio processor firmware"
+
+# WiFi's board file (the device tree's board directory, onyx_noteair)
+[[device_data]]
+name = "firmware/ath10k/WCN3990/hw1.0/onyx_noteair/board.bin"
+partition = "modem"
+path = "/image/bdwlan.bin"
+what = "Wi-Fi board file"
+
+# Bluetooth's firmware and NV file
+[[device_data]]
+name = "firmware/qca/crbtfw21.tlv"
+partition = "bluetooth"
+path = "/image/crbtfw21.tlv"
+what = "Bluetooth firmware"
+
+[[device_data]]
+name = "firmware/qca/crnv21.bin"
+partition = "bluetooth"
+path = "/image/crnv21.bin"
+what = "Bluetooth firmware"
+
+# the GPU's zap shader
+[[device_data]]
+name = "firmware/qcom/sdm636/onyx/noteair/a512_zap.*"
+partition = "vendor_a"
+path = "/firmware/a512_zap.*"
+what = "graphics firmware"
+
+# the speaker amplifier's tuning files, by the name the device tree gives it
+[[device_data]]
+name = "firmware/qcom/sdm636/onyx/noteair/aw88194_spk_reg.bin"
+partition = "vendor_a"
+path = "/firmware/awinic/aw881xx_pid_xx_l_spk_reg.bin"
+what = "speaker tuning"
+
+[[device_data]]
+name = "firmware/qcom/sdm636/onyx/noteair/aw88194_spk_fw.bin"
+partition = "vendor_a"
+path = "/firmware/awinic/aw881xx_pid_03_l_spk_fw.bin"
+what = "speaker tuning"
+
+[[device_data]]
+name = "firmware/qcom/sdm636/onyx/noteair/aw88194_spk_cfg.bin"
+partition = "vendor_a"
+path = "/firmware/awinic/aw881xx_pid_03_l_spk_cfg.bin"
+what = "speaker tuning"
+
+# the ADSP's sensor registry (this unit's factory calibration)
+[[device_data]]
+name = "firmware/qcom/sensors/sns.reg"
+partition = "persist"
+path = "/sensors/sns.reg"
+what = "sensor calibration"
 
 # ---- what an installation does ------------------------------------------------
 

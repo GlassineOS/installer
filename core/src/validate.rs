@@ -285,6 +285,7 @@ pub fn check(d: &Description) -> Vec<Problem> {
         }
     }
     unique(&mut ck, d.device_files.iter().map(|u| u.id.as_str()), "device_files", "id");
+    check_device_data(&mut ck);
     unique(&mut ck, d.artifacts.iter().map(|a| a.role.as_str()), "artifacts", "role");
     for (i, c) in d.capabilities.iter().enumerate() {
         let path = format!("capabilities[{i}]");
@@ -419,6 +420,64 @@ pub fn check(d: &Description) -> Vec<Problem> {
         }
     }
     ck.out
+}
+
+/// The device-data files (FR-018) as boot 006 FR-001..FR-005 reads them: each a
+/// line of the list the installed system reads, so a description the check
+/// accepts derives a list the seed accepts. Their sources are only read: a
+/// partition a job may write, create, resize or remove is never one.
+fn check_device_data(ck: &mut Ck) {
+    let d = ck.d;
+    let files: Vec<(usize, &format1::DeviceDataFile)> = d
+        .device_data
+        .iter()
+        .enumerate()
+        .filter_map(|(i, x)| match x {
+            format1::DeviceDatum::File(f) => Some((i, f)),
+            format1::DeviceDatum::Named(_) => None,
+        })
+        .collect();
+    unique(ck, files.iter().map(|(_, f)| f.name.as_str()), "device_data", "name");
+    for (i, f) in files {
+        let path = format!("device_data[{i}]");
+        // A name is relative, without `.` or `..` parts (FR-003); `manifest` is the seed's own.
+        if f.name.split('/').any(|c| c == "." || c == "..") {
+            ck.p(format!("{path}.name"), "a name has no . or .. parts (boot 006 FR-003)");
+        }
+        if f.name == "manifest" {
+            ck.p(format!("{path}.name"), "manifest is the seed's own file");
+        }
+        if f.path.split('/').skip(1).any(|c| c == "." || c == "..") {
+            ck.p(format!("{path}.path"), "a path has no . or .. parts");
+        }
+        // A split image by one pattern, NAME.* from PATH.*, on both sides or neither (FR-004).
+        for (key, v) in [("name", &f.name), ("path", &f.path)] {
+            if v.trim_end_matches(".*").contains('*') {
+                ck.p(format!("{path}.{key}"), "* only as a pattern's last part, .*");
+            }
+        }
+        if f.name.ends_with(".*") != f.path.ends_with(".*") {
+            ck.p(format!("{path}.path"), "a pattern on both sides or neither (boot 006 FR-004)");
+        }
+        let classes = deciding_classes(d, &f.partition, &[]);
+        let named = d.partitions.iter().any(|r| selects_ref(&r.select, &f.partition));
+        if !named {
+            ck.p(format!("{path}.partition"), format!("no partition rule selects {:?}", f.partition));
+        } else if classes.iter().any(|c| c != "never-write") {
+            ck.p(
+                format!("{path}.partition"),
+                format!(
+                    "device data is read from partitions no job changes; {:?} may be {}",
+                    f.partition,
+                    classes.into_iter().collect::<Vec<_>>().join(", ")
+                ),
+            );
+        }
+    }
+    if d.format >= 2 && d.device_data.iter().any(|x| matches!(x, format1::DeviceDatum::Named(_))) {
+        // The shape rejects it first; this keeps the records honest.
+        ck.p("device_data", "from format 2 each device-data file is a table (FR-018)");
+    }
 }
 
 fn looks_unit_unique_name(n: &str) -> bool {
