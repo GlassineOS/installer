@@ -65,6 +65,9 @@ impl<T: Transport> Transport for Logged<T> {
     }
 }
 
+/// How long the command listens on bulk IN after DONE_RESP.
+pub const LISTEN: Duration = Duration::from_secs(20);
+
 /// Runs the upload over `t`, then reads bulk IN for `listen`. Returns what
 /// goes to stdout.
 pub async fn run<T: Transport>(t: T, image: &[u8], listen: Duration) -> Result<String, String> {
@@ -110,4 +113,183 @@ pub async fn run<T: Transport>(t: T, image: &[u8], listen: Duration) -> Result<S
         }
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use glassine_installer::sahara::{self, Mode, cmd};
+    use pollster::block_on;
+    use std::cell::RefCell;
+    use std::collections::VecDeque;
+    use std::rc::Rc;
+
+    /// A scripted boot ROM: each read takes the next item (bytes or an
+    /// error); an empty script times out. What the computer sends is kept.
+    struct Rom {
+        incoming: VecDeque<Result<Vec<u8>, FbError>>,
+        sent: Rc<RefCell<Vec<Vec<u8>>>>,
+    }
+
+    impl Transport for Rom {
+        async fn send(&mut self, d: &[u8]) -> Result<(), FbError> {
+            self.sent.borrow_mut().push(d.to_vec());
+            Ok(())
+        }
+        async fn recv(&mut self) -> Result<Vec<u8>, FbError> {
+            self.recv_max(4096).await
+        }
+        async fn recv_max(&mut self, max: usize) -> Result<Vec<u8>, FbError> {
+            let mut t = self.incoming.pop_front().unwrap_or(Err(FbError::Timeout("waiting for an answer".into())))?;
+            if t.len() > max {
+                let rest = t.split_off(max);
+                self.incoming.push_front(Ok(rest));
+            }
+            Ok(t)
+        }
+    }
+
+    fn pkt(c: u32, body: &[u32]) -> Result<Vec<u8>, FbError> {
+        let mut v = c.to_le_bytes().to_vec();
+        v.extend_from_slice(&((8 + 4 * body.len()) as u32).to_le_bytes());
+        for w in body {
+            v.extend_from_slice(&w.to_le_bytes());
+        }
+        Ok(v)
+    }
+
+    const ID: u32 = 0x0d;
+
+    /// A stand-in image: no real program, just bytes the reads can check.
+    fn image() -> Vec<u8> {
+        (0..0x200u32).map(|i| (i * 7) as u8).collect()
+    }
+
+    /// HELLO, then the boot ROM reads the ELF header and the program
+    /// headers, as it does before it checks anything.
+    fn opening() -> Vec<Result<Vec<u8>, FbError>> {
+        vec![
+            pkt(cmd::HELLO, &[2, 1, 0x400, 0, 0, 0, 0, 0, 0, 0]),
+            pkt(cmd::READ_DATA, &[ID, 0, 0x34]),
+            pkt(cmd::READ_DATA, &[ID, 0x40, 0x70]),
+        ]
+    }
+
+    /// What the computer must send for [`opening`]: the answer to HELLO
+    /// choosing image transfer and the two pieces of the image.
+    fn opening_sent() -> Vec<Vec<u8>> {
+        let img = image();
+        vec![sahara::hello_resp(Mode::ImageTxPending), img[..0x34].to_vec(), img[0x40..0xb0].to_vec()]
+    }
+
+    /// Short enough for a test, long enough for the loop to read every
+    /// scripted item (the fake answers at once).
+    const LISTEN: Duration = Duration::from_millis(50);
+
+    fn go(script: Vec<Result<Vec<u8>, FbError>>) -> (String, Vec<Vec<u8>>) {
+        let sent = Rc::new(RefCell::new(Vec::new()));
+        let rom = Rom {
+            incoming: script.into(),
+            sent: sent.clone(),
+        };
+        let out = block_on(run(rom, &image(), LISTEN)).unwrap();
+        let s = sent.borrow().clone();
+        (out, s)
+    }
+
+    /// An accepted image: END_IMAGE_TX success, then DONE_RESP complete.
+    fn accepted() -> Vec<Result<Vec<u8>, FbError>> {
+        let mut s = opening();
+        s.push(pkt(cmd::END_IMAGE_TX, &[ID, 0]));
+        s.push(pkt(cmd::DONE_RESP, &[1]));
+        s
+    }
+
+    fn accepted_sent() -> Vec<Vec<u8>> {
+        let mut s = opening_sent();
+        s.push(sahara::done());
+        s
+    }
+
+    #[test]
+    fn refused_after_the_program_headers() {
+        let mut s = opening();
+        s.push(pkt(cmd::END_IMAGE_TX, &[ID, 0x28]));
+        let (out, sent) = go(s);
+        assert!(out.starts_with("hello: version 2 (oldest 1)"), "{out}");
+        assert!(out.contains("upload: REFUSED or failed: the device refused the image: "), "{out}");
+        assert!(out.contains("(0x28)"), "{out}");
+        assert!(out.contains("hardware bulk transfer error"), "{out}");
+        assert!(!out.contains("bulk IN"), "no listening after a refusal: {out}");
+        // No DONE after a refusal: only the answer to HELLO and the two reads.
+        assert_eq!(sent, opening_sent());
+    }
+
+    #[test]
+    fn accepted_and_the_program_reports() {
+        let mut s = accepted();
+        let mut rec = b"GLSNPRG0".to_vec();
+        rec.extend_from_slice(&0x1122_3344u32.to_le_bytes());
+        rec.resize(128, 0);
+        s.push(Ok(rec));
+        let (out, sent) = go(s);
+        assert!(
+            out.contains("upload: image id 0xd, 2 reads, 164 bytes, 64-bit reads false, done Complete\n"),
+            "{out}"
+        );
+        assert!(out.contains(": 128 B\n"), "{out}");
+        // "GLSN" and "PRG0" as little-endian words, then the next word.
+        assert!(out.contains("  word  0: 0x4e534c47\n"), "{out}");
+        assert!(out.contains("  word  1: 0x30475250\n"), "{out}");
+        assert!(out.contains("  word  2: 0x11223344\n"), "{out}");
+        assert!(out.contains("  word 31: 0x00000000\n"), "{out}");
+        assert!(!out.contains("word 32"), "{out}");
+        assert!(out.contains("  => GLSNPRG0: our code ran"), "{out}");
+        assert_eq!(sent, accepted_sent());
+    }
+
+    #[test]
+    fn accepted_then_bulk_in_fails() {
+        let mut s = accepted();
+        s.push(Err(FbError::Usb("pipe error".into())));
+        // Never read: the listening ends at the error.
+        s.push(Ok(b"GLSNPRG0".to_vec()));
+        let (out, sent) = go(s);
+        let line = out.lines().find(|l| l.starts_with("bulk IN at T0+")).expect(&out);
+        assert!(line.contains("s ended: ") && line.ends_with("pipe error"), "{line}");
+        assert!(!out.contains("GLSNPRG0"), "{out}");
+        assert_eq!(sent, accepted_sent());
+    }
+
+    /// The whole exchange, byte for byte: nothing is sent after DONE, also
+    /// while listening, also when the program sends nothing or something
+    /// else than its record.
+    #[test]
+    fn nothing_is_sent_after_done() {
+        let (out, sent) = go(accepted());
+        assert!(!out.contains("bulk IN"), "{out}");
+        assert_eq!(sent, accepted_sent());
+        let mut s = accepted();
+        s.push(Ok(vec![0xee; 16]));
+        s.push(Ok(vec![]));
+        s.push(Err(FbError::Timeout("waiting for an answer".into())));
+        let (out, sent) = go(s);
+        assert!(out.contains(": 16 B\n  word  0: 0xeeeeeeee\n"), "{out}");
+        assert!(!out.contains("=> GLSNPRG0"), "{out}");
+        assert_eq!(sent, accepted_sent());
+        assert_eq!(sent.last().unwrap(), &sahara::done());
+        assert_eq!(sent.iter().filter(|p| **p == sahara::done()).count(), 1);
+    }
+
+    /// A DONE_RESP that isn't "complete": no listening.
+    #[test]
+    fn pending_done_does_not_listen() {
+        let mut s = opening();
+        s.push(pkt(cmd::END_IMAGE_TX, &[ID, 0]));
+        s.push(pkt(cmd::DONE_RESP, &[0]));
+        s.push(Ok(b"GLSNPRG0".to_vec()));
+        let (out, sent) = go(s);
+        assert!(out.ends_with("done Pending\n"), "{out}");
+        assert_eq!(sent, accepted_sent());
+    }
 }

@@ -566,10 +566,10 @@ fn emergency_try_cmd(args: &[String]) -> Result<ExitCode, String> {
     };
     let img = std::fs::read(image).map_err(|e| format!("{image}: {e}"))?;
     let (mut t, _ids) = emergency::open()?;
-    // One timeout long enough for the whole listening window: the transport
+    // One timeout as long as the whole listening window: the transport
     // closes after its first timeout.
-    t.set_timeout(std::time::Duration::from_secs(20));
-    let r = pollster::block_on(emergency_try::run(t, &img, std::time::Duration::from_secs(20)));
+    t.set_timeout(emergency_try::LISTEN);
+    let r = pollster::block_on(emergency_try::run(t, &img, emergency_try::LISTEN));
     match r {
         Ok(out) => {
             print!("{out}");
