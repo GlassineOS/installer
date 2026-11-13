@@ -12,6 +12,7 @@ mod img;
 use glassine_installer::format1::Description;
 use glassine_installer::plan::{self, Input, Status};
 use glassine_installer::recognize::recognize;
+use glassine_installer::release::Release;
 use glassine_installer::validate::{Loaded, load};
 use img::{MIB, Part};
 use std::fs::{self, File};
@@ -344,6 +345,8 @@ fn the_plan_on_what_it_read() {
     let run = |choices: &[(&str, &str)]| {
         let mut i = Input {
             developer: true,
+            // The release states the system partition's least size: 8 GiB.
+            release: Some(Release::parse(include_str!("../../core/tests/fixtures/releases/base-8gib.json")).unwrap()),
             ..Default::default()
         };
         for (k, v) in choices {
@@ -380,6 +383,16 @@ fn the_plan_on_what_it_read() {
         "{:?}",
         p.reasons
     );
+    // Without the release that least isn't known yet: not refused for it.
+    let mut i = Input {
+        developer: true,
+        ..Default::default()
+    };
+    i.choices.insert("target-disk".into(), "disk3".into());
+    let p = plan::plan(&ds, &s, &rec, &i);
+    assert_eq!(p.status, Status::Ready, "{:?}", p.reasons);
+    let sp = p.space.disk.as_ref().unwrap();
+    assert_eq!((sp.needs, sp.lacks, sp.exact), (GIB, 0, false));
 
     // The other Linux's disk: its image is at most the disk less what its
     // file systems report free.

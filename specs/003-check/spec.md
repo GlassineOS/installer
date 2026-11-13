@@ -50,7 +50,8 @@ another Linux; holding an existing EFI system partition and another system; too 
 found, proposes where GlassineOS goes (free space, a disk the person picks, or replacing a
 named system), lists a backup image for each disk it would write to and none for the
 others, and says what happens to the firmware's boot entries. A disk that is too
-small is refused with the space it lacks. The disks and the firmware's stored settings are
+small for the release manifest the check is given (002 FR-019a) is refused with the
+space it lacks. The disks and the firmware's stored settings are
 unchanged afterwards.
 
 ### Scenario 3 – A machine nothing describes (P1)
