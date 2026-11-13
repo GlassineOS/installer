@@ -17,4 +17,6 @@ glassine-installer = { path = "../core" }
 glassine-installer-pc = { path = "../pc" }
 glassine-installer-usb = { path = "../usb" }
 pollster = "0.4"
+# The backup's compressed copies (pure Rust, no C library).
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 serde_json = "1"
