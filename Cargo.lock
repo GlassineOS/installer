@@ -279,6 +279,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "glassine-device-files"
+version = "0.1.0"
+dependencies = [
+ "glassine-installer",
+]
+
+[[package]]
 name = "glassine-install"
 version = "0.1.0"
 dependencies = [

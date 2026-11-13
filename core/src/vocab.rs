@@ -544,6 +544,10 @@ pub const NEEDS: &[Entry] = &[
 /// Needs that are special hardware (001: the plan asks for it first).
 pub const SPECIAL_HARDWARE: &[&str] = &["emergency-cable"];
 
+/// The checks a device-data file may name besides its sha256 (FR-018, boot 006
+/// FR-001). Format 1 names device data only.
+pub const DEVICE_DATA_CHECKS: &[Entry] = &[since(2, "wbf", "a display waveform: the WBF header's length matches the file")];
+
 /// The partition classes: the most any job may do to a partition (FR-014).
 pub const CLASSES: &[Entry] = &[
     e("never-write", "never written; steps may read it and back it up"),

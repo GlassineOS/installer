@@ -24,6 +24,11 @@ pub const FIXED_SIZE_PATTERN: &str = "^[0-9]+(KiB|MiB|GiB|TiB)$";
 pub const LEAST_SIZE_PATTERN: &str = "^([0-9]+(KiB|MiB|GiB|TiB)|release:[a-z]+(-[a-z]+)*)$";
 pub const SIZE_PATTERN: &str = "^([0-9]+(KiB|MiB|GiB|TiB)|rest-of-free-space|rest-of-disk|unknown|after:[A-Za-z0-9_.-]+)$";
 pub const RECORD_PATTERN: &str = "^([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[0-9]+|https://docs\\.glassine\\.org/[A-Za-z0-9_./#-]*)$";
+/// A partition by its name in the device's table.
+pub const PART_NAME_PATTERN: &str = "^[A-Za-z0-9_.-]+$";
+/// A device-data file's name in the seed and its path on its partition (FR-018).
+pub const DATA_NAME_PATTERN: &str = "^[A-Za-z0-9_.+*-]+(/[A-Za-z0-9_.+*-]+)*$";
+pub const DATA_PATH_PATTERN: &str = "^(/[A-Za-z0-9_.+*-]+)+$";
 pub const USB_ID_PATTERN: &str = "^[0-9a-f]{4}$";
 pub const USB_IF_PATTERN: &str = "^[0-9a-f]{2}-[0-9a-f]{2}-[0-9a-f]{2}$";
 
@@ -258,6 +263,38 @@ pub struct DeviceFile {
     pub used_by: String,
 }
 
+/// A device-data file the installed system takes from the device's own
+/// partitions (FR-018, boot 006): format 1 names it only, format 2 says where it
+/// is read and how it is checked.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum DeviceDatum {
+    Named(String),
+    File(DeviceDataFile),
+}
+
+/// One line of the device-data list (boot 006 FR-001).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeviceDataFile {
+    pub name: String,
+    pub partition: String,
+    pub path: String,
+    #[serde(default)]
+    pub check: Option<String>,
+    pub what: String,
+}
+
+impl DeviceDatum {
+    /// What the plan shows for it.
+    pub fn what(&self) -> &str {
+        match self {
+            DeviceDatum::Named(n) => n,
+            DeviceDatum::File(f) => &f.what,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Artifact {
@@ -421,7 +458,7 @@ pub struct Description {
     #[serde(default)]
     pub refines: Option<String>,
     #[serde(default)]
-    pub device_data: Vec<String>,
+    pub device_data: Vec<DeviceDatum>,
     pub identity: Vec<Condition>,
     pub states: Vec<State>,
     pub modes: Vec<Mode>,
@@ -840,6 +877,33 @@ pub fn shape_for(format: i64) -> Table {
             f("used_by", s("what uses it")),
         ],
     ));
+    // Format 1 names the files; format 2 has the whole line of the list (FR-018).
+    let device_data = if format >= 2 {
+        arr(
+            table(Table::new(
+                "a device-data file the installed system takes from the device's own partitions (FR-018, boot 006)",
+                vec![
+                    f(
+                        "name",
+                        sp(
+                            DATA_NAME_PATTERN,
+                            "its name in the seed: relative, may have directories, NAME.* for a split image",
+                        ),
+                    ),
+                    f("partition", sp(PART_NAME_PATTERN, "the partition it is read from, read-only")),
+                    f(
+                        "path",
+                        sp(DATA_PATH_PATTERN, "its path on that partition, from /; PATH.* when the name is a pattern"),
+                    ),
+                    opt("check", se(&ids(vocab::DEVICE_DATA_CHECKS), "how it is checked besides its sha256")),
+                    f("what", s("what it is, shown in the plan; consecutive files with the same text are one group")),
+                ],
+            )),
+            "the device-data files the installed system needs; its device-data list is derived from them (FR-018, FR-030)",
+        )
+    } else {
+        arr(sp("^[A-Za-z0-9_./-]+$", ""), "the device-data files the installed system needs (boot 006)")
+    };
     let artifact = table(Table::new(
         "something the installation writes that doesn't come from the device (FR-019)",
         vec![
@@ -971,10 +1035,7 @@ pub fn shape_for(format: i64) -> Table {
                 boolean("matches on its platform alone and is refined by any description that matches too"),
             ),
             opt("refines", sp(ID_PATTERN, "the more general description this one refines")),
-            opt(
-                "device_data",
-                arr(sp("^[A-Za-z0-9_./-]+$", ""), "the device-data files the installed system needs (boot 006)"),
-            ),
+            opt("device_data", device_data),
             f("identity", arr1(identity, "the signals that recognise the device")),
             f("states", arr1(state, "the install states, the device as shipped first")),
             f("modes", arr1(mode, "")),
@@ -1041,7 +1102,7 @@ pub fn vocabularies_json(format: i64) -> serde_json::Value {
             })
             .collect::<Vec<_>>()
     };
-    json!({
+    let mut v = json!({
         "fact_keys": vocab::FACT_KEYS.iter().map(|k| json!({ "key": k.pattern, "type": format!("{:?}", k.ty), "kind": k.kind.name(), "modes": k.modes, "unit_unique": k.unit_unique, "doc": k.doc })).collect::<Vec<_>>(),
         "mode_kinds": vocab::MODE_KINDS.iter().map(|m| json!({ "id": m.id, "doc": m.doc, "backends": m.backends, "operations": m.operations })).collect::<Vec<_>>(),
         "departures": kinds(vocab::departures(format)),
@@ -1057,5 +1118,10 @@ pub fn vocabularies_json(format: i64) -> serde_json::Value {
         "escape_leaves": entries(vocab::ESCAPE_LEAVES),
         "jobs": entries(vocab::JOBS),
         "backends": entries(vocab::BACKENDS),
-    })
+    });
+    // Vocabularies a format added; an earlier format's schema doesn't list them.
+    if format >= 2 {
+        v["device_data_checks"] = json!(entries(vocab::DEVICE_DATA_CHECKS));
+    }
+    v
 }

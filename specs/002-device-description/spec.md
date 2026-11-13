@@ -92,7 +92,7 @@ pinned to,
 
   | Format | Differs from the one after it |
   |--------|-------------------------------|
-  | 1      | No `disk` role (FR-016a): each `back-up` and `replace` rule names its own backup, and no job must image whole disks. The classes `read` and `back-up` exist and mean `never-write`. A new partition has no `at_least`, and a layout's partitions have no sizes (FR-014a). |
+  | 1      | No `disk` role (FR-016a): each `back-up` and `replace` rule names its own backup, and no job must image whole disks. The classes `read` and `back-up` exist and mean `never-write`. A new partition has no `at_least`, a layout's partitions have no sizes (FR-014a), and device data is only named (FR-018). |
   | 2      | This spec. |
 - **FR-004**: The format, vocabularies included, is also published as a machine-readable
   schema for each `format`, so editors and the device repositories' own checks validate a
@@ -237,9 +237,10 @@ pinned to,
   it goes. They are read before the first write and never leave the person's computer.
 - **FR-018**: `[[device_data]]` lists the device-data files the installed system needs
   ([boot 006](https://github.com/GlassineOS/boot/blob/main/specs/006-device-data-storage-access/spec.md)):
-  for each, the name the system uses, the partition and path it is read from, and how it
-  is checked, as complete as boot 006's list needs. The device-data list the installed
-  system reads is derived from these entries and from nothing else.
+  for each, what it is (the plan shows it), the name the system uses, the partition and
+  path it is read from (a partition no job changes), and how it is checked, as complete as
+  boot 006's list needs. The device-data list the installed system reads is derived from
+  these entries and from nothing else.
 - **FR-018a**: `[[device_files]]` lists the vendor files the installation needs from the
   device itself ([0008](https://docs.glassine.org/decisions/0008-bring-your-own-stock-kernel/)):
   what each is, where on the device it is read, and what uses it. They stay on the person's
@@ -317,9 +318,10 @@ pinned to,
   repository and installed with the device's package.
 - **FR-030**: Every file on the installed system that states a device fact the
   description holds (the device-data list of FR-018; where the description keeps another
-  system, the slot that system starts from) is derived from the description when the
-  device's package is built, and the build fails when a derived file and the description
-  disagree. No such file is written by hand.
+  system, the slot that system starts from, which is the slot the step that retires it
+  marks unbootable when the person chooses not to keep it) is derived from the
+  description when the device's package is built, and the build fails when a derived file
+  and the description disagree. No such file is written by hand.
 
 ## What a description never holds
 
