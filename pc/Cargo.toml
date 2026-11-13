@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+[package]
+name = "glassine-installer-pc"
+description = "The GlassineOS installer's PC edge: inspects the Linux machine it runs on, read-only"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+# No dependency but the core: no libc, so no ioctl and no mount can be reached
+# from here; files are only ever opened through src/ro.rs.
+[dependencies]
+glassine-installer = { path = "../core" }
+
+[dev-dependencies]
+serde_json = "1"

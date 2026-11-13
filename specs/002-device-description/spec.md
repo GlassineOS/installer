@@ -186,7 +186,9 @@ pinned to,
   partitions it reads, writes, creates, resizes or removes. The plan's list (001 FR-003)
   is derived from the steps the choices select, and the check rejects a step that would go
   beyond its partition's rule. A size may be relative (the rest of a disk, the free space,
-  what is left after another partition).
+  what is left after another partition), and a relative size may name the least it can be
+  (`at_least`). A plan whose disk can't give the new partitions their fixed sizes and
+  those least sizes is refused, with the space it lacks.
 - **FR-014b**: Renaming a partition is not an action: it is a parameter of the step that
   writes the partition table (old name = new name), and that step writes the table. The
   rules select a renamed partition by both its names.

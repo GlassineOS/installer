@@ -1,0 +1,46 @@
+name: pc-check
+# The PC check on virtual UEFI PCs (spec 003 SC-001): QEMU with OVMF and a
+# writable variable store, the static glassine-install on a USB stick, the
+# disks of each case built here. Every disk and the variable store must be
+# byte-identical before and after; a control run that writes must be caught.
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  qemu:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+      - name: the static glassine-install (in the toolchain image)
+        run: |
+          docker build -t glassine-installer-ci .
+          docker run --rm -u "$(id -u):$(id -g)" -e CARGO_HOME=/w/.cargo-home -v "$PWD":/w -w /w glassine-installer-ci \
+            cargo build --release -p glassine-install
+          file target/release/glassine-install
+          file target/release/glassine-install | grep -q 'static'
+      - name: QEMU, OVMF and the disk tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 ovmf gdisk dosfstools e2fsprogs mtools squashfs-tools
+      - name: KVM, where the runner has it (else QEMU falls back to TCG)
+        run: |
+          if [ -e /dev/kvm ]; then
+            echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+            sudo udevadm control --reload-rules
+            sudo udevadm trigger --name-match=kvm
+          fi
+      - name: the cases
+        timeout-minutes: 100
+        run: |
+          python3 tests/qemu/run.py --binary target/release/glassine-install \
+            --work "$RUNNER_TEMP/qemu" --cache "$RUNNER_TEMP/qemu-cache"
+      - name: the records and serial logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: pc-check-records
+          path: |
+            ${{ runner.temp }}/qemu/*/*.json
+            ${{ runner.temp }}/qemu/*/serial.log
+          if-no-files-found: ignore

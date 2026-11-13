@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# The PC reader is read-only by construction: nothing in this crate may open a
+# file for writing, change the file system or start a program. `make lint`
+# denies these; the tests, which build the fake trees, allow them by name.
+disallowed-types = [
+  { path = "std::fs::OpenOptions", reason = "the reader opens files read-only, through ro::open" },
+  { path = "std::process::Command", reason = "the reader starts no program" },
+]
+disallowed-methods = [
+  { path = "std::fs::File::open", reason = "files are opened only in ro.rs, which hands out a reader and never the file" },
+  { path = "std::fs::File::create", reason = "the reader writes nothing" },
+  { path = "std::fs::File::create_new", reason = "the reader writes nothing" },
+  { path = "std::fs::File::options", reason = "the reader opens files read-only, through ro::open" },
+  { path = "std::fs::File::set_len", reason = "the reader writes nothing" },
+  { path = "std::fs::File::set_permissions", reason = "the reader writes nothing" },
+  { path = "std::fs::write", reason = "the reader writes nothing" },
+  { path = "std::fs::copy", reason = "the reader writes nothing" },
+  { path = "std::fs::rename", reason = "the reader writes nothing" },
+  { path = "std::fs::hard_link", reason = "the reader writes nothing" },
+  { path = "std::fs::create_dir", reason = "the reader writes nothing" },
+  { path = "std::fs::create_dir_all", reason = "the reader writes nothing" },
+  { path = "std::fs::remove_file", reason = "the reader writes nothing" },
+  { path = "std::fs::remove_dir", reason = "the reader writes nothing" },
+  { path = "std::fs::remove_dir_all", reason = "the reader writes nothing" },
+  { path = "std::fs::set_permissions", reason = "the reader writes nothing" },
+  { path = "std::os::unix::fs::symlink", reason = "the reader writes nothing" },
+]
