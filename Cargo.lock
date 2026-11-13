@@ -258,6 +258,7 @@ name = "glassine-install"
 version = "0.1.0"
 dependencies = [
  "glassine-installer",
+ "glassine-installer-pc",
  "glassine-installer-usb",
  "pollster",
  "serde_json",
@@ -274,6 +275,14 @@ dependencies = [
  "serde_json",
  "sha2",
  "toml",
+]
+
+[[package]]
+name = "glassine-installer-pc"
+version = "0.1.0"
+dependencies = [
+ "glassine-installer",
+ "serde_json",
 ]
 
 [[package]]

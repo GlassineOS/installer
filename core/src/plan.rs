@@ -161,8 +161,8 @@ pub struct DiskImage {
     pub holds: String,
     pub stored: String,
     /// The image's size as stored: `about` (the description's estimate),
-    /// `at-most` (the disk's size; inspecting didn't see the used blocks) or
-    /// `unknown`.
+    /// `at-most` (the disk's size, less what its file systems report free
+    /// where inspecting could read that) or `unknown`.
     pub estimate: String,
     pub estimate_bytes: Option<u64>,
     pub mode: String,
@@ -199,6 +199,21 @@ pub struct Space {
     /// At least this much; exact only when both unknown lists are empty.
     pub total_at_least: u64,
     pub exact: bool,
+    /// Room on the disk GlassineOS goes on, where the plan makes partitions.
+    pub disk: Option<DiskSpace>,
+}
+
+/// What the new partitions need on their disk and what it has (001: not
+/// enough space is refused at the plan, with the space it lacks).
+#[derive(Debug, Clone, Serialize)]
+pub struct DiskSpace {
+    pub disk: u32,
+    /// The largest unpartitioned region, plus what the plan removes there.
+    pub free: u64,
+    /// The fixed sizes and the least each relative size may be.
+    pub needs: u64,
+    /// How much more the disk would need: 0 when it fits.
+    pub lacks: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -409,11 +424,30 @@ pub fn plan(ds: &[&Description], facts: &Snapshot, rec: &Recognition, input: &In
         values.get(&key) == Some(&w.equals)
     };
 
-    // The target disk, for PCs.
-    let target_disk: Option<u32> = d.choices.iter().find(|c| c.source == "disks").and_then(|c| {
+    // The target disk, for PCs: never the installer's own (by default the
+    // first fixed disk besides it).
+    let installer_disk = facts.storage.as_ref().and_then(|s| s.installer_disk.as_ref()).map(|i| i.index);
+    let disks_choice = d.choices.iter().find(|c| c.source == "disks");
+    let target_disk: Option<u32> = disks_choice.and_then(|c| {
         let v = values.get(&c.id)?;
-        disk_index(v).or_else(|| facts.storage.as_ref()?.disks.iter().find(|d| !d.removable).map(|d| d.index))
+        disk_index(v).or_else(|| {
+            let disks = &facts.storage.as_ref()?.disks;
+            let others = || disks.iter().filter(|d| Some(d.index) != installer_disk);
+            others().find(|d| !d.removable).or_else(|| others().next()).map(|d| d.index)
+        })
     });
+    if let Some(c) = disks_choice {
+        match (target_disk, installer_disk) {
+            (Some(t), Some(i)) if t == i => reasons.push(format!(
+                "disk {t} is the disk the installer runs from: GlassineOS can't go on it; choose another disk ({})",
+                c.id
+            )),
+            (None, _) if facts.storage.as_ref().is_some_and(|s| !s.disks.is_empty()) => {
+                reasons.push("there is no disk to put GlassineOS on besides the one the installer runs from".into())
+            }
+            _ => {}
+        }
+    }
 
     // The steps the choices select, in their order.
     let mut insts: Vec<Inst> = Vec::new();
@@ -673,6 +707,63 @@ pub fn plan(ds: &[&Description], facts: &Snapshot, rec: &Recognition, input: &In
         });
     }
 
+    // Room for the new partitions on their disk.
+    let mut disk_space = None;
+    for inst in &insts {
+        let Some(toml::Value::Array(news)) = inst.step.params.get("partitions") else {
+            continue;
+        };
+        let Some(n) = disk_for(inst.item) else { continue };
+        let Some(disk) = facts.storage.as_ref().and_then(|s| s.disks.iter().find(|x| x.index == n)) else {
+            continue;
+        };
+        let needs: u64 = news
+            .iter()
+            .filter_map(|p| p.as_table())
+            .map(|p| {
+                p.get("size")
+                    .and_then(fixed_size)
+                    .or_else(|| p.get("at_least").and_then(fixed_size))
+                    .unwrap_or(0)
+            })
+            .sum();
+        // What the plan removes on that disk may join the free space; counted
+        // whole, so a disk is only refused when even that can't make room.
+        let removed: u64 = pplans
+            .values()
+            .filter(|x| x.actions.iter().any(|a| a == "removes"))
+            .filter(|x| parts.iter().any(|p| p.display == x.partition && p.disk == Some(n)))
+            .filter_map(|x| x.size)
+            .sum();
+        let free = disk.free.iter().copied().max().unwrap_or(0) + removed;
+        let lacks = needs.saturating_sub(free);
+        if lacks > 0 {
+            reasons.push(format!(
+                "disk {n} is too small: GlassineOS needs {} there and it has {} free; it lacks {} ({lacks} bytes)",
+                human(needs),
+                human(free),
+                human(lacks)
+            ));
+        }
+        disk_space = Some(DiskSpace { disk: n, free, needs, lacks });
+    }
+    for n in &touched_disks {
+        if facts
+            .storage
+            .as_ref()
+            .and_then(|s| s.disks.iter().find(|x| x.index == *n))
+            .is_some_and(|x| x.table.as_deref() == Some("unreadable"))
+        {
+            reasons.push(format!("disk {n}'s partition table can't be read, so nothing on it is written"));
+        }
+    }
+    if let Some(i) = installer_disk
+        && touched_disks.contains(&i)
+        && target_disk != Some(i)
+    {
+        reasons.push(format!("the plan writes to disk {i}, the disk the installer runs from: it never may"));
+    }
+
     // The full backup (001 FR-009): one image per disk the plan writes to.
     let mut backup = BackupPlan {
         choice: values.get(BACKUP_CHOICE).cloned().unwrap_or_else(|| "full".into()),
@@ -696,7 +787,7 @@ pub fn plan(ds: &[&Description], facts: &Snapshot, rec: &Recognition, input: &In
                     let disk = facts.storage.as_ref().and_then(|s| s.disks.iter().find(|x| x.index == *n));
                     let (estimate, bytes) = match (&b.size, disk) {
                         (Some(Scalar::Int(x)), _) => ("about", Some(*x as u64)),
-                        (_, Some(disk)) => ("at-most", Some(disk.size)),
+                        (_, Some(disk)) => ("at-most", Some(at_most(disk))),
                         _ => ("unknown", None),
                     };
                     match (estimate, bytes) {
@@ -721,6 +812,23 @@ pub fn plan(ds: &[&Description], facts: &Snapshot, rec: &Recognition, input: &In
                         check: b.check.clone().unwrap_or_default(),
                         step: step.clone(),
                     });
+                }
+                let installer_media = backup.target.kind == "installer-media";
+                match (installer_media, installer_disk) {
+                    (true, Some(i)) if touched_disks.contains(&i) => reasons.push(format!(
+                        "the backup can't go to the installer's own disk {i}: the plan writes to it; choose another place or switch the backup off"
+                    )),
+                    (true, None) if facts.mode == "local" => {
+                        if let Some(r) = touched_disks
+                            .iter()
+                            .find(|n| facts.storage.as_ref().is_some_and(|s| s.disks.iter().any(|d| d.index == **n && d.removable)))
+                        {
+                            reasons.push(format!(
+                                "the plan writes to removable disk {r} and inspecting couldn't tell which disk the installer runs from, so the backup to the installer's media could land on the disk it images; choose another place for it"
+                            ));
+                        }
+                    }
+                    _ => {}
                 }
                 if let Some(n) = backup.target.disk
                     && touched_disks.contains(&n)
@@ -763,6 +871,7 @@ pub fn plan(ds: &[&Description], facts: &Snapshot, rec: &Recognition, input: &In
         artifact_bytes,
         artifacts_unknown,
         total_at_least: backup_bytes + artifact_bytes,
+        disk: disk_space,
     };
     if let Some(free) = input.free_bytes
         && space.total_at_least > free
@@ -885,6 +994,31 @@ pub fn plan(ds: &[&Description], facts: &Snapshot, rec: &Recognition, input: &In
     }
 }
 
+/// A fixed size in bytes: an integer, or a number with a binary unit.
+fn fixed_size(v: &toml::Value) -> Option<u64> {
+    match v {
+        toml::Value::Integer(n) => u64::try_from(*n).ok(),
+        toml::Value::String(t) => {
+            let (n, shift) = [("KiB", 10), ("MiB", 20), ("GiB", 30), ("TiB", 40)]
+                .iter()
+                .find_map(|(u, sh)| t.strip_suffix(u).map(|n| (n, *sh)))?;
+            n.parse::<u64>().ok()?.checked_mul(1 << shift)
+        }
+        _ => None,
+    }
+}
+
+/// The most a whole-disk image holds: the disk, less what each file system
+/// that tells its used bytes reports free.
+fn at_most(disk: &crate::facts::Disk) -> u64 {
+    let unused: u64 = disk
+        .partitions
+        .iter()
+        .filter_map(|p| p.fs.as_ref()?.used.map(|u| p.size.saturating_sub(u)))
+        .sum();
+    disk.size.saturating_sub(unused)
+}
+
 fn disk_index(v: &str) -> Option<u32> {
     v.strip_prefix("disk").and_then(|n| n.parse().ok())
 }
@@ -928,7 +1062,11 @@ fn parts_of(d: &Description, facts: &Snapshot, target: Option<u32>) -> Vec<Part>
                 let mut roles = BTreeSet::new();
                 roles.insert(format!("part:{}:{}", disk.index, p.index));
                 let on_target = target.is_none_or(|t| t == disk.index);
-                if p.type_guid.as_deref().is_some_and(|t| t.eq_ignore_ascii_case(ESP_TYPE)) && on_target {
+                if p.type_guid
+                    .as_deref()
+                    .is_some_and(|t| t.eq_ignore_ascii_case(ESP_TYPE) || t.eq_ignore_ascii_case("0xef"))
+                    && on_target
+                {
                     roles.insert("esp".into());
                 }
                 if facts.systems.iter().any(|s| s.disk == disk.index && s.partitions.contains(&p.index)) {
@@ -1160,6 +1298,22 @@ pub fn render(p: &Plan, d: Option<&Description>) -> String {
             ),
         );
         line(&mut o, format!("  {} {}", if s.exact { "total" } else { "at least" }, human(s.total_at_least)));
+        if let Some(d) = &s.disk {
+            line(
+                &mut o,
+                format!(
+                    "\nSpace on disk {}: GlassineOS needs {}, it has {} free{}",
+                    d.disk,
+                    human(d.needs),
+                    human(d.free),
+                    if d.lacks > 0 {
+                        format!("; it lacks {}", human(d.lacks))
+                    } else {
+                        String::new()
+                    }
+                ),
+            );
+        }
     }
     if !p.capabilities.is_empty() {
         line(&mut o, "\nAfterwards the device:".into());

@@ -7,6 +7,7 @@ use glassine_installer::format1::{self, Description};
 use glassine_installer::inspect::{self, Host, Inspected};
 use glassine_installer::validate::{self, Loaded};
 use glassine_installer::{lock, plan, recognize, report};
+use glassine_installer_pc as pc;
 use glassine_installer_usb as usb;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -18,16 +19,19 @@ const OWN_REPOSITORY: &str = "GlassineOS/installer";
 
 const USAGE: &str = "usage:
   glassine-install validate FILE... [--lock LOCKFILE [--require-pins]]
-  glassine-install inspect [--json] [--out FACTS.json] [--reboot] [--devices DIR]
-  glassine-install check [--facts FACTS.json | --reboot] [--json] [--devices DIR]
-  glassine-install plan --dry-run [--facts FACTS.json | --reboot] [--choice K=V]... [--hardware H=yes|no]...
-                        [--developer] [--free BYTES] [--job JOB] [--json] [--devices DIR]
+  glassine-install inspect [--json] [--out FACTS.json] [--reboot | --pc [--root DIR]] [--devices DIR]
+  glassine-install check [--facts FACTS.json | --reboot | --pc [--root DIR]] [--json] [--devices DIR]
+  glassine-install plan --dry-run [--facts FACTS.json | --reboot | --pc [--root DIR]] [--choice K=V]...
+                        [--hardware H=yes|no]... [--developer] [--free BYTES] [--job JOB] [--json] [--devices DIR]
   glassine-install schema
   glassine-install lock-unpinned LOCKFILE
 
 Descriptions come from the copies built into this program unless --devices names a directory.
 inspect reads the one device connected in fastboot mode and writes nothing to it (getvar only;
---reboot restarts it at the end). check and plan read a facts snapshot, or without --facts
+--reboot restarts it at the end). With --pc it reads the PC it runs on instead (Linux only): the
+firmware, its variables, every disk's partition table and file systems, all read-only, nothing
+mounted; --root DIR reads a tree standing for one (sys/, dev/, proc/) instead of /. The PC is
+never inspected without --pc: no device connected doesn't mean this computer. check and plan read a facts snapshot, or without --facts
 inspect the connected device first. A boot loader that only answers in a fresh start of its
 mode needs restarting before the next live command: use --reboot, or keep the facts with --out
 and pass them with --facts.";
@@ -231,9 +235,42 @@ fn live(ds: &[&Description], reboot: bool) -> Result<Inspected, String> {
     Ok(got)
 }
 
+/// Whether the PC this runs on is to be inspected, and below which root.
+fn pc_root(o: &Opts) -> Option<PathBuf> {
+    match (o.one("--root"), o.has("--pc")) {
+        (Some(r), _) => Some(PathBuf::from(r)),
+        (None, true) => Some(PathBuf::from("/")),
+        _ => None,
+    }
+}
+
+/// Inspects the PC (or the tree standing for it); its notes go to stderr.
+fn live_pc(root: &Path) -> Result<Snapshot, String> {
+    let got = pc::inspect(root)?;
+    for n in &got.notes {
+        eprintln!("note: {n}");
+    }
+    Ok(got.snapshot)
+}
+
 /// The snapshot from --facts, or a live inspect without it. `Err(Ok(code))`
 /// is a device that couldn't be inspected (already reported).
 fn facts(o: &Opts, ds: &[&Description]) -> Result<Result<Snapshot, ExitCode>, String> {
+    if o.one("--facts").is_some() && (pc_root(o).is_some() || o.has("--reboot")) {
+        return Err("--facts reads a snapshot: it doesn't go with --pc, --root or --reboot".into());
+    }
+    if pc_root(o).is_some() && o.has("--reboot") {
+        return Err("--reboot restarts a device; it doesn't go with --pc".into());
+    }
+    if let Some(root) = pc_root(o) {
+        return match live_pc(&root) {
+            Ok(s) => Ok(Ok(s)),
+            Err(e) => {
+                eprintln!("{e}");
+                Ok(Err(ExitCode::from(DEVICE_FAILED)))
+            }
+        };
+    }
     match o.one("--facts") {
         Some(f) => Snapshot::parse(&read(Path::new(f))?).map(Ok).map_err(|e| format!("{f}: {e}")),
         None => match live(ds, o.has("--reboot")) {
@@ -247,7 +284,32 @@ fn facts(o: &Opts, ds: &[&Description]) -> Result<Result<Snapshot, ExitCode>, St
 }
 
 fn inspect_cmd(args: &[String]) -> Result<ExitCode, String> {
-    let o = opts(args, &["--json", "--reboot"], &["--out", "--devices"])?;
+    let o = opts(args, &["--json", "--reboot", "--pc"], &["--out", "--devices", "--root"])?;
+    if let Some(root) = pc_root(&o) {
+        if o.has("--reboot") {
+            return Err("--reboot restarts a device; it doesn't go with --pc".into());
+        }
+        let s = match live_pc(&root) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("{e}");
+                return Ok(ExitCode::from(DEVICE_FAILED));
+            }
+        };
+        let json = serde_json::to_string_pretty(&s).unwrap() + "\n";
+        if let Some(out) = o.one("--out") {
+            std::fs::write(out, &json).map_err(|e| format!("{out}: {e}"))?;
+        }
+        if o.has("--json") {
+            print!("{json}");
+        } else {
+            print!("{}", render_pc(&s));
+            if let Some(out) = o.one("--out") {
+                println!("facts written to {out}");
+            }
+        }
+        return Ok(ExitCode::SUCCESS);
+    }
     let ds = descriptions(&o)?;
     let refs: Vec<&Description> = ds.iter().collect();
     let got = match live(&refs, o.has("--reboot")) {
@@ -287,6 +349,61 @@ fn inspect_cmd(args: &[String]) -> Result<ExitCode, String> {
     })
 }
 
+/// The PC's facts in short, for a person.
+fn render_pc(s: &Snapshot) -> String {
+    let mut o = String::new();
+    if let Some(f) = &s.firmware {
+        o += &format!(
+            "firmware: {}{}{}\n",
+            f.kind,
+            f.secure_boot.as_deref().map(|x| format!(", secure boot {x}")).unwrap_or_default(),
+            f.variables.as_deref().map(|x| format!(", variables {x}")).unwrap_or_default()
+        );
+        for e in &f.boot_entries {
+            o += &format!("  boot entry {}: {}\n", e.number, e.label.as_deref().unwrap_or(""));
+        }
+    }
+    if let Some(c) = &s.cpu {
+        o += &format!("cpu: {}\n", c.arch);
+    }
+    let st = s.storage.as_ref();
+    let installer = st.and_then(|x| x.installer_disk.as_ref());
+    for d in st.map(|x| x.disks.as_slice()).unwrap_or_default() {
+        let own = match installer {
+            Some(i) if i.index == d.index => format!(" (the installer runs from it, told by its {})", i.by),
+            _ => String::new(),
+        };
+        o += &format!(
+            "disk {}: {}{}, {} bytes, table {}{own}\n",
+            d.index,
+            d.kind,
+            if d.removable { ", removable" } else { "" },
+            d.size,
+            d.table.as_deref().unwrap_or("none")
+        );
+        for p in &d.partitions {
+            let fs = p.fs.as_ref().map(|f| match f.used {
+                Some(u) => format!(", {} with {u} bytes used", f.kind),
+                None => format!(", {}", f.kind),
+            });
+            o += &format!(
+                "  partition {}: {} bytes{}{}\n",
+                p.index,
+                p.size,
+                p.type_guid.as_deref().map(|t| format!(", type {t}")).unwrap_or_default(),
+                fs.unwrap_or_default()
+            );
+        }
+        if !d.free.is_empty() {
+            o += &format!("  free: {}\n", d.free.iter().map(|n| format!("{n} bytes")).collect::<Vec<_>>().join(", "));
+        }
+    }
+    for (i, sys) in s.systems.iter().enumerate() {
+        o += &format!("system {}: {} on disk {}\n", i + 1, sys.kind, sys.disk);
+    }
+    o
+}
+
 fn plan_input(o: &Opts) -> Result<plan::Input, String> {
     let mut input = plan::Input {
         developer: o.has("--developer"),
@@ -313,7 +430,7 @@ fn plan_input(o: &Opts) -> Result<plan::Input, String> {
 }
 
 fn check_cmd(args: &[String]) -> Result<ExitCode, String> {
-    let o = opts(args, &["--json", "--reboot"], &["--facts", "--devices"])?;
+    let o = opts(args, &["--json", "--reboot", "--pc"], &["--facts", "--devices", "--root"])?;
     let ds = descriptions(&o)?;
     let refs: Vec<&Description> = ds.iter().collect();
     let f = match facts(&o, &refs)? {
@@ -334,8 +451,8 @@ fn check_cmd(args: &[String]) -> Result<ExitCode, String> {
 fn plan_cmd(args: &[String]) -> Result<ExitCode, String> {
     let o = opts(
         args,
-        &["--json", "--dry-run", "--developer", "--reboot"],
-        &["--facts", "--devices", "--choice", "--hardware", "--free", "--job"],
+        &["--json", "--dry-run", "--developer", "--reboot", "--pc"],
+        &["--facts", "--devices", "--choice", "--hardware", "--free", "--job", "--root"],
     )?;
     if !o.has("--dry-run") {
         return Err("only the dry run exists: plan --dry-run".into());
