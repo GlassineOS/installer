@@ -43,9 +43,19 @@ SECTIONS
         *(COMMON)
         . = ALIGN(16);
         __stack_bottom = .;
-        . += 0x4000;
+        /* Pad this single load segment to a FIXED 0x5680 bytes. The SDM636 boot ROM is
+           sensitive to this segment's size: it completes the Sahara handshake (END_IMAGE_TX,
+           DONE_RESP) for a 0x5680-byte segment (every image that ran on 2026-11-13 morning)
+           but HANGS after reading it when it is 0x5a00 (every image built once main.rs grew;
+           device runs 2026-11-13 evening, RESEARCH.md). 0x5680 is the one proven-good size,
+           and it puts the XBL_SEC segment at file offset 0x8000. The stack fills whatever is
+           left below this fixed end, so code growth is absorbed by the stack, not the layout.
+           Keep code+rodata+data well under ~0x3000 so the stack stays large. */
+        . = ORIGIN(IMEM) + 0x5680;
         __stack_top = .;
     } >IMEM :image
+    ASSERT(__stack_bottom <= ORIGIN(IMEM) + 0x5680 - 0x1000,
+           "code+rodata+data overran the fixed 0x5680 load segment (need >=4 KiB stack)")
 
     .xblsec : {
         KEEP(*(.xblsec_tramp))
