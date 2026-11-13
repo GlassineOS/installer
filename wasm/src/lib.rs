@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //! The installer in the browser. Pages get versioned JSON records, never Rust
-//! types: `inspect()` gives a facts snapshot (`facts_format`), `check(facts)`
+//! types: `inspect()` gives a `Connection`, whose `facts` is a facts snapshot
+//! (`facts_format`) and whose `reboot()` restarts the device in the same
+//! fastboot session, the only command besides getvar it can send; `check(facts)`
 //! a report (`report_format`), `plan(facts, input)` a plan (`plan_format`),
 //! `description(id)` the source of a shipped description (TOML), for the
 //! texts the screens show.
 //! A failure is a record too: `{"error": KIND, "message": TEXT}`, KIND one of
 //! no-device, several-devices, busy, permission, usb, not-fresh, timeout,
-//! device, descriptions, facts, input.
+//! device, descriptions, facts, input, closed.
 //!
 //! The records are built by plain functions (tested natively); the browser
 //! entry points only add WebUSB around them.
@@ -110,20 +112,24 @@ pub fn plan_record(facts: &str, answers: &str) -> Result<String, String> {
 #[cfg(target_arch = "wasm32")]
 mod web {
     use super::*;
+    use glassine_installer::fastboot;
     use glassine_installer::inspect::{self, Host};
     use glassine_installer_usb as usb;
+    use std::cell::RefCell;
+    use std::rc::Rc;
     use wasm_bindgen::prelude::*;
+    use wasm_bindgen_futures::{future_to_promise, js_sys};
 
     fn js(r: Result<String, String>) -> Result<String, JsValue> {
         r.map_err(|e| JsValue::from_str(&e))
     }
 
     /// Asks the browser for a fastboot device (call it from a click: WebUSB
-    /// needs a user gesture), inspects it and resolves with the facts
-    /// snapshot; `reboot` restarts the device at the end. Rejects with an
-    /// error record.
+    /// needs a user gesture), inspects it and resolves with a [`Connection`]:
+    /// the facts snapshot, and the fastboot session kept open for one
+    /// restart. Rejects with an error record.
     #[wasm_bindgen]
-    pub async fn inspect(reboot: bool) -> Result<String, JsValue> {
+    pub async fn inspect() -> Result<Connection, JsValue> {
         let ds = descriptions();
         let refs: Vec<&Description> = ds.iter().collect();
         let (t, ids) = usb::request().await.map_err(|e| JsValue::from_str(&error(e.kind(), &e)))?;
@@ -131,10 +137,58 @@ mod web {
             platform: "browser".into(),
             connections: vec!["usb-web".into()],
         };
-        let got = inspect::inspect(&refs, t, &ids, &host, reboot)
+        let (got, session) = inspect::inspect_open(&refs, t, &ids, &host)
             .await
             .map_err(|e| JsValue::from_str(&error(e.kind(), &e)))?;
-        Ok(serde_json::to_string(&got.snapshot).unwrap())
+        Ok(Connection {
+            facts: serde_json::to_string(&got.snapshot).unwrap(),
+            session: Rc::new(RefCell::new(Some(session))),
+        })
+    }
+
+    /// One inspected device and its fastboot session, still open. The Note
+    /// Air's boot loader answers only the session of a fresh start: once this
+    /// one is closed, it can't be restarted from the page any more, and stays
+    /// in its USB mode until its power button is held. So the page keeps the
+    /// session until the person restarts the device (or it goes away).
+    #[wasm_bindgen]
+    pub struct Connection {
+        facts: String,
+        session: Rc<RefCell<Option<fastboot::Session<usb::UsbTransport>>>>,
+    }
+
+    #[wasm_bindgen]
+    impl Connection {
+        /// The facts snapshot of the inspect.
+        #[wasm_bindgen(getter)]
+        pub fn facts(&self) -> String {
+            self.facts.clone()
+        }
+
+        /// Whether the session is still open: neither restarted nor closed.
+        #[wasm_bindgen(getter)]
+        pub fn open(&self) -> bool {
+            self.session.borrow().is_some()
+        }
+
+        /// Sends `reboot` in this session, once: the session is taken at the
+        /// call, so a second call (a double click, then the page closing)
+        /// sends nothing and rejects. Resolves when the device answered OKAY;
+        /// rejects with an error record (`closed` when there is no session).
+        pub fn reboot(&self) -> js_sys::Promise {
+            let taken = self.session.borrow_mut().take();
+            future_to_promise(async move {
+                let mut s = taken.ok_or_else(|| JsValue::from_str(&error("closed", "the device's session is closed")))?;
+                s.reboot().await.map_err(|e| JsValue::from_str(&error("device", e)))?;
+                Ok(JsValue::TRUE)
+            })
+        }
+
+        /// Ends the session without sending anything (the device was
+        /// unplugged, or another one is chosen). Releases the interface.
+        pub fn close(&self) {
+            self.session.borrow_mut().take();
+        }
     }
 
     /// The check report record for a facts snapshot.
