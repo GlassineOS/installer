@@ -249,7 +249,15 @@ mod native {
         let dev = info.open().wait().map_err(open_error)?;
         let ids = usb_ids(&dev);
         let (n, o, i) = bulk_interface(&dev, kind).ok_or(OpenError::NoDevice)?;
-        let intf = dev.claim_interface(n).wait().map_err(open_error)?;
+        // Linux's qcserial binds 05c6:9008 (as a Gobi QDL serial port) and
+        // holds the interface: the emergency mode's interface is taken from
+        // it (only on Linux; elsewhere this is the plain claim). The kinds
+        // found by their interface keep the plain claim.
+        let intf = match kind {
+            Kind::Emergency => dev.detach_and_claim_interface(n).wait(),
+            _ => dev.claim_interface(n).wait(),
+        }
+        .map_err(open_error)?;
         Ok((endpoints(intf, o, i)?, ids))
     }
 
