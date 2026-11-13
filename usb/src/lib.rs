@@ -5,8 +5,11 @@
 //! ids from the device descriptor and bounds every transfer: natively a
 //! transfer that runs out of time is cancelled; WebUSB can't cancel one, so
 //! the interface is released, which aborts it, and the transport is dead.
+//! The same transport reaches the RAM environment's read-only disk interface
+//! (`glassine_read`): only the interface it claims differs.
 
 use glassine_installer::fastboot::{FB_CLASS, FB_PROTOCOL, FB_SUBCLASS, FbError, REPLY_MAX, Transport};
+use glassine_installer::glassine_read::{RR_CLASS, RR_PROTOCOL, RR_SUBCLASS};
 use glassine_installer::inspect::UsbIds;
 use nusb::transfer::{Bulk, Direction, EndpointType, In, Out, TransferError};
 use nusb::{Device, Interface};
@@ -14,7 +17,9 @@ use std::fmt;
 use std::time::Duration;
 
 /// The bound on every single transfer. A getvar answers in milliseconds; a
-/// 64 KiB warm-up dummy in well under a second.
+/// 64 KiB warm-up dummy in well under a second. The RAM environment's answers
+/// take the device its read of up to 16 MiB or its hash of up to 64 MiB first,
+/// about a second, and each transfer of a read carries at most 1 MiB.
 pub const TRANSFER_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// How long opening keeps retrying an interface the host reports busy: right
@@ -73,15 +78,38 @@ fn open_error(e: nusb::Error) -> OpenError {
     }
 }
 
-pub fn selector() -> nusb::DeviceSelector {
-    nusb::DeviceSelector::all().with_class_subclass_protocol(FB_CLASS, FB_SUBCLASS, FB_PROTOCOL)
+/// Which interface a transport claims.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Kind {
+    /// The boot loader's fastboot.
+    Fastboot,
+    /// The RAM environment's read-only disk reader.
+    RamRead,
 }
 
-/// The fastboot interface and its two bulk endpoints.
-fn fastboot_interface(dev: &Device) -> Option<(u8, u8, u8)> {
+impl Kind {
+    fn triple(self) -> (u8, u8, u8) {
+        match self {
+            Kind::Fastboot => (FB_CLASS, FB_SUBCLASS, FB_PROTOCOL),
+            Kind::RamRead => (RR_CLASS, RR_SUBCLASS, RR_PROTOCOL),
+        }
+    }
+}
+
+pub fn selector() -> nusb::DeviceSelector {
+    kind_selector(Kind::Fastboot)
+}
+
+pub fn kind_selector(kind: Kind) -> nusb::DeviceSelector {
+    let (c, s, p) = kind.triple();
+    nusb::DeviceSelector::all().with_class_subclass_protocol(c, s, p)
+}
+
+/// The interface of `kind` and its two bulk endpoints.
+fn bulk_interface(dev: &Device, kind: Kind) -> Option<(u8, u8, u8)> {
     let cfg = dev.active_configuration().ok()?;
     for alt in cfg.interface_alt_settings() {
-        if (alt.class(), alt.subclass(), alt.protocol()) != (FB_CLASS, FB_SUBCLASS, FB_PROTOCOL) {
+        if (alt.class(), alt.subclass(), alt.protocol()) != kind.triple() {
             continue;
         }
         let (mut out, mut inp) = (None, None);
@@ -150,6 +178,13 @@ fn completed(status: Result<(), TransferError>, what: &str) -> Result<(), FbErro
 }
 
 impl UsbTransport {
+    /// Changes the bound on every single transfer: the RAM environment's
+    /// device-side hashes may take longer than a getvar's
+    /// [`TRANSFER_TIMEOUT`] on a slow disk.
+    pub fn set_timeout(&mut self, timeout: Duration) {
+        self.timeout = timeout;
+    }
+
     fn dead() -> FbError {
         FbError::Usb("the connection was closed after a timeout".into())
     }
@@ -162,7 +197,12 @@ mod native {
 
     /// The one connected fastboot device.
     pub fn find() -> Result<nusb::DeviceInfo, OpenError> {
-        let s = selector();
+        find_kind(Kind::Fastboot)
+    }
+
+    /// The one connected device with an interface of `kind`.
+    pub fn find_kind(kind: Kind) -> Result<nusb::DeviceInfo, OpenError> {
+        let s = kind_selector(kind);
         let mut all: Vec<nusb::DeviceInfo> = nusb::list_devices().wait().map_err(open_error)?.filter(|d| d.matches(&s)).collect();
         match all.len() {
             0 => Err(OpenError::NoDevice),
@@ -174,9 +214,15 @@ mod native {
     /// Opens the device and claims its fastboot interface, retrying while the
     /// host reports it busy.
     pub fn open(info: &nusb::DeviceInfo) -> Result<(UsbTransport, UsbIds), OpenError> {
+        open_kind(info, Kind::Fastboot)
+    }
+
+    /// Opens the device and claims its interface of `kind`, retrying while
+    /// the host reports it busy.
+    pub fn open_kind(info: &nusb::DeviceInfo, kind: Kind) -> Result<(UsbTransport, UsbIds), OpenError> {
         let start = std::time::Instant::now();
         loop {
-            match try_open(info) {
+            match try_open(info, kind) {
                 Err(OpenError::Busy(_)) if start.elapsed() < CLAIM_RETRY_FOR => {
                     std::thread::sleep(CLAIM_RETRY_EVERY);
                 }
@@ -185,10 +231,10 @@ mod native {
         }
     }
 
-    fn try_open(info: &nusb::DeviceInfo) -> Result<(UsbTransport, UsbIds), OpenError> {
+    fn try_open(info: &nusb::DeviceInfo, kind: Kind) -> Result<(UsbTransport, UsbIds), OpenError> {
         let dev = info.open().wait().map_err(open_error)?;
         let ids = usb_ids(&dev);
-        let (n, o, i) = fastboot_interface(&dev).ok_or(OpenError::NoDevice)?;
+        let (n, o, i) = bulk_interface(&dev, kind).ok_or(OpenError::NoDevice)?;
         let intf = dev.claim_interface(n).wait().map_err(open_error)?;
         Ok((endpoints(intf, o, i)?, ids))
     }
@@ -203,10 +249,14 @@ mod native {
         }
 
         async fn recv(&mut self) -> Result<Vec<u8>, FbError> {
+            self.recv_max(REPLY_MAX).await
+        }
+
+        async fn recv_max(&mut self, max: usize) -> Result<Vec<u8>, FbError> {
             let timeout = self.timeout;
             let o = self.open.as_mut().ok_or_else(UsbTransport::dead)?;
             let mps = o.inp.max_packet_size().max(1);
-            let buf = o.inp.allocate(REPLY_MAX.div_ceil(mps) * mps);
+            let buf = o.inp.allocate(max.max(1).div_ceil(mps) * mps);
             let c = o.inp.transfer_blocking(buf, timeout);
             completed(c.status, "waiting for an answer")?;
             Ok(c.buffer[..c.actual_len].to_vec())
@@ -215,7 +265,7 @@ mod native {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use native::{find, open};
+pub use native::{find, find_kind, open, open_kind};
 
 #[cfg(target_arch = "wasm32")]
 mod web {
@@ -257,10 +307,18 @@ mod web {
     /// Asks the browser for a fastboot device (the chooser; needs a user
     /// gesture), opens it and claims its interface, retrying while it is busy.
     pub async fn request() -> Result<(UsbTransport, UsbIds), OpenError> {
-        let info = nusb::request_device(&[selector()]).await.map_err(open_error)?.ok_or(OpenError::NoDevice)?;
+        request_kind(Kind::Fastboot).await
+    }
+
+    /// The same for a device with an interface of `kind`.
+    pub async fn request_kind(kind: Kind) -> Result<(UsbTransport, UsbIds), OpenError> {
+        let info = nusb::request_device(&[kind_selector(kind)])
+            .await
+            .map_err(open_error)?
+            .ok_or(OpenError::NoDevice)?;
         let mut waited = Duration::ZERO;
         loop {
-            match try_open(&info).await {
+            match try_open(&info, kind).await {
                 Err(OpenError::Busy(_) | OpenError::Usb(_)) if waited < CLAIM_RETRY_FOR => {
                     sleep(CLAIM_RETRY_EVERY).await.ok();
                     waited += CLAIM_RETRY_EVERY;
@@ -270,10 +328,10 @@ mod web {
         }
     }
 
-    async fn try_open(info: &nusb::DeviceInfo) -> Result<(UsbTransport, UsbIds), OpenError> {
+    async fn try_open(info: &nusb::DeviceInfo, kind: Kind) -> Result<(UsbTransport, UsbIds), OpenError> {
         let dev = info.open().await.map_err(open_error)?;
         let ids = usb_ids(&dev);
-        let (n, o, i) = fastboot_interface(&dev).ok_or(OpenError::NoDevice)?;
+        let (n, o, i) = bulk_interface(&dev, kind).ok_or(OpenError::NoDevice)?;
         let intf = dev.claim_interface(n).await.map_err(open_error)?;
         Ok((endpoints(intf, o, i)?, ids))
     }
@@ -311,10 +369,14 @@ mod web {
         }
 
         async fn recv(&mut self) -> Result<Vec<u8>, FbError> {
+            self.recv_max(REPLY_MAX).await
+        }
+
+        async fn recv_max(&mut self, max: usize) -> Result<Vec<u8>, FbError> {
             let timeout = self.timeout;
             let o = self.open.as_mut().ok_or_else(UsbTransport::dead)?;
             let mps = o.inp.max_packet_size().max(1);
-            let buf = o.inp.allocate(REPLY_MAX.div_ceil(mps) * mps);
+            let buf = o.inp.allocate(max.max(1).div_ceil(mps) * mps);
             o.inp.submit(buf);
             match within(o.inp.next_complete(), timeout).await {
                 Some(c) => {
@@ -328,4 +390,4 @@ mod web {
 }
 
 #[cfg(target_arch = "wasm32")]
-pub use web::request;
+pub use web::{request, request_kind};
