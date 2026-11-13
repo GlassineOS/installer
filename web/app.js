@@ -2,11 +2,14 @@
 // The installer's screens: routing, the session (the records of one machine) and the theme.
 //
 // A screen is #/<screen>?<params>. The params name the machine and the core's plan input:
-//   machine=<facts>            what inspecting saw (records/index.js)
+//   machine=<id>               what inspecting saw (records/index.js): live-N, a device the
+//                              core inspected in this page; with fixtures, a facts snapshot
 //   choice.<id>=<value>        a plan choice; hardware.<id>=yes|no; developer=1
-//   plan=<golden>              shorthand for the machine and input of a plan golden file
+//   plan=<golden>              shorthand for the machine and input of a plan golden file (fixtures)
 //   state=, at=, pct=          which moment of a screen (the screens after Confirm have no record yet)
 //   voice=, scheme=, pen=      the Interleaf theme; live=1: started in the PC's live session
+// The page's own query (before the #) picks the records' source: ?fixtures=1 the core's test
+// records, else the core itself, in the browser (records/index.js).
 
 import { render } from 'preact';
 import { useEffect, useState } from 'preact/hooks';
@@ -46,6 +49,7 @@ async function openSession(route, q) {
   let machine = q.get('machine'), input = inputOf(q);
   const g = q.get('plan');
   if (g) {
+    if (!records.FIXTURES) throw new Error('plan= names a test record: open the page with ?fixtures=1');
     if (!records.GOLDEN_PLANS[g]) throw new Error(`no plan golden file named ${g}`);
     ({ machine } = records.GOLDEN_PLANS[g]);
     input = records.normalInput(records.GOLDEN_PLANS[g].input);
@@ -75,6 +79,10 @@ async function openSession(route, q) {
   };
   s.withInput = (inp) => { location.hash = s.link(route, Object.fromEntries([...q].filter(([k]) => ['state', 'at', 'pct'].includes(k))), inp); };
   s.connect = (kind) => s.link('reach', {}, { choices: {}, hardware: {} }, records.connect(kind));
+  // Live: the device is picked in the browser's chooser and inspected by the core; its machine
+  // comes with the answers. With fixtures the machine is known before (s.connect).
+  s.liveDevice = !records.FIXTURES;
+  s.connectDevice = records.connectDevice;
   s.param = (k, d) => (q.get(k) === null ? d : q.get(k));
   s.num = (k, d) => (q.get(k) === null || !/^\d+$/.test(q.get(k)) ? d : Number(q.get(k)));
   s.live = q.get('live') === '1';
