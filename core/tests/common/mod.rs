@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #![allow(dead_code)]
+pub mod img;
 use glassine_installer::facts::Snapshot;
 use glassine_installer::format1::Description;
 use glassine_installer::validate::{Loaded, load};
