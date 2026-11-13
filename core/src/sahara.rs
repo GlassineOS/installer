@@ -148,7 +148,11 @@ impl Exec {
 }
 
 /// The NAK statuses of END_IMAGE_TX, the ones that help a person: the rest
-/// are shown as their number.
+/// are shown as their number. The `edl` tool's two tables of these (the
+/// status enum and the descriptions) agree from 0x26 on but are one apart
+/// up to 0x25; several entries below follow the descriptions (0x17,
+/// 0x1c, 0x1e, 0x20 to 0x24), so a name there may be one off. 0x27 and 0x28
+/// are the same in both.
 pub const STATUS_NAMES: &[(u32, &str)] = &[
     (0x00, "success"),
     (0x01, "invalid command in this state"),
@@ -165,6 +169,8 @@ pub const STATUS_NAMES: &[(u32, &str)] = &[
     (0x21, "segment hash verification failed"),
     (0x22, "no hash table in the image"),
     (0x24, "image authentication failed (not signed for this chip)"),
+    (0x27, "enumeration failure"),
+    (0x28, "hardware bulk transfer error"),
 ];
 
 pub fn status_name(status: u32) -> &'static str {
