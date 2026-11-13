@@ -1,8 +1,9 @@
 # A GlassineOS programmer for the SDM636 boot ROM: research
 
 Spike for [installer#18](https://github.com/GlassineOS/installer/issues/18) step 1 and
-[spec 004](../../specs/004-emergency-mode/spec.md) (branch `emergency-mode`). Host-only work:
-nothing here was run on a device.
+[spec 004](../../specs/004-emergency-mode/spec.md) (branch `emergency-mode`). Sections 1–7
+were written before any device run; the first uploads (2026-11-13, issue #18) are in §8,
+which supersedes the older text where they disagree.
 
 Target: Onyx Boox Note Air (SDM636, sdm660 family, eMMC). The boot ROM (PBL) in its
 emergency mode enumerates as `05c6:9008` and loads one ELF image over the Sahara protocol;
@@ -20,8 +21,12 @@ test-signed by `./build.sh` (Docker, pinned toolchain, offline build) into the g
   nothing else: no code, no data, no hash segment content. No byte of it is in this repo.
 - **[inferred]** follows from the above, not observed.
 - **[unknown]** open; the device test or more research has to answer it.
+- **[device]** measured on the lab unit in the uploads of 2026-11-13 (§8).
 
 ## 1. Will the PBL run an image we sign ourselves?
+
+- [device] **Yes**, with an XBL_SEC-typed segment: variant B (qtestsign `prog`, v5) was
+  accepted and run on 2026-11-13 (§8). The unfused inference below holds.
 
 - [lab] fastboot reports `secure: no`. In ABL that value comes from the closed XBL protocol
   `VBIsDeviceSecure` (ABL source, `QcomModulePkg/Library/BootLib/LinuxLoaderLib.c`,
@@ -111,6 +116,11 @@ What follows from it:
   (a) jumps to `e_entry` at EL3 (older generations), (b) refuses it in Sahara (a NAK; harmless),
   (c) jumps into a missing XBL_SEC (hang; power key). A Qualcomm XBL_SEC is a vendor binary
   and can't be used (FR-002), and its PBL interface isn't public.
+- **[device] Answered for the refusal:** without an XBL_SEC-typed segment the boot ROM
+  refuses right after reading the program headers (END_IMAGE_TX status 0x28; also with
+  the hash segment at the vendor's DDR address). With one (variant B) it reads the hash
+  segment and every segment (the XBL_SEC one last), END_IMAGE_TX 0, DONE_RESP complete,
+  and execution starts in the XBL_SEC segment (§8). So (b) above.
 - **What the draft does about it:** two variants. **A** has one LOAD segment. **B** adds an
   XBL_SEC-typed segment at `0x14699000` holding only a jump to `_start` (and a marker in
   `x19`), so the image runs whichever entry the PBL takes. The status record says which
@@ -139,6 +149,8 @@ What follows from it:
   used if `CNTFRQ_EL0` reads 0.
 
 ## 4. USB after the hand-over
+
+(The first device run and the bug it exposed in the code below: §8.4.)
 
 - [lab] In 9008 the device is a high-speed USB device `05c6:9008` with one bulk-IN and one
   bulk-OUT endpoint (Sahara runs on them).
@@ -196,6 +208,9 @@ What follows from it:
 
 ## 6. Reset and watchdog
 
+(What the first device run showed about resets, and the probes that test PS_HOLD and the
+watchdog: §8.)
+
 - [src] PS_HOLD: `restart@10ac000`, `qcom,pshold` (sdm630.dtsi); the mainline driver
   writes 0 to it (`drivers/power/reset/msm-poweroff.c`). What then happens is the PMIC's
   PS_HOLD reset type (`PON_PS_HOLD_RST_CTL` `0x5a`: warm reset 1, shutdown 4, hard reset 7,
@@ -230,6 +245,136 @@ What follows from it:
 - [lab] The vendor loader the lab uses is filed under `000cc0e1…_7be49b72f9e43372`
   (bkerler/Loaders naming: MSM HW ID, then the first bytes of the OEM PK hash of the unit it
   was taken from).
+
+## 8. The first uploads (2026-11-13): what resets the chip, and why B sent nothing
+
+Labels here: **[device]** measured (client log: Sahara reads and the bulk-IN result with
+ms timestamps from T0 = DONE_RESP; host kernel log with µs timestamps), **[src]** read in
+a public source or in our own code, **[inferred]**, **[unknown]**. Images: B, E, D, F as in
+issue #18 (all reproducible at commit `738f4b0`, see TESTPLAN.md); C (hash segment moved)
+is dropped: it changed nothing, and stock qtestsign reproduces every image that ran.
+
+### 8.1 The "0.3 s" is not a timer
+
+What the host saw after DONE_RESP (EPROTO = the client's pending bulk-IN read failing;
+the absolute time of that failure is also where qcserial rebinds, as the client lets go
+of the interface right after it):
+
+| image | bulk IN fails (EPROTO) | kernel "USB disconnect" after that | new 9008 enumerated after that |
+|---|---|---|---|
+| B | T0 + 7.562 s | +87 ms | +194 ms |
+| E (`b .`) | T0 + 0.004 s | +100 ms | +195 ms |
+| D (PS_HOLD) | T0 + 0.004 s | +181 ms | +170 ms |
+| F (`ret`) | T0 + 0.004 s | +251 ms | +167 ms |
+
+- [device] B and E/D/F end with **the same signature**: the device stops answering
+  (EPROTO), the hub reports the disconnect 87–251 ms later, a fresh 9008 enumerates
+  ~170–195 ms after that. In E/D/F the device stopped answering at the first IN poll
+  after DONE_RESP (4 ms). So the "~0.3 s" of the issue is reset + boot ROM restart +
+  enumeration latency, **not a timer that fires at 0.3 s**.
+- [inferred] **E, D and F reset the chip within ≤ 4 ms of the jump.** B resets at 7.56 s.
+- [device] The disconnect lags the failure by a variable 87–251 ms (hub polling), so the
+  **client's EPROTO time is the measurement** (≈ ±5 ms); the kernel log only confirms it
+  (disconnect = EPROTO + ~0.1–0.25 s, re-enumeration ≈ EPROTO + 0.28–0.42 s).
+- [device] n = 1 for B's 7.56 s: the earlier B attempt (14:24) never got a HELLO
+  (host-side timing, not an upload), so there is no second sample.
+
+### 8.2 The immediate reset in E, D, F
+
+- [device] E, D, F differ from B only in the 32 bytes of the XBL_SEC segment, and B
+  survives 7.56 s. So the boot ROM executes the XBL_SEC segment (it does not merely hash
+  it), and `ret` (F) does not lead on to `e_entry`.
+- [src] B's first five instructions are `ldr x19; ldr x16; br x16` (trampoline), then
+  `mrs x20, daif; msr daifset, #0xf` in `_start`. E/D/F never mask.
+- [inferred] Best candidate: the boot ROM hands over with interrupts (or SError) unmasked
+  and its own vector table live; within milliseconds an interrupt (the USB controller has
+  events to report: the host polls bulk IN right after DONE_RESP; or a timer) enters the
+  boot ROM's handler outside Sahara, which resets into EDL. B masks within five
+  instructions and survives. Not proven: an already-pending interrupt would have been taken
+  before B's mask, so the interrupt must arrive after the first few instructions.
+- [inferred] D cannot tell whether PS_HOLD resets: it resets as fast as E either way.
+- [unknown] Whether a boot-ROM watchdog exists and with which timeout. No public source
+  found describes a PBL watchdog during Sahara (searched: Aleph Security parts 1–5,
+  Qualcomm's public system-debugging guide, QFIL/QPST notes; only generic "Sahara timeout"
+  host-side errors).
+- **Probe U** tests this: mask, wait 1.0 s on the counter, unmask, spin; no MMIO, the boot
+  ROM's VBAR untouched. Reset at ~4 ms → masking is not the protection; at ~1.0 s →
+  masking is, unmasking resets ("the E path"), and the counter runs at 19.2 MHz.
+
+### 8.3 B's reset at 7.56 s: two live readings
+
+What the old `main` did, by its own clock [src, `main.rs` at `738f4b0`]: status record
+on bulk IN (≤ 4 s wait), soft disconnect (`DCTL.RUN_STOP = 0`) at 5 s, PS_HOLD at 15 s,
+watchdog bite 0.1 s after 17 s. Its clock: `CNTPCT_EL0` divided by `CNTFRQ_EL0 / 1000`
+(19.2 MHz if CNTFRQ read 0), or a call count if the counter did not tick.
+
+- [device] Nothing happened at 5 s: no drop before 7.56 s, and the 7.56 s drop came
+  with an immediate re-enumeration (a reset, not a soft disconnect).
+- **Reading 1: our own reset path, mis-timed** [inferred]. If the real time is r × the
+  computed time, our PS_HOLD at 15 s lands at 7.56 s for r = 0.504, our watchdog at
+  17.1 s for r = 0.442; that needs the soft disconnect to have done nothing (possible:
+  whether our DWC3 writes take effect is exactly what's in doubt) and a timebase off by
+  ~2×:
+
+  | what is off | effect on the old timeline (5 s / 15 s) |
+  |---|---|
+  | nothing (counter 19.2 MHz, CNTFRQ 19.2 MHz or 0) | 5.0 / 15.0 s |
+  | CNTFRQ = F (counter really 19.2 MHz) | 5·F/19.2 MHz / 15·F/19.2 MHz: F ≈ 9.7 MHz gives 2.5 / 7.56 s |
+  | counter at 38.4 MHz, CNTFRQ 19.2 MHz | 2.5 / 7.5 s |
+  | counter at 32 768 Hz, CNTFRQ 19.2 MHz | 49 min / 2.4 h |
+  | CNTFRQ < 1000 (garbage) | division by zero → panic → our panic handler calls the same division → recursion until the stack overruns the image: a crash with interrupts masked, then whatever resets at 7.56 s |
+  | counter stopped (call-count fallback, assumed 1 µs/call) | any; depends on loop speed |
+
+  No known clock of this SoC runs the arch counter at 38.4 MHz [src: sdm630.dtsi, 19.2 MHz
+  `xo_board`], so this reading needs a misprogrammed CNTFRQ or a stopped counter.
+- **Reading 2: an external timer** [inferred]: something armed before the hand-over (a
+  boot-ROM watchdog, petted during Sahara) bites 7.56 s after the last pet. 7.5 s is
+  0x3C000 ticks of the 32 768 Hz sleep clock, numerology only. In E/D/F the immediate reset
+  comes first.
+- Probe U (if it shows 7.56 s, not 1.0 s) or probe G (mask and spin, nothing else)
+  separates the two: a reset at 7.56 s with none of our code running is reading 2.
+- [src] Probe R reads the APSS watchdog's enable bit at entry and shifts its timings by
+  0.2 s if it was set: a set bit would make the APSS watchdog the prime suspect for
+  reading 2.
+
+### 8.4 Why B sent nothing: the endpoint command never reached the controller
+
+- [src] **Bug, found in review:** in the old `ep_command()`, the writes of `DEPCMDPAR0..2`
+  and `DEPCMD` and the poll of `DEPCMD` used the register offset without the DWC3 base
+  (`depcmd(ep)` = `0xc83c` for physical endpoint 3, not `0x0a80c83c`). Only the read of the
+  previous DEPCMD value had the base. So STARTTRANSFER (and the ENDTRANSFER retry) went to
+  `0x0000c8xx`, whatever lies there, and the controller never saw a TRB.
+- [inferred] That fits what the host saw exactly: the controller kept running with no
+  transfer queued on bulk IN, so it NAKed the host's IN polls for the whole 7.56 s.
+- [inferred] Those stray accesses did not raise an exception we caught (our handler would
+  have soft-disconnected and reset at once), or they did and our handler failed to reset;
+  the status image's fault codes will say which.
+- Further fixes in the status image (`programmer-s`), each from Linux `drivers/usb/dwc3`:
+  - GUSB2PHYCFG SUSPHY and ENBLSLPM cleared before the endpoint command
+    (`gadget.c dwc3_send_gadget_ep_cmd()`, databook 6.3.2.5); `sdm630.dtsi` sets
+    `snps,dis_u2_susphy_quirk` and `snps,dis_enblslpm_quirk` on this controller, so Linux
+    keeps both off.
+  - ENDTRANSFER with HIPRI_FORCERM and no CMDIOC is not polled, then 1 ms of delay
+    (`__dwc3_stop_active_transfer()`).
+  - The clock is a fixed 19.2 MHz (CNTFRQ only recorded): no division by a value the boot
+    ROM left behind, no panic path that calls itself.
+  - The status record grows to 192 bytes: adds GUSB2PHYCFG, GCTL, DEVTEN, the boot ROM's
+    SP and LR at the hand-over, the APSS watchdog's enable/bite registers at entry, the
+    DEPCMD value after a successful START, and the raw CNTFRQ.
+- [unknown] Still open, and recorded in the record: which physical endpoint carries bulk
+  IN (assumed the lowest enabled odd one ≥ 3: `0x81`); whether the controller can DMA
+  from our image's RAM at `0x140168xx` (the boot ROM's event buffer address in the record
+  shows where its own DMA memory is).
+
+### 8.5 Measuring how far the code gets without USB
+
+The status image ends by resetting at **T(code) = 0.6 s + 0.5 s × code** after the
+jump (codes in `main.rs`, `enum Code`; table in TESTPLAN.md), through a chain so it does
+not depend on one unproven mechanism: PS_HOLD at T; the APSS watchdog, armed at every
+stage marker to bite at T + 0.15 s (also catches a hang right after a marker); at
+T + 0.3 s the boot ROM's VBAR and DAIF are restored (the E path). The offset says which
+mechanism worked. Everything ends before 7 s, so the 7.56 s reset cannot be mistaken for
+a code. The timebase is the arch counter at 19.2 MHz, which probe U checks first.
 
 ## Sources
 

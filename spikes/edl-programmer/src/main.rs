@@ -1,27 +1,33 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //! Spike: the smallest programmer that proves the SDM636 boot ROM ran it.
 //!
-//! DRAFT, never run on hardware. What it does once the boot ROM jumps to `_start`:
+//! What it does once the boot ROM has jumped (through the XBL_SEC trampoline, `xblsec.rs`)
+//! to `_start`:
 //!
 //! 1. Masks interrupts, takes its own stack and exception vectors, records the CPU state
-//!    it was handed (exception level, SCTLR, VBAR, DAIF before masking, counter frequency).
+//!    it was handed (exception level, SCTLR, VBAR, DAIF before masking, the boot ROM's SP
+//!    and LR, the counter).
 //! 2. Reuses the USB device the boot ROM enumerated (05c6:9008, DWC3 core at 0x0a800000):
-//!    finds the first enabled bulk-IN endpoint and sends one 128-byte status record on
+//!    finds the first enabled bulk-IN endpoint and sends one 192-byte status record on
 //!    it. Nothing is re-initialised.
-//! 3. After 5 s, soft-disconnects (DCTL.RUN_STOP = 0): the host sees 9008 vanish.
-//! 4. After 15 s, resets through PS_HOLD; if still running, through a watchdog bite;
-//!    then waits for events forever.
+//! 3. Ends by resetting the chip at a time that says how far it got (a stage code), so
+//!    the host learns that even when USB stays silent: the bulk-IN read fails at
+//!    T(code) = 0.6 s + 0.5 s x code after DONE_RESP. See [`Code`] and TESTPLAN.md.
 //!
-//! Variant B adds an XBL_SEC-typed segment that only jumps to `_start` (see RESEARCH.md,
-//! "the XBL_SEC question"); the status record says which entry was taken.
+//! The reset at T(code) goes through a chain, because which mechanism works is still being
+//! measured: PS_HOLD low at T; the APSS watchdog, armed at every stage marker, bites at
+//! T + 0.15 s (it also catches a hang right after a marker); at T + 0.3 s the boot ROM's
+//! vector table and interrupt mask are restored, which resets the chip the way probe E
+//! did (the "E path"). The host reads which one fired from the offset.
 //!
-//! Any exception goes to step 3 and 4 at once. It never touches storage: there is no
-//! eMMC code at all.
+//! It never touches storage: there is no eMMC code at all.
 //!
 //! Register offsets come from public Linux sources (see RESEARCH.md for every path).
 
 #![no_std]
 #![no_main]
+
+mod xblsec;
 
 use core::arch::{asm, global_asm};
 use core::panic::PanicInfo;
@@ -30,30 +36,35 @@ use core::ptr::{read_volatile, write_volatile};
 // Addresses: arch/arm64/boot/dts/qcom/sdm630.dtsi (sdm636 includes it).
 const DWC3: usize = 0x0a80_0000; // usb3_dwc3: usb@a800000, the device's port (qusb2phy0)
 const PS_HOLD: usize = 0x010a_c000; // restart@10ac000, "qcom,pshold"
-const APSS_WDT: usize = 0x1781_7000; // kpss-wdt (stock DT qcom,wdt@17817000)
+const APSS_WDT: usize = 0x1781_7000; // kpss-wdt (NA1 board DT; stock qcom,wdt@17817000)
 
-// DWC3 registers: drivers/usb/dwc3/core.h.
+// DWC3 registers: drivers/usb/dwc3/core.h (offsets from the core's base).
+const GCTL: usize = 0xc110;
 const GSNPSID: usize = 0xc120;
+const GUSB2PHYCFG0: usize = 0xc200;
 const GEVNTADRLO0: usize = 0xc400;
 const GEVNTADRHI0: usize = 0xc404;
 const GEVNTSIZ0: usize = 0xc408;
 const GEVNTCOUNT0: usize = 0xc40c;
 const DCFG: usize = 0xc700;
 const DCTL: usize = 0xc704;
+const DEVTEN: usize = 0xc708;
 const DSTS: usize = 0xc70c;
 const DALEPENA: usize = 0xc720;
 const fn depcmdpar2(n: usize) -> usize {
-    0xc800 + n * 0x10
+    DWC3 + 0xc800 + n * 0x10
 }
 const fn depcmdpar1(n: usize) -> usize {
-    0xc800 + n * 0x10 + 0x4
+    DWC3 + 0xc800 + n * 0x10 + 0x4
 }
 const fn depcmdpar0(n: usize) -> usize {
-    0xc800 + n * 0x10 + 0x8
+    DWC3 + 0xc800 + n * 0x10 + 0x8
 }
 const fn depcmd(n: usize) -> usize {
-    0xc800 + n * 0x10 + 0xc
+    DWC3 + 0xc800 + n * 0x10 + 0xc
 }
+const GUSB2PHYCFG_SUSPHY: u32 = 1 << 6;
+const GUSB2PHYCFG_ENBLSLPM: u32 = 1 << 8;
 const DCTL_RUN_STOP: u32 = 1 << 31;
 const DSTS_DEVCTRLHLT: u32 = 1 << 22;
 const DEPCMD_STARTTRANSFER: u32 = 0x06;
@@ -76,13 +87,16 @@ const WDT_RST: usize = 0x4;
 const WDT_EN: usize = 0x8;
 const WDT_BARK_TIME: usize = 0x10;
 const WDT_BITE_TIME: usize = 0x14;
+const WDT_HZ: u64 = 32_768;
 
-// Timeline, from entry.
-const DISCONNECT_AFTER_MS: u64 = 5_000;
-const RESET_AFTER_MS: u64 = 15_000;
-const SEND_TIMEOUT_MS: u64 = 4_000;
+/// The arch counter's rate: 19.2 MHz (sdm630.dtsi, `xo_board`). Fixed rather than read
+/// from CNTFRQ_EL0, which the boot ROM may leave unset or wrong (its value is recorded);
+/// probe U measures the real rate.
+const TICKS_PER_MS: u64 = 19_200;
 
-const STATUS_WORDS: usize = 32; // 128 bytes: a short packet at any max packet size
+const SEND_TIMEOUT_MS: u64 = 1_000;
+
+const STATUS_WORDS: usize = 48; // 192 bytes: a short packet at any max packet size
 
 // flags in word 5 of the status record
 const F_COUNTER_TICKS: u32 = 1 << 0;
@@ -90,8 +104,49 @@ const F_EP_FOUND: u32 = 1 << 1;
 const F_START_TIMEOUT: u32 = 1 << 2;
 const F_RETRIED: u32 = 1 << 3;
 const F_VIA_XBL_SEC: u32 = 1 << 4;
+const F_PHY_SUSPEND_CLEARED: u32 = 1 << 5;
 
 const TRAMPOLINE_MAGIC: u64 = 0x474c_534e_5853_454b; // set by the trampoline in x19
+
+/// Stage codes. The chip resets at T(code) = 0.6 s + 0.5 s x code after entry. Marker
+/// codes are passed on the way; the watchdog is armed for each, so a hang right after one
+/// shows as T + 0.15 s. End codes are where the program stops.
+#[derive(Clone, Copy)]
+#[repr(u32)]
+enum Code {
+    /// marker: `glassine_main` reached (stack, vectors and the masked DAIF in place)
+    Entered = 0,
+    /// marker: CPU state recorded, counter checked
+    CpuState = 1,
+    /// marker: the first DWC3 register read (GSNPSID) returned
+    Dwc3Read = 2,
+    /// end: GSNPSID is not a DWC3 / DWC3.x ID
+    NotDwc3 = 3,
+    /// end: the controller is not running (DCTL.RUN_STOP clear or DSTS.DEVCTRLHLT set)
+    NotRunning = 4,
+    /// end: no bulk-IN endpoint enabled in DALEPENA
+    NoEndpoint = 5,
+    /// marker: STARTTRANSFER about to be issued (a hang here = a register access stalls)
+    Starting = 6,
+    /// end: STARTTRANSFER refused or timed out, also after ENDTRANSFER + retry
+    StartFailed = 7,
+    /// end (and marker while waiting): transfer started, the host did not take it in 1 s
+    NotTaken = 8,
+    /// end: the TRB came back (HWO clear): the host has the record
+    Sent = 9,
+    /// end: exception or panic before any DWC3 access
+    FaultEarly = 10,
+    /// end: exception or panic during the DWC3 setup (codes 2..5)
+    FaultSetup = 11,
+    /// end: exception or panic during the transfer (codes 6..)
+    FaultTransfer = 12,
+}
+
+const fn t_ms(code: u32) -> u64 {
+    600 + 500 * code as u64
+}
+const WDT_OFFSET_MS: u64 = 150;
+const EPATH_OFFSET_MS: u64 = 300;
 
 #[repr(C, align(64))]
 struct Dma {
@@ -100,16 +155,24 @@ struct Dma {
     buf: [u32; STATUS_WORDS],
 }
 
+#[repr(C)]
+struct State {
+    t0: u64,
+    ticking: u32,
+    stage: u32,
+    in_fault: u32,
+    el: u32,
+    pbl_vbar: u64,
+    loops: u64, // the time base when the counter does not run
+}
+
 // All state in a PROGBITS section, so the one LOAD segment has filesz == memsz: whether
 // the boot ROM zero-fills memsz beyond filesz is unknown, so nothing relies on it.
 #[unsafe(link_section = ".data.glassine")]
 static mut DMA: Dma = Dma { trb: [0; 4], _pad: [0; 12], buf: [0; STATUS_WORDS] };
 #[unsafe(link_section = ".data.glassine")]
-static mut IN_EXCEPTION: u32 = 0;
-#[unsafe(link_section = ".data.glassine")]
-static mut COUNTER_TICKS: bool = false;
-#[unsafe(link_section = ".data.glassine")]
-static mut T0: u64 = 0;
+static mut ST: State =
+    State { t0: 0, ticking: 0, stage: 0, in_fault: 0, el: 0, pbl_vbar: 0, loops: 0 };
 
 global_asm!(
     r#"
@@ -118,6 +181,9 @@ global_asm!(
 _start:
     mrs     x20, daif           // as the boot ROM left it
     msr     daifset, #0xf
+    mrs     x21, cntpct_el0     // T0
+    mov     x22, sp             // the boot ROM's stack and return address, for the record
+    mov     x23, x30
     ldr     x0, =__stack_top
     mov     sp, x0
     mrs     x0, CurrentEL
@@ -142,6 +208,9 @@ _start:
 4:  isb
     mov     x2, x19             // = TRAMPOLINE_MAGIC when entered through the XBL_SEC trampoline
     mov     x3, x20
+    mov     x4, x21
+    mov     x5, x22
+    mov     x6, x23
     bl      glassine_main
 5:  wfe
     b       5b
@@ -161,76 +230,6 @@ glassine_exception_entry:
     bl      glassine_exception
 6:  wfe
     b       6b
-
-"#
-);
-
-// The XBL_SEC-typed segment (link-xblsec.ld; variant B and the probes). The boot ROM starts
-// execution here (device run 2026-11-13: B != E/D/F, which differ only in these bytes). Each
-// variant is written out word for word, so a build reproduces the images that ran.
-#[cfg(all(feature = "xbl-sec-trampoline", not(any(feature = "probe-spin",
-    feature = "probe-pshold", feature = "probe-ret"))))]
-global_asm!(
-    r#"
-    .section .xblsec_tramp, "ax"
-    .global glassine_xblsec_entry
-glassine_xblsec_entry:
-    ldr     x19, 1f             // TRAMPOLINE_MAGIC: _start knows it came this way
-    ldr     x16, 2f
-    br      x16
-    .word   0
-1:  .quad   0x474c534e5853454b
-2:  .quad   _start
-"#
-);
-
-// Probe E: spin at the XBL_SEC entry (device: bulk IN EPROTO at T0+4 ms, fresh 9008).
-#[cfg(feature = "probe-spin")]
-global_asm!(
-    r#"
-    .section .xblsec_tramp, "ax"
-    .global glassine_xblsec_entry
-glassine_xblsec_entry:
-    b       .
-    ldr     x16, 2f             // the rest is B's, unreachable
-    br      x16
-    .word   0
-    .quad   0x474c534e5853454b
-2:  .quad   _start
-"#
-);
-
-// Probe F: return to whatever x30 holds (device: same as E).
-#[cfg(feature = "probe-ret")]
-global_asm!(
-    r#"
-    .section .xblsec_tramp, "ax"
-    .global glassine_xblsec_entry
-glassine_xblsec_entry:
-    ret
-    ldr     x16, 2f             // the rest is B's, unreachable
-    br      x16
-    .word   0
-    .quad   0x474c534e5853454b
-2:  .quad   _start
-"#
-);
-
-// Probe D: PS_HOLD low, then spin (device: same as E). The tail is what was left of B's
-// literals when the image was first patched by hand: kept so the build matches it.
-#[cfg(feature = "probe-pshold")]
-global_asm!(
-    r#"
-    .section .xblsec_tramp, "ax"
-    .global glassine_xblsec_entry
-glassine_xblsec_entry:
-    movz    x0, #0xc000
-    movk    x0, #0x010a, lsl #16
-    str     wzr, [x0]
-    dsb     sy
-    b       .
-    .word   0x474c534e
-    .quad   _start
 "#
 );
 
@@ -250,35 +249,98 @@ fn counter() -> u64 {
     v
 }
 
-fn counter_freq() -> u64 {
-    let v: u64;
-    unsafe { asm!("mrs {}, cntfrq_el0", out(reg) v) };
-    // Qualcomm's always-on counter runs at 19.2 MHz (XO); used when CNTFRQ is unset.
-    if v == 0 { 19_200_000 } else { v }
+fn st() -> *mut State {
+    &raw mut ST
 }
 
-/// Milliseconds since entry. Falls back to counting calls when the counter is stopped
-/// (assumes ~1 µs per call: rough, only bounds the timeline).
-fn ms_since_t0() -> u64 {
+fn ticking() -> bool {
+    unsafe { read_volatile(&raw const (*st()).ticking) != 0 }
+}
+
+/// Milliseconds since entry. When the counter does not run, counts calls instead
+/// (~1 us each, assumed: rough, only bounds the waits); the watchdog then carries the
+/// timing.
+fn ms() -> u64 {
     unsafe {
-        if COUNTER_TICKS {
-            (counter() - T0) / (counter_freq() / 1000)
+        let s = st();
+        if ticking() {
+            counter().wrapping_sub((*s).t0) / TICKS_PER_MS
         } else {
-            T0 += 1;
-            T0 / 1000
+            (*s).loops += 1;
+            (*s).loops / 1000
         }
     }
 }
 
 fn wait_until_ms(t: u64) {
-    while ms_since_t0() < t {
+    while ms() < t {
         core::hint::spin_loop();
     }
 }
 
 fn delay_ms(d: u64) {
-    let end = ms_since_t0() + d;
+    let end = ms() + d;
     wait_until_ms(end);
+}
+
+/// Arm the APSS watchdog to bite at `at` ms after entry (qcom-wdt.c qcom_wdt_start order).
+/// Without a running counter "now" is taken as 0: all markers but the send wait come
+/// within milliseconds of entry.
+fn wdt_bite_at(at: u64) {
+    let now = if ticking() { ms() } else { 0 };
+    let ticks = (at.saturating_sub(now).max(5) * WDT_HZ / 1000) as u32;
+    wr(APSS_WDT + WDT_EN, 0);
+    wr(APSS_WDT + WDT_RST, 1);
+    wr(APSS_WDT + WDT_BARK_TIME, 0x0fff_ffff); // never: FIQ is masked anyway
+    wr(APSS_WDT + WDT_BITE_TIME, ticks);
+    wr(APSS_WDT + WDT_EN, 1);
+    unsafe { asm!("dsb sy") };
+}
+
+/// Pass a stage marker: remember it and arm the watchdog for its time.
+fn mark(c: Code) {
+    unsafe { write_volatile(&raw mut (*st()).stage, c as u32) };
+    wdt_bite_at(t_ms(c as u32) + WDT_OFFSET_MS);
+}
+
+/// Give the CPU back to the boot ROM's vectors with nothing masked: an exception or
+/// interrupt there resets the chip (probe E's behaviour; probe U checks it).
+fn e_path() -> ! {
+    unsafe {
+        let s = st();
+        let vbar = read_volatile(&raw const (*s).pbl_vbar);
+        match read_volatile(&raw const (*s).el) {
+            3 => asm!("msr vbar_el3, {}", in(reg) vbar),
+            2 => asm!("msr vbar_el2, {}", in(reg) vbar),
+            1 => asm!("msr vbar_el1, {}", in(reg) vbar),
+            _ => {}
+        }
+        asm!("isb", "msr daifclr, #0xf", "isb");
+        loop {
+            core::hint::spin_loop();
+        }
+    }
+}
+
+/// Stop with stage code `c`: reset at T(c) through the chain described at the top.
+fn finish(c: Code) -> ! {
+    mark(c);
+    if !ticking() {
+        // No counter, so no timed chain: the watchdog alone says where we stopped.
+        loop {
+            unsafe { asm!("wfe") };
+        }
+    }
+    let t = t_ms(c as u32);
+    wait_until_ms(t);
+    // From here a fault goes straight to the E path, still on time.
+    unsafe { write_volatile(&raw mut (*st()).in_fault, 1) };
+    // PS_HOLD low: the PMIC resets or powers off, whichever its PS_HOLD config says.
+    // drivers/power/reset/msm-poweroff.c.
+    wr(PS_HOLD, 0);
+    unsafe { asm!("dsb sy") };
+    wait_until_ms(t + EPATH_OFFSET_MS); // the watchdog bites at t + 0.15 s on the way
+    e_path()
 }
 
 fn dcache_line() -> usize {
@@ -321,19 +383,20 @@ fn put64(i: usize, v: u64) {
 }
 
 /// Issue an endpoint command and wait for CMDACT to clear. Returns the final DEPCMD, or
-/// None on timeout.
+/// None on timeout. (Before 2026-11-13 the parameter and command writes here lacked the
+/// DWC3 base: the command went to 0xc8xx and never reached the controller.)
 fn ep_command(ep: usize, cmd: u32, p0: u32, p1: u32) -> Option<u32> {
     wr(depcmdpar2(ep), 0);
     wr(depcmdpar1(ep), p1);
     wr(depcmdpar0(ep), p0);
     wr(depcmd(ep), cmd | DEPCMD_CMDACT);
-    let end = ms_since_t0() + 50;
+    let end = ms() + 50;
     loop {
         let v = rd(depcmd(ep));
         if v & DEPCMD_CMDACT == 0 {
             return Some(v);
         }
-        if ms_since_t0() > end {
+        if ms() > end {
             return None;
         }
     }
@@ -349,19 +412,33 @@ fn drain_events() {
 }
 
 /// Queue the status record on bulk-IN endpoint `ep` and wait for the host to take it.
-fn send_status(ep: usize, flags: &mut u32) -> bool {
+fn send_status(ep: usize, flags: &mut u32) -> Code {
     let dma = &raw mut DMA;
     let trb = unsafe { (&raw mut (*dma).trb).cast::<u32>() };
     let buf = unsafe { (&raw mut (*dma).buf) as usize };
     let trb_addr = trb as usize;
     let len = (STATUS_WORDS * 4) as u32;
 
-    let before = rd(DWC3 + depcmd(ep));
+    // drivers/usb/dwc3/gadget.c, dwc3_send_gadget_ep_cmd(): at USB 2.0 speeds GUSB2PHYCFG
+    // SUSPHY and ENBLSLPM must be clear while an endpoint command runs (databook
+    // 6.3.2.5); sdm630.dtsi sets snps,dis_u2_susphy_quirk + snps,dis_enblslpm_quirk for
+    // this controller, so Linux keeps both off for good. Same here: never restored.
+    let phy = rd(DWC3 + GUSB2PHYCFG0);
+    if phy & (GUSB2PHYCFG_SUSPHY | GUSB2PHYCFG_ENBLSLPM) != 0 {
+        wr(DWC3 + GUSB2PHYCFG0, phy & !(GUSB2PHYCFG_SUSPHY | GUSB2PHYCFG_ENBLSLPM));
+        *flags |= F_PHY_SUSPEND_CLEARED;
+    }
+
+    let before = rd(depcmd(ep));
     put(24, before);
 
+    mark(Code::Starting);
     for attempt in 0..2u32 {
         put(5, *flags);
         put(25, attempt);
+        put(42, Code::NotTaken as u32);
+        put(43, ms() as u32);
+        put(44, rd(DWC3 + GEVNTCOUNT0));
         unsafe {
             write_volatile(trb.add(0), buf as u32); // BPL
             write_volatile(trb.add(1), (buf as u64 >> 32) as u32); // BPH (0: IMEM is < 4 GiB)
@@ -384,136 +461,163 @@ fn send_status(ep: usize, flags: &mut u32) -> bool {
             }
         };
         if !started {
-            // The boot ROM may still own a transfer on this endpoint: end it, start ours.
+            // The boot ROM may still own a transfer on this endpoint: end it (forced, no
+            // completion event, so no wait on CMDACT), give the controller 1 ms as
+            // gadget.c __dwc3_stop_active_transfer() does without CMDIOC, start again.
             put(26, r.unwrap_or(0xffff_ffff));
             *flags |= F_RETRIED;
-            let _ = ep_command(
-                ep,
-                DEPCMD_ENDTRANSFER | DEPCMD_HIPRI_FORCERM | (depcmd_rsc_idx(before) << 16),
-                0,
-                0,
+            wr(depcmdpar2(ep), 0);
+            wr(depcmdpar1(ep), 0);
+            wr(depcmdpar0(ep), 0);
+            wr(
+                depcmd(ep),
+                DEPCMD_ENDTRANSFER
+                    | DEPCMD_HIPRI_FORCERM
+                    | DEPCMD_CMDACT
+                    | (depcmd_rsc_idx(before) << 16),
             );
+            delay_ms(1);
             continue;
         }
+        put(41, r.unwrap_or(0));
 
-        let end = ms_since_t0() + SEND_TIMEOUT_MS;
-        while ms_since_t0() < end {
+        mark(Code::NotTaken);
+        let end = ms() + SEND_TIMEOUT_MS;
+        while ms() < end {
             drain_events();
             dc_civac(trb_addr, 16);
             if unsafe { read_volatile(trb.add(3)) } & TRB_HWO == 0 {
-                return true;
+                return Code::Sent;
             }
         }
-        return false;
+        return Code::NotTaken;
     }
-    false
-}
-
-fn disconnect() {
-    wr(DWC3 + DCTL, rd(DWC3 + DCTL) & !DCTL_RUN_STOP);
-    let end = ms_since_t0() + 100;
-    while rd(DWC3 + DSTS) & DSTS_DEVCTRLHLT == 0 && ms_since_t0() < end {
-        drain_events();
-    }
-}
-
-fn reset() -> ! {
-    // PS_HOLD low: the PMIC resets or powers off, whichever its PS_HOLD config says
-    // (as left by the boot ROM; unknown). drivers/power/reset/msm-poweroff.c.
-    wr(PS_HOLD, 0);
-    delay_ms(2_000);
-    // Still here: watchdog bite in ~0.1 s (may land in the 900E crash-dump mode).
-    wr(APSS_WDT + WDT_EN, 0);
-    wr(APSS_WDT + WDT_BARK_TIME, 0x7fff_ffff);
-    wr(APSS_WDT + WDT_BITE_TIME, 3_277);
-    wr(APSS_WDT + WDT_RST, 1);
-    wr(APSS_WDT + WDT_EN, 1);
-    delay_ms(2_000);
-    loop {
-        unsafe { asm!("wfe") };
-    }
+    Code::StartFailed
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn glassine_main(el: u64, vbar_old: u64, via: u64, daif: u64) -> ! {
+extern "C" fn glassine_main(
+    el: u64,
+    vbar_old: u64,
+    via: u64,
+    daif: u64,
+    t0: u64,
+    pbl_sp: u64,
+    pbl_lr: u64,
+) -> ! {
+    unsafe {
+        let s = st();
+        (*s).t0 = t0;
+        (*s).el = el as u32;
+        (*s).pbl_vbar = vbar_old;
+        (*s).stage = 0;
+        (*s).in_fault = 0;
+        (*s).loops = 0;
+        (*s).ticking = 0;
+    }
+    let wdt_en = rd(APSS_WDT + WDT_EN);
+    let wdt_bite = rd(APSS_WDT + WDT_BITE_TIME);
+    mark(Code::Entered);
+
     let t = counter();
     let mut spin = 0u32;
     while spin < 100_000 {
         spin += 1;
         core::hint::spin_loop();
     }
-    unsafe {
-        COUNTER_TICKS = counter() != t;
-        T0 = if COUNTER_TICKS { t } else { 0 };
-    }
-    let mut flags = if unsafe { COUNTER_TICKS } { F_COUNTER_TICKS } else { 0 };
+    let ticks = counter() != t;
+    unsafe { write_volatile(&raw mut (*st()).ticking, ticks as u32) };
+    let mut flags = if ticks { F_COUNTER_TICKS } else { 0 };
     if via == TRAMPOLINE_MAGIC {
         flags |= F_VIA_XBL_SEC;
     }
 
     let sctlr = el_sctlr(el);
-    let (midr, mpidr): (u64, u64);
+    let (midr, mpidr, cntfrq): (u64, u64, u64);
     unsafe {
         asm!("mrs {}, midr_el1", out(reg) midr);
         asm!("mrs {}, mpidr_el1", out(reg) mpidr);
+        asm!("mrs {}, cntfrq_el0", out(reg) cntfrq);
     }
 
     put(0, u32::from_le_bytes(*b"GLSN"));
     put(1, u32::from_le_bytes(*b"PRG0"));
-    put(2, 1); // record version
+    put(2, 2); // record version
     put(3, (STATUS_WORDS * 4) as u32);
     put(4, el as u32);
+    put(5, flags);
     put64(6, midr);
     put64(8, mpidr);
     put64(10, sctlr);
     put64(12, vbar_old);
     put64(14, daif);
-    put64(16, counter_freq());
-    put(18, rd(DWC3 + GSNPSID));
+    put64(16, cntfrq); // raw, not used
+    put(31, glassine_main as *const () as usize as u32);
+    put64(32, pbl_sp);
+    put64(34, pbl_lr);
+    put(39, wdt_en);
+    put(40, wdt_bite);
+    put64(45, t0);
+    mark(Code::CpuState);
+
+    let id = rd(DWC3 + GSNPSID);
+    put(18, id);
+    mark(Code::Dwc3Read);
     put(19, rd(DWC3 + DCFG));
-    put(20, rd(DWC3 + DCTL));
-    put(21, rd(DWC3 + DSTS));
+    let dctl = rd(DWC3 + DCTL);
+    put(20, dctl);
+    let dsts = rd(DWC3 + DSTS);
+    put(21, dsts);
     let enabled = rd(DWC3 + DALEPENA);
     put(22, enabled);
     put(27, rd(DWC3 + GEVNTADRLO0));
     put(28, rd(DWC3 + GEVNTADRHI0));
     put(29, rd(DWC3 + GEVNTSIZ0));
     put(30, rd(DWC3 + GEVNTCOUNT0));
-    put(31, glassine_main as *const () as usize as u32);
+    put(36, rd(DWC3 + GUSB2PHYCFG0));
+    put(37, rd(DWC3 + GCTL));
+    put(38, rd(DWC3 + DEVTEN));
 
-    // Physical endpoint n: n = 2 * number + direction; IN endpoints are odd, ep0 is 0/1.
-    let ep = (3..32).step_by(2).find(|n| enabled & (1 << n) != 0);
-    if let Some(ep) = ep {
-        flags |= F_EP_FOUND;
-        put(23, ep as u32);
-        let _ = send_status(ep, &mut flags);
-    } else {
-        put(5, flags);
+    // core.h DWC3_GSNPSID_MASK 0xffff0000: 0x5533 ("U3") for DWC3, 0x3331/0x3332 for DWC3.x.
+    if !matches!(id >> 16, 0x5533 | 0x3331 | 0x3332) {
+        finish(Code::NotDwc3);
     }
+    if dctl & DCTL_RUN_STOP == 0 || dsts & DSTS_DEVCTRLHLT != 0 {
+        finish(Code::NotRunning);
+    }
+    // Physical endpoint n: n = 2 * number + direction; IN endpoints are odd, ep0 is 0/1.
+    let Some(ep) = (3..32).step_by(2).find(|n| enabled & (1 << n) != 0) else {
+        finish(Code::NoEndpoint);
+    };
+    flags |= F_EP_FOUND;
+    put(23, ep as u32);
+    let c = send_status(ep, &mut flags);
+    finish(c)
+}
 
-    wait_until_ms(DISCONNECT_AFTER_MS);
-    disconnect();
-    wait_until_ms(RESET_AFTER_MS);
-    reset()
+fn fault() -> ! {
+    unsafe {
+        let s = st();
+        if read_volatile(&raw const (*s).in_fault) != 0 {
+            // A fault inside the fault path: straight to the boot ROM (off the grid).
+            e_path();
+        }
+        write_volatile(&raw mut (*s).in_fault, 1);
+        let c = match read_volatile(&raw const (*s).stage) {
+            0..=1 => Code::FaultEarly,
+            2..=5 => Code::FaultSetup,
+            _ => Code::FaultTransfer,
+        };
+        finish(c)
+    }
 }
 
 #[unsafe(no_mangle)]
 extern "C" fn glassine_exception(_vector: u64) -> ! {
-    unsafe {
-        if IN_EXCEPTION != 0 {
-            // A fault inside the fault path: stop, the power key gets out.
-            loop {
-                asm!("wfe");
-            }
-        }
-        IN_EXCEPTION = 1;
-    }
-    disconnect();
-    reset()
+    fault()
 }
 
 #[panic_handler]
 fn panic(_: &PanicInfo) -> ! {
-    disconnect();
-    reset()
+    fault()
 }
