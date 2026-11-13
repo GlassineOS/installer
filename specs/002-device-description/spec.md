@@ -19,7 +19,12 @@ needs a step no backend has gets that step added to its backend, not written int
 description.
 
 Descriptions belong to the device's own repository. The installer ships copies of them,
-each pinned to the version it was checked against.
+each pinned to the version it was checked against, and the installed system carries its
+own device's description too. A description is the only place a device's facts are
+written: the installed system's tools read them from it, and nothing else restates them.
+What runs on the device (its services and bring-up) is code and lives in the device's
+package; how its system is built lives in the image build; neither restates a fact the
+description holds.
 
 This format is an interface other repositories write to, so this spec defines it exactly
 and versions it.
@@ -186,7 +191,9 @@ pinned to,
   partitions it reads, writes, creates, resizes or removes. The plan's list (001 FR-003)
   is derived from the steps the choices select, and the check rejects a step that would go
   beyond its partition's rule. A size may be relative (the rest of a disk, the free space,
-  what is left after another partition).
+  what is left after another partition), and a relative size may name the least it can be
+  (`at_least`). A plan whose disk can't give the new partitions their fixed sizes and
+  those least sizes is refused, with the space it lacks.
 - **FR-014b**: Renaming a partition is not an action: it is a parameter of the step that
   writes the partition table (old name = new name), and that step writes the table. The
   rules select a renamed partition by both its names.
@@ -215,8 +222,11 @@ pinned to,
 - **FR-017**: `[[unit_values]]` lists the values unique to the unit that GlassineOS can't read
   itself: what each is, the mode and means of reading it, and where in the installed system
   it goes. They are read before the first write and never leave the person's computer.
-- **FR-018**: `device_data` names the device-data files the installed system needs
-  ([boot 006](https://github.com/GlassineOS/boot/blob/main/specs/006-device-data-storage-access/spec.md)).
+- **FR-018**: `[[device_data]]` lists the device-data files the installed system needs
+  ([boot 006](https://github.com/GlassineOS/boot/blob/main/specs/006-device-data-storage-access/spec.md)):
+  for each, the name the system uses, the partition and path it is read from, and how it
+  is checked, as complete as boot 006's list needs. The device-data list the installed
+  system reads is derived from these entries and from nothing else.
 - **FR-018a**: `[[device_files]]` lists the vendor files the installation needs from the
   device itself ([0008](https://docs.glassine.org/decisions/0008-bring-your-own-stock-kernel/)):
   what each is, where on the device it is read, and what uses it. They stay on the person's
@@ -274,9 +284,21 @@ pinned to,
 - **FR-028**: The installer's checks fail when a copy differs from its lock entry, when a
   lock entry has no copy, or when a copy fails FR-002.
 
+### On the installed system
+
+- **FR-029**: The installed system holds its device's description at
+  `/usr/share/glassine/device.toml`, byte-identical to one version in the device's
+  repository and installed with the device's package.
+- **FR-030**: Every file on the installed system that states a device fact the
+  description holds (the device-data list of FR-018; where the description keeps another
+  system, the slot that system starts from) is derived from the description when the
+  device's package is built, and the build fails when a derived file and the description
+  disagree. No such file is written by hand.
+
 ## What a description never holds
 
-- Commands, scripts or code of any kind.
+- Commands, scripts or code of any kind. The device's runtime code (services, bring-up of
+  its radios and sound) is in its package.
 - Vendor files, or hashes or excerpts of them; values unique to one unit (serial numbers,
   addresses, calibration); anything learned from one person's device.
 - Markup in texts.
@@ -293,6 +315,8 @@ pinned to,
   written. The rule for the role `disk` says how the whole-disk backup is read.
 - **Step**: a kind from the backend, its parameters, its `done` condition and its escape.
 - **Lock entry**: which version of a device repository's description the installer ships.
+- **Installed description**: the copy on the installed system, and the files derived from
+  it for the system's own tools.
 
 ## Success criteria
 
@@ -305,6 +329,9 @@ pinned to,
   each step a test interrupts the installation right after it and reaches one of 001's
   three end states using only what the description says.
 - **SC-004**: Changing one byte of a shipped copy fails the checks (Scenario 5).
+- **SC-005**: On an installed Note Air, the device-data list and the slot of the other
+  system match what its installed description says, and editing either derived file by
+  hand in the package's sources fails the package's build.
 
 ## Assumptions
 

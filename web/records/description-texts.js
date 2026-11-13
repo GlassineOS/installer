@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Reads what the screens need from a device description file (format 1, TOML): the top-level
 // `id`, `name` and `backend`, the `[texts]` tables, and the string fields `id`, `kind`, `from`,
-// `to` and `by` of each `[[modes]]` and `[[transitions]]` entry. Only the fixture loader uses it; the
-// core's WebAssembly binding will hand these over itself. It reads only that subset: inside
+// `to` and `by` of each `[[modes]]` and `[[transitions]]` entry. The core in the browser hands over
+// the source of the copy it carries; with fixtures, it is the repository's file. It reads only that subset: inside
 // `[texts.*]` every line must be `key = "string"`, anything else there is an error, and every
 // other table is skipped.
 

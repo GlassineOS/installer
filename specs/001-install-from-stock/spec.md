@@ -112,11 +112,11 @@ texts the description provides.
   install doesn't start.
 - Not enough room for the backup where the person chose: the plan offers another place
   (another disk) or installing without it (FR-009a).
-- The backup goes to the installer's own removable media while the person chose a
-  removable disk as the target: as long as inspecting can't tell which disk the installer
-  runs from, the plan can't rule out imaging that disk onto itself. Open: inspecting
-  names the installer's own disk, and the plan refuses it as the backup's target when it
-  writes to it.
+- The installer's own disk (the removable media it runs from): inspecting names it, and
+  the plan never writes to it and never puts the backup of a disk it writes to on it.
+  Where inspecting can't tell which disk that is, a backup to the installer's media while
+  the plan writes to a removable disk is refused, since it could image that disk onto
+  itself.
 - The person cancels after confirming: the installer stops at the next point the plan names
   as safe, and offers to resume or undo.
 - A step that only special hardware can escape (an emergency-mode cable): the plan asks

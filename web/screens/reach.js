@@ -3,9 +3,13 @@
 // state: guide | hand | debugging | chooser | waiting | found | notfresh (a PC: always found).
 // The ways in come from the description: its Android-debugging mode, the installer's
 // transition from there into the boot loader's USB mode, and any way by hand into that mode.
+// Live (the core in the browser), a device has no machine yet: the person picks it in the
+// browser's chooser and the core inspects it, every time (LiveReach; state: chooser | notfresh).
 
+import { useState } from 'preact/hooks';
 import { html, Admonition, Actions, Page, Owed, CapRow, Caps, Tick, Bang } from '../lib/parts.js';
 import { cap } from '../lib/words.js';
+import { useDevice, isOpen, DeviceCard } from '../lib/device.js';
 
 function ways(desc) {
   if (!desc) return {};
@@ -22,7 +26,78 @@ function ways(desc) {
   };
 }
 
+const ChooserPicture = ({ the, name }) => html`<div class="ins-grid" style="align-items:start">
+  <div class="ins-stack">
+    <h2 class="ins-h2">What you’ll see</h2>
+    <p>Your browser opens a small window of its own, listing the USB devices it can see. Choose ${the} and click <strong>Connect</strong>.</p>
+    <p class="ins-soft ins-small">It may be listed under another name. The installer can only reach a device you choose there, and only from this page.</p>
+    <p class="ins-soft ins-small">The list is empty? Click Cancel; the installer helps you find out why.</p>
+  </div>
+  <div class="ins-stack">
+    <span class="il-label">The browser’s window (it looks different in each browser)</span>
+    <div class="ins-chooser" aria-hidden="true">
+      <span>This page wants to connect</span>
+      <span class="ins-chooser__row">${name}</span>
+      <span class="ins-chooser__buttons"><span>Cancel</span><span>Connect</span></span>
+    </div>
+  </div>
+</div>`;
+
+// The core's failures of a live inspect, in words (records.connectDevice; not-fresh has a state).
+const FAILED = {
+  'no-device': ['No device was chosen', 'The browser’s window was closed without a device, or it listed none. A device is listed only in its boot loader’s USB mode, connected with a cable that carries data.'],
+  'several-devices': ['More than one device', 'Connect only the device to check.'],
+  busy: ['The device is in use', 'Another program or browser tab is using it. Close it, then choose the device again.'],
+  permission: ['Not allowed to open the device', 'The computer didn’t let the browser open it.'],
+  timeout: ['The device stopped answering', 'Unplug it, start it again into its boot loader’s USB mode, and choose it again.'],
+};
+
+function LiveReach({ s, state }) {
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState(null);
+  const dev = useDevice(s);
+  const st = state === 'notfresh' ? 'notfresh' : 'chooser';
+  const choose = async () => {
+    setBusy(true); setFailed(null);
+    try {
+      const machine = await s.connectDevice();
+      location.hash = s.link('check', {}, { choices: {}, hardware: {} }, machine);
+    } catch (e) {
+      console.info('inspect:', e.kind, e.message);
+      setBusy(false);
+      if (e.kind === 'not-fresh' && st !== 'notfresh') location.hash = s.link('reach', { state: 'notfresh' });
+      else setFailed(e);
+    }
+  };
+  const [title, body] = failed ? FAILED[failed.kind] || ['The device couldn’t be read', failed.message] : [];
+  const T = {
+    chooser: ['Your browser asks which device', 'Start the device into its boot loader’s USB mode and connect it. Then choose it in your browser’s window; the installer reads it at once.'],
+    notfresh: ['The device needs a fresh restart', 'Almost: the installer needs it freshly started into its boot loader’s USB mode.'],
+  }[st];
+  return html`<${Page} s=${{ ...s, m: null }} step="check" eyebrow="Check · reach the device" title=${T[0]} lead=${T[1]}>
+    <${DeviceCard} s=${s} dev=${dev} offer />
+    ${st === 'notfresh' ? html`<${Admonition} kind="warning" seal="G" label="Start it again" title="Not freshly started">
+      <p>The device answered, but it wasn’t started freshly into its boot loader’s USB mode. It has to be, for the check. Nothing was changed.</p>
+      <p><strong>Way out:</strong> turn it off, start it again into its boot loader’s USB mode, keep it connected, and choose it again. Or stop here: it starts its system when you turn it off and on.</p>
+    </${Admonition}>` : html`<${ChooserPicture} the="your device" name="Your device" />`}
+    ${busy ? html`<div class="ins-card ins-card--strong" id="reading">
+      <div class="ins-row"><span class="ins-yn ins-yn--wait" aria-hidden="true"></span><span class="ins-card__title">Reading the device</span></div>
+      <p class="ins-small ins-soft">The installer asks the device what it is. It only reads.</p>
+    </div>` : null}
+    ${failed ? html`<${Admonition} kind="warning" seal="G" label="Not read" title=${title} id="inspect-failed">
+      <p>${body}</p>
+      ${title !== 'The device couldn’t be read' ? html`<p class="ins-small ins-soft">${failed.message}</p>` : null}
+      <p><strong>Way out:</strong> nothing has changed. Choose the device again, or stop here.</p>
+    </${Admonition}>` : null}
+    <${Actions} next="After you choose, the check starts. It only reads."
+      out="Stop here and unplug the device. Nothing has changed; it starts its system when you turn it off and on."
+      buttons=${[{ label: st === 'notfresh' || failed ? 'Choose the device again' : 'Choose the device', onClick: choose, primary: true, id: 'choose', disabled: busy || isOpen(dev) },
+        { label: 'Stop here', href: s.link('start'), push: true }]} />
+  </${Page}>`;
+}
+
 export function Reach({ s, state }) {
+  if (s.liveDevice && s.m.kind !== 'pc') return html`<${LiveReach} s=${s} state=${state} />`;
   const pc = s.m.kind === 'pc';
   const w = ways(s.desc);
   const st = pc || !w.adb ? 'found' : ['guide', 'hand', 'debugging', 'chooser', 'waiting', 'found', 'notfresh'].includes(state) ? state : 'guide';
@@ -74,22 +149,7 @@ export function Reach({ s, state }) {
       <p class="ins-small"><${Owed}>The menu names, step by step, on this device: the description doesn’t hold them yet</${Owed}></p>
       <${Admonition} label="Note"><p>USB debugging lets a computer you allowed control the device’s system. You can turn it off again after the installation; the installer doesn’t need it later.</p></${Admonition}>` : null}
 
-    ${st === 'chooser' ? html`<div class="ins-grid" style="align-items:start">
-      <div class="ins-stack">
-        <h2 class="ins-h2">What you’ll see</h2>
-        <p>Your browser opens a small window of its own, listing the USB devices it can see. Choose ${the} and click <strong>Connect</strong>.</p>
-        <p class="ins-soft ins-small">It may be listed under another name. The installer can only reach a device you choose there, and only from this page.</p>
-        <p class="ins-soft ins-small">The list is empty? Click Cancel; the installer helps you find out why.</p>
-      </div>
-      <div class="ins-stack">
-        <span class="il-label">The browser’s window (it looks different in each browser)</span>
-        <div class="ins-chooser" aria-hidden="true">
-          <span>This page wants to connect</span>
-          <span class="ins-chooser__row">${s.m.name}</span>
-          <span class="ins-chooser__buttons"><span>Cancel</span><span>Connect</span></span>
-        </div>
-      </div>
-    </div>` : null}
+    ${st === 'chooser' ? html`<${ChooserPicture} the=${the} name=${s.m.name} />` : null}
 
     ${st === 'waiting' ? html`
       <div class="ins-card ins-card--strong">

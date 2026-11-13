@@ -190,7 +190,7 @@ mode = "local"
 after = ["back-up", "remove-system"]
 params.partitions = [
   { name = "glassine-boot", size = "1GiB", role = "esp" },
-  { name = "glassine-system", size = "rest-of-free-space", role = "system" },
+  { name = "glassine-system", size = "rest-of-free-space", at_least = "8GiB", role = "system" },
 ]
 writes = ["role:partition-table"]
 creates = ["role:free-space", "glassine-boot", "glassine-system"]
