@@ -291,11 +291,11 @@ fn out_of_range_reads_send_nothing() {
 
 #[test]
 fn a_refused_image_is_a_nak() {
-    let (e, sent) = upload_err(&image(100), vec![hello(0), read32(13, 0, 100), end(13, 0x24)]);
+    let (e, sent) = upload_err(&image(100), vec![hello(0), read32(13, 0, 100), end(13, 0x25)]);
     assert_eq!(
         e,
         SaharaError::Nak {
-            status: 0x24,
+            status: 0x25,
             during: "the image"
         }
     );
