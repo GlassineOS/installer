@@ -14,6 +14,8 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+mod backup;
+
 include!(concat!(env!("OUT_DIR"), "/embedded.rs"));
 
 const OWN_REPOSITORY: &str = "GlassineOS/installer";
@@ -25,6 +27,7 @@ const USAGE: &str = "usage:
   glassine-install plan --dry-run [--facts FACTS.json | --reboot | --pc [--root DIR]] [--choice K=V]...
                         [--hardware H=yes|no]... [--developer] [--free BYTES] [--job JOB] [--release RELEASE.json]
                         [--json] [--devices DIR]
+  glassine-install backup --ram IMAGE --out DIR [--accept-slot-flags] [--devices DIR]
   glassine-install schema
   glassine-install lock-unpinned LOCKFILE
 
@@ -37,7 +40,15 @@ never inspected without --pc: no device connected doesn't mean this computer. ch
 inspect the connected device first. A boot loader that only answers in a fresh start of its
 mode needs restarting before the next live command: use --reboot, or keep the facts with --out
 and pass them with --facts. --release reads the installer release's manifest (the least sizes
-its artifacts need); without it, those sizes are not known yet and never refuse a plan.";
+its artifacts need); without it, those sizes are not known yet and never refuse a plan.
+
+backup (Linux) reads the whole internal storage of the one device connected in fastboot mode
+into DIR (new or empty): it boots the RAM environment IMAGE from the boot loader's memory, waits
+for it on USB, reads every disk read-only into a gzip file, checks each against the device's
+hashes and the stored copy, writes manifest.json and restarts the device. It sends download and
+boot, which no other command does. On a boot loader with two slots it reads the active slot's
+flags first: booting changes nothing when the slot is marked successful and not unbootable; in
+any other state (or when the flags aren't published) it is refused unless --accept-slot-flags.";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -46,6 +57,7 @@ fn main() -> ExitCode {
         Some("inspect") => inspect_cmd(&args[1..]),
         Some("check") => check_cmd(&args[1..]),
         Some("plan") => plan_cmd(&args[1..]),
+        Some("backup") => backup_cmd(&args[1..]),
         Some("schema") => {
             println!("{}", serde_json::to_string_pretty(&format1::json_schema()).unwrap());
             Ok(ExitCode::SUCCESS)
@@ -350,6 +362,26 @@ fn inspect_cmd(args: &[String]) -> Result<ExitCode, String> {
     } else {
         ExitCode::SUCCESS
     })
+}
+
+fn backup_cmd(args: &[String]) -> Result<ExitCode, String> {
+    let o = opts(args, &["--accept-slot-flags"], &["--ram", "--out", "--devices"])?;
+    let (Some(ram), Some(out)) = (o.one("--ram"), o.one("--out")) else {
+        return Err(format!("backup needs --ram IMAGE and --out DIR\n\n{USAGE}"));
+    };
+    if !o.rest.is_empty() {
+        return Err(USAGE.into());
+    }
+    let image = std::fs::read(ram).map_err(|e| format!("{ram}: {e}"))?;
+    let ds = descriptions(&o)?;
+    let refs: Vec<&Description> = ds.iter().collect();
+    match backup::run(&refs, &image, Path::new(out), o.has("--accept-slot-flags")) {
+        Ok(()) => Ok(ExitCode::SUCCESS),
+        Err(e) => {
+            eprintln!("{e}");
+            Ok(ExitCode::from(DEVICE_FAILED))
+        }
+    }
 }
 
 /// The PC's facts in short, for a person.

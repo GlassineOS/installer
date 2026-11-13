@@ -159,6 +159,28 @@ fn format_1_has_no_disk_role() {
     rejects(&t, "partitions[6].select.role");
 }
 
+/// FR-003: the check-slot-flags departure is format 2's.
+#[test]
+fn format_1_has_no_check_slot_flags_departure() {
+    let t = text("core/tests/fixtures/descriptions/onyx-noteair-format1.toml");
+    let t = mutate(
+        &t,
+        "kind = \"never-use\"\nparams = { operation = \"boot-image\"",
+        "kind = \"check-slot-flags\"\nparams = { operation = \"boot-image\"",
+    );
+    match load(&t) {
+        Loaded::Invalid(ps) => assert!(
+            ps.iter().any(|p| p.path.contains(".departures[") && p.path.ends_with(".kind")),
+            "no problem at the departure's kind; got {ps:#?}"
+        ),
+        Loaded::Valid(_) => panic!("format 1 accepted check-slot-flags"),
+        Loaded::TooNew { .. } => panic!("read as too new"),
+    }
+    // the same departure in format 2 (the shipped description) is valid
+    assert!(noteair().contains("kind = \"check-slot-flags\""));
+    valid(&noteair());
+}
+
 /// FR-003: a layout's partitions with their sizes (FR-014a) are format 2's.
 #[test]
 fn format_1_has_no_layout_partitions() {

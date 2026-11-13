@@ -110,9 +110,9 @@ kind = "single-variables-only"
 untried = "the device page says getvar works for single variables, not all; not a recorded run"
 
 [[modes.departures]]
-kind = "never-use"
-params = { operation = "boot-image", reason = "booting an image from fastboot rewrites the slot flags on an A/B layout" }
-untried = "seen in development; not a recorded run"
+kind = "check-slot-flags"
+params = { operation = "boot-image", reason = "on the A/B layout, booting an image writes the partition table (GPT) only when the active slot isn't marked successful or is marked unbootable; it also marks the active slot's partitions active again, which writes only where those bits differ from the disk, and they can't be read beforehand" }
+untried = "from the boot loader's source (CmdBoot, FindBootableSlot, UpdatePartitionAttributes); not a recorded run"
 
 # A GlassineOS environment the stock boot loader starts from memory, for the
 # backup. On the single-slot stock layout booting an image doesn't touch slot
@@ -120,9 +120,10 @@ untried = "seen in development; not a recorded run"
 [[modes]]
 id = "ram"
 kind = "glassine-ram"
+usb = { vendor_id = "1d6b", product_id = "0104", interface = "ff-47-52" }
 can = ["identify", "read"]
 restarts_into = ["fastboot-stock", "android"]
-untried = "the RAM environment isn't built yet"
+untried = "the RAM environment is built (GlassineOS/images, ramenv) and passes its QEMU test, but it hasn't run on the device"
 
 [[modes]]
 id = "android"
