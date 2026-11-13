@@ -16,6 +16,7 @@ use std::process::ExitCode;
 
 mod backup;
 mod emergency;
+mod emergency_try;
 
 include!(concat!(env!("OUT_DIR"), "/embedded.rs"));
 
@@ -69,6 +70,7 @@ fn main() -> ExitCode {
         Some("plan") => plan_cmd(&args[1..]),
         Some("backup") => backup_cmd(&args[1..]),
         Some("emergency-info") => emergency_cmd(&args[1..]),
+        Some("emergency-try-program") => emergency_try_cmd(&args[1..]),
         Some("schema") => {
             println!("{}", serde_json::to_string_pretty(&format1::json_schema()).unwrap());
             Ok(ExitCode::SUCCESS)
@@ -546,6 +548,31 @@ fn emergency_cmd(args: &[String]) -> Result<ExitCode, String> {
         Ok(out) => {
             print!("{out}");
             eprintln!("{}", emergency::LEAVE);
+            Ok(ExitCode::SUCCESS)
+        }
+        Err(e) => {
+            eprintln!("{e}");
+            Ok(ExitCode::from(DEVICE_FAILED))
+        }
+    }
+}
+
+/// Development command (issue #18 step 3): offers one programmer image to the
+/// boot ROM and reports what happened. Not in the usage text.
+fn emergency_try_cmd(args: &[String]) -> Result<ExitCode, String> {
+    let o = opts(args, &[], &[])?;
+    let [image] = o.rest.as_slice() else {
+        return Err("usage: glassine-install emergency-try-program IMAGE".into());
+    };
+    let img = std::fs::read(image).map_err(|e| format!("{image}: {e}"))?;
+    let (mut t, _ids) = emergency::open()?;
+    // One timeout long enough for the whole listening window: the transport
+    // closes after its first timeout.
+    t.set_timeout(std::time::Duration::from_secs(20));
+    let r = pollster::block_on(emergency_try::run(t, &img, std::time::Duration::from_secs(20)));
+    match r {
+        Ok(out) => {
+            print!("{out}");
             Ok(ExitCode::SUCCESS)
         }
         Err(e) => {
