@@ -37,12 +37,20 @@ on the PC itself, started from removable media.
 modules (`web/vendor/`), the Interleaf web form from GlassineOS/ui (`web/interleaf/`, its source
 commit in `SOURCE`), no build step, Chromium only. The design they follow is
 `designs/installer/` in GlassineOS/ui. They read the core's records through one module,
-`web/records/index.js`; today that is the core's own output for its test facts (the plan golden
-files and `web/fixtures/reports/`). They write nothing to any machine yet.
+`web/records/index.js`. By default that is the core itself, built for the browser (`web/pkg`, not
+committed: `make web-pkg`, or `make docker-web-pkg` with the CI image's wasm-bindgen-cli): the
+person picks the device in the browser's chooser, the core inspects it over WebUSB (getvar only)
+and answers the check and the plan. With `?fixtures=1` the screens read the core's records for
+its test facts instead (the plan golden files and `web/fixtures/reports/`). They write nothing to
+any machine.
+
+The published site is `make web-site`: the screens and `web/pkg`, nothing else from the
+repository.
 
 ```
-node web/test/serve.js          # http://127.0.0.1:8790/web/  (#/plan?plan=noteair-cable-yes)
-make docker-web-check           # every screen with every record, in headless Chromium
+make web-serve                  # the site with the core: http://127.0.0.1:8790/ (Chromium)
+node web/test/serve.js          # the checkout: http://127.0.0.1:8790/web/?fixtures=1#/plan?plan=noteair-cable-yes
+make docker-web-check           # every screen with every record, and the site against simulated devices
 web/tools/vendor check|libs|interleaf UI_DIR
 ```
 
