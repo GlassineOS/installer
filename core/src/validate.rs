@@ -625,7 +625,7 @@ fn check_step(ck: &mut Ck, i: usize, s: &Step) {
                 (vocab::ParamType::Partition, toml::Value::String(part)) if !s.writes.contains(part) && !s.creates.contains(part) => {
                     ck.p(format!("{path}.params.{}", p.name), format!("{part:?} is not in the step's writes or creates"));
                 }
-                (vocab::ParamType::NewPartitions, toml::Value::Array(news)) => {
+                (vocab::ParamType::NewPartitions, toml::Value::Array(news)) if d.format >= 2 => {
                     for (j, n) in news.iter().enumerate() {
                         check_new_partition(ck, s, n, &format!("{path}.params.{}[{j}]", p.name));
                     }
