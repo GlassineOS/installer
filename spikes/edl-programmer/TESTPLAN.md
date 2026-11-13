@@ -197,3 +197,35 @@ bisection set inserts that ACK at points along _start -> glassine_main -> first 
 to find exactly where S's main hangs. If none of P/M/K resets, no masked-code signal exists
 at this stage and the status image must instead run with interrupts left unmasked (accept the
 ~4 ms reset) and lean entirely on the USB record for output.
+
+### Device run 3 results (session 68)
+- **P (PS_HOLD, masked):** same trace as U/S — all segments read, no END_IMAGE_TX, **no
+  reset in 20 s**, 9008 stays. PS_HOLD low from masked code does nothing here (no reset, no
+  power-off). Corollary: probe D (same write, unmasked) reset in 4 ms, so D's reset was the
+  unmasked interrupt, not PS_HOLD. PS_HOLD is not a usable ACK. [Open hypothesis: P's only
+  act was an MMIO store, and it was inert — our MMIO writes may not land at this stage, which
+  would also explain S (no watchdog bite, no USB record). M (no MMIO) tests this.]
+- **M (mask then unmask, no MMIO):** same as U/S/P — no END_IMAGE_TX, **no reset in 20 s**,
+  9008 stays. Unmasking does NOT reproduce E/D/F's 4 ms reset → unmask is not an ACK, and
+  the interrupt theory for E/D/F is in doubt. M does no MMIO, so this is not an "MMIO does
+  not land" effect. Next: re-run E (byte-identical to the morning run that reset at 4 ms) as
+  a control — does the apparatus still produce a reset at all today?
+- **E (control):** HANGS too — but E here is a REBUILT image (`bd...`/then `56b8b1f2`), NOT byte-identical to the morning E (`ae533a34`). This pointed to a BUILD change, not the device: see RESEARCH §8.5. The morning image re-run later DID complete the handshake, proving the device is fine and the evening build regressed the layout.
+### Device run 3 (rebuilt after the layout fix) — supersedes the voided run above
+
+LOAD1 is now padded to the proven-good 0x5680 (link-xblsec.ld), so every image reproduces the
+morning layout (XBL_SEC at file 0x8000). New shas:
+
+- VALIDATE FIRST: `programmer-e-v5.mbn` `bd5a0489…` — the same spin probe as morning E, now
+  with the fixed layout. EXPECT: END_IMAGE_TX + DONE_RESP, bulk IN fails ~T0+4 ms, fresh 9008
+  (i.e. the handshake completes = the layout fix works). If it still hangs, the fix is wrong —
+  stop and rethink before running anything else.
+- THEN (one image per session), now that EVERY evening run is void and B's 7.56 s is open again:
+  * U `39f619fa…` and G `ec280c6d…` re-settle B's 7.56 s / the counter (RESEARCH §8.3, §8.6
+    retracted);
+  * the signal probes, stop at the first clean reset: P `cdbb243c…` (PS_HOLD), M `4ade4ca3…`
+    (unmask), K `8640f747…` (watchdog).
+- status image once a signal is found: S `8b5e5f9c…`, N `50b9d49b…`.
+
+Earlier run-3 shas (p `5708b42b`, m `f4962767`, k `1d23c792`, s `06e87d48`, …) are VOID: built
+before the layout fix, they all hang at the LOAD1 wall (RESEARCH §8.7).

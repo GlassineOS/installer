@@ -378,29 +378,11 @@ T + 0.3 s the boot ROM's VBAR and DAIF are restored (the E path). The offset say
 mechanism worked. Everything ends before 7 s, so the 7.56 s reset cannot be mistaken for
 a code. The timebase is the arch counter at 19.2 MHz, which probe U checks first.
 
-## Sources
+### 8.6 Device run 2 (2026-11-13, session 68): the 7.56 s is B's own code; the fixed main hangs
 
-- Linux (mainline; checked against a 7.2/7.3-era tree): `arch/arm64/boot/dts/qcom/sdm630.dtsi`,
-  `drivers/usb/dwc3/core.h`, `drivers/usb/dwc3/gadget.c`, `drivers/mmc/host/sdhci-msm.c`,
-  `drivers/clk/qcom/gcc-sdm660.c`, `drivers/power/reset/msm-poweroff.c`,
-  `drivers/input/misc/pm8941-pwrkey.c`, `drivers/watchdog/qcom-wdt.c`,
-  `drivers/accel/qaic/sahara.c`, under
-  <https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/>.
-- Aleph Security, "Exploiting Qualcomm EDL Programmers", parts
-  [1](https://alephsecurity.com/2018/01/22/qualcomm-edl-1/) (PBL internals, software EDL)
-  and [3](https://alephsecurity.com/2018/01/22/qualcomm-edl-3/) (programmer EL and
-  registers per device); tooling <https://github.com/alephsecurity/firehorse>.
-- coreboot: `util/qualcomm/mbn_tools.py`, `util/qualcomm/createxbl.py`, commit
-  [101098c4](https://github.com/coreboot/coreboot/commit/101098c41a047184e3eceabca2c1baa11141f36e),
-  `src/soc/qualcomm/sc7180/Makefile.mk`.
-- qtestsign <https://github.com/msm8916-mainline/qtestsign> at
-  `f3df53a5f0e37ccee076541f30f9d5b8340fc2d3` (README, `mbn/hashseg.py`, `mbn/cert.py`).
-- bkerler/edl <https://github.com/bkerler/edl> (`edl.py`, `edlclient/Library/sahara.py`,
-  `sahara_defs.py`); linux-msm/qdl <https://github.com/linux-msm/qdl>.
-- Qualcomm ABL (CodeLinaro `clo/la/abl/tianocore/edk2`), `LinuxLoaderLib.c`,
-  `FastbootCmds.c` (the `secure` variable).
-
-### 8.4 Device run 2 (2026-11-13, session 68): the 7.56 s is B's own code; the fixed main hangs
+**RETRACTED by §8.7 — do not rely on this section's conclusion.** The runs below (U, S) hung at
+the LOAD1-size layout wall and never executed their code, so they are not evidence. B's 7.56 s
+is open again. Kept for the record.
 
 [device] Images U (mask, read the counter in a loop, unmask, spin) and S (B's trampoline +
 the DWC3-fixed main) gave the **same** trace: the boot ROM read every segment, then went
@@ -434,3 +416,63 @@ redesigned probe/status image should **unmask after each step as a 1-bit ACK** (
 reset = "reached here"; no reset = "hung in the previous step"), bisecting where `main`
 hangs without relying on the counter, the watchdog, or USB. TESTPLAN run order is superseded
 by this for the next device session.
+
+### 8.7 The real cause of the run-2/3 hangs: a LOAD1-size layout regression (not the device)
+
+The device is fine. Proof: the morning images, re-run in the evening, still complete the
+Sahara handshake — `out-ran/programmer-e-v5.mbn` (`ae533a34`) gave END_IMAGE_TX 0, DONE_RESP
+complete, reset at T0+4 ms exactly as in the morning. Every evening-BUILT image (U, S, P, M,
+and a freshly rebuilt E `56b8b1f2`) hung before END_IMAGE_TX instead.
+
+Cause [device+host]: the images were not reproducible across the day. Between 738f4b0
+(morning) and the evening commits, `main.rs` grew, so the first load segment (LOAD1 at
+`0x14015000`) grew from filesz 0x5680 to 0x5a00. A byte diff of the signed MBN headers
+(morning B vs evening S) differs in exactly two words — LOAD1 p_filesz / p_memsz at header
+offsets 0xd0 / 0xd8 — and nothing else; the XBL_SEC descriptor (file 0x8000, vaddr
+0x14699000, size 0x20) is identical. On the device the boot ROM reads LOAD1 fully in both
+cases, then: at 0x5680 it reads the XBL_SEC segment at file 0x8000 and sends END_IMAGE_TX; at
+0x5a00 (LOAD1 ends at file 0x7a00 instead of 0x7680) it issues no further read and hangs. So
+the boot ROM is sensitive to this segment's exact size / end offset: 0x5680 is a proven-good
+value, 0x5a00 is not. The mechanism (a hash check of the larger segment, or a read-window
+boundary near file 0x8000) is not pinned down, but the threshold is empirical and sharp.
+
+Consequence: EVERY evening run (U, S, P, M, and the rebuilt E) is VOID — they all hung at this
+pre-END_IMAGE_TX layout wall, so their XBL_SEC code never executed (the hand-over to our code
+happens after DONE_RESP, which was never reached). This also RETRACTS the §8.6 conclusion that
+B's 7.56 s was B's own code: that argument rested on U and S running masked without a reset, but
+U and S never ran. B's 7.56 s is open again (§8.3, own reset code vs external timer); it needs a
+valid probe run (U for the counter, G for an external timer) with the fixed layout. Only the
+morning runs (A, B, E, D, F) are valid evidence.
+
+Fix [host]: `link-xblsec.ld` now pads LOAD1 to a FIXED 0x5680 bytes (the stack absorbs the
+difference), so the layout is deterministic and reproduces the morning images regardless of
+`main.rs` size; an ASSERT guards the stack headroom. After the fix, the rebuilt S MBN header
+is byte-identical to the working morning B, and the rebuilt E differs from morning E only in
+the LOAD1 code bytes and their hash (header + XBL_SEC byte-identical).
+
+Process lesson: the images were thought reproducible because `out/` is git-ignored and the
+earlier "reproducibility check" compared a rebuild against its own freshly regenerated
+SHA256SUMS — circular. The real check is against saved artefacts (`out-ran/`) or shas recorded
+in the committed docs.
+
+## Sources
+
+- Linux (mainline; checked against a 7.2/7.3-era tree): `arch/arm64/boot/dts/qcom/sdm630.dtsi`,
+  `drivers/usb/dwc3/core.h`, `drivers/usb/dwc3/gadget.c`, `drivers/mmc/host/sdhci-msm.c`,
+  `drivers/clk/qcom/gcc-sdm660.c`, `drivers/power/reset/msm-poweroff.c`,
+  `drivers/input/misc/pm8941-pwrkey.c`, `drivers/watchdog/qcom-wdt.c`,
+  `drivers/accel/qaic/sahara.c`, under
+  <https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/>.
+- Aleph Security, "Exploiting Qualcomm EDL Programmers", parts
+  [1](https://alephsecurity.com/2018/01/22/qualcomm-edl-1/) (PBL internals, software EDL)
+  and [3](https://alephsecurity.com/2018/01/22/qualcomm-edl-3/) (programmer EL and
+  registers per device); tooling <https://github.com/alephsecurity/firehorse>.
+- coreboot: `util/qualcomm/mbn_tools.py`, `util/qualcomm/createxbl.py`, commit
+  [101098c4](https://github.com/coreboot/coreboot/commit/101098c41a047184e3eceabca2c1baa11141f36e),
+  `src/soc/qualcomm/sc7180/Makefile.mk`.
+- qtestsign <https://github.com/msm8916-mainline/qtestsign> at
+  `f3df53a5f0e37ccee076541f30f9d5b8340fc2d3` (README, `mbn/hashseg.py`, `mbn/cert.py`).
+- bkerler/edl <https://github.com/bkerler/edl> (`edl.py`, `edlclient/Library/sahara.py`,
+  `sahara_defs.py`); linux-msm/qdl <https://github.com/linux-msm/qdl>.
+- Qualcomm ABL (CodeLinaro `clo/la/abl/tianocore/edk2`), `LinuxLoaderLib.c`,
+  `FastbootCmds.c` (the `secure` variable).
