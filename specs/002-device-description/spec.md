@@ -92,7 +92,7 @@ pinned to,
 
   | Format | Differs from the one after it |
   |--------|-------------------------------|
-  | 1      | No `disk` role (FR-016a): each `back-up` and `replace` rule names its own backup, and no job must image whole disks. The classes `read` and `back-up` exist and mean `never-write`. |
+  | 1      | No `disk` role (FR-016a): each `back-up` and `replace` rule names its own backup, and no job must image whole disks. The classes `read` and `back-up` exist and mean `never-write`. A new partition has no `at_least`, and a layout's partitions have no sizes (FR-014a). |
   | 2      | This spec. |
 - **FR-004**: The format, vocabularies included, is also published as a machine-readable
   schema for each `format`, so editors and the device repositories' own checks validate a
