@@ -686,6 +686,28 @@
                   "if": {
                     "properties": {
                       "kind": {
+                        "const": "single-variables-only"
+                      }
+                    },
+                    "required": [
+                      "kind"
+                    ]
+                  },
+                  "then": {
+                    "properties": {
+                      "params": {
+                        "additionalProperties": false,
+                        "description": "parameters of single-variables-only",
+                        "properties": {},
+                        "type": "object"
+                      }
+                    }
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "kind": {
                         "const": "check-slot-flags"
                       }
                     },
@@ -721,28 +743,6 @@
                   }
                 },
                 {
-                  "if": {
-                    "properties": {
-                      "kind": {
-                        "const": "single-variables-only"
-                      }
-                    },
-                    "required": [
-                      "kind"
-                    ]
-                  },
-                  "then": {
-                    "properties": {
-                      "params": {
-                        "additionalProperties": false,
-                        "description": "parameters of single-variables-only",
-                        "properties": {},
-                        "type": "object"
-                      }
-                    }
-                  }
-                },
-                {
                   "oneOf": [
                     {
                       "required": [
@@ -765,8 +765,8 @@
                     "equal-length-transfers",
                     "fresh-boot-only",
                     "never-use",
-                    "check-slot-flags",
-                    "single-variables-only"
+                    "single-variables-only",
+                    "check-slot-flags"
                   ],
                   "type": "string"
                 },
@@ -2811,6 +2811,17 @@
         "backends": [
           "android-bootloader"
         ],
+        "doc": "variables are read one at a time; the protocol's all-variables request is not used",
+        "id": "single-variables-only",
+        "modes": [
+          "fastboot"
+        ],
+        "params": []
+      },
+      {
+        "backends": [
+          "android-bootloader"
+        ],
         "doc": "an operation that may change the A/B slot flags: before it is sent, the active slot's flags are read, and it goes on without the person's acceptance only when they show it changes nothing",
         "id": "check-slot-flags",
         "modes": [
@@ -2830,17 +2841,6 @@
             "type": "Text"
           }
         ]
-      },
-      {
-        "backends": [
-          "android-bootloader"
-        ],
-        "doc": "variables are read one at a time; the protocol's all-variables request is not used",
-        "id": "single-variables-only",
-        "modes": [
-          "fastboot"
-        ],
-        "params": []
       }
     ],
     "escape_leaves": [
