@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //! The installer in the browser. Pages get versioned JSON records, never Rust
 //! types: `inspect()` gives a facts snapshot (`facts_format`), `check(facts)`
-//! a report (`report_format`), `plan(facts, input)` a plan (`plan_format`).
+//! a report (`report_format`), `plan(facts, input)` a plan (`plan_format`),
+//! `description(id)` the source of a shipped description (TOML), for the
+//! texts the screens show.
 //! A failure is a record too: `{"error": KIND, "message": TEXT}`, KIND one of
 //! no-device, several-devices, busy, permission, usb, not-fresh, timeout,
 //! device, descriptions, facts, input.
@@ -28,6 +30,15 @@ pub fn descriptions() -> Vec<Description> {
             _ => None,
         })
         .collect()
+}
+
+/// The source (TOML) of the shipped description `id`, when it loads: the
+/// screens take its texts from there, so the site needs no copy of its own.
+pub fn description_source(id: &str) -> Option<&'static str> {
+    EMBEDDED.iter().map(|(_, t)| *t).find(|t| match validate::load(t) {
+        Loaded::Valid(d) => d.id == id,
+        _ => false,
+    })
 }
 
 pub fn error(kind: &str, message: impl std::fmt::Display) -> String {
@@ -137,6 +148,12 @@ mod web {
     pub fn plan(facts: &str, answers: &str) -> Result<String, JsValue> {
         js(plan_record(facts, answers))
     }
+
+    /// The source (TOML) of the shipped description `id`, or `undefined`.
+    #[wasm_bindgen]
+    pub fn description(id: &str) -> Option<String> {
+        description_source(id).map(str::to_string)
+    }
 }
 
 #[cfg(test)]
@@ -173,5 +190,15 @@ mod tests {
     #[test]
     fn the_shipped_descriptions_load() {
         assert!(descriptions().len() >= 2);
+    }
+
+    #[test]
+    fn a_description_source_by_id() {
+        for d in descriptions() {
+            let src = description_source(&d.id).unwrap();
+            assert!(matches!(validate::load(src), Loaded::Valid(x) if x.id == d.id));
+        }
+        assert_eq!(description_source("no-such-device"), None);
+        assert_eq!(description_source(""), None);
     }
 }

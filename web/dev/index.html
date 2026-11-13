@@ -2,8 +2,8 @@
 <!-- SPDX-License-Identifier: GPL-2.0-or-later -->
 <!-- A developer's page to drive the browser build by hand: inspect over WebUSB,
      then check and plan from the facts. Not the installer's screens.
-     Build: make web-dev; serve: python3 -m http.server -d web/dev 8000;
-     open http://localhost:8000 in a Chromium-based browser. -->
+     Build: make web-pkg; serve: python3 -m http.server -d web 8000;
+     open http://localhost:8000/dev/ in a Chromium-based browser. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -34,7 +34,7 @@ fastboot mode. Only with the device owner's go.</p>
 <h2>Record</h2>
 <pre id="out"></pre>
 <script type="module">
-  import init, { inspect, check, plan } from "./pkg/glassine_installer_web.js";
+  import init, { inspect, check, plan } from "../pkg/glassine_installer_web.js";
   await init();
   const $ = (id) => document.getElementById(id);
   const show = (text, ms) => {

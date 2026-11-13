@@ -12,7 +12,7 @@ jobs:
         run: make docker-check
       - name: Linux, Windows, arm64 and WebAssembly builds
         run: make docker-targets
-      - name: the web screens in headless Chromium, with the core's records
+      - name: the core built for the browser, the web screens with its records, the site against simulated devices
         run: make docker-web-check
       - name: a pinned copy for every description its repository now holds
         env:
