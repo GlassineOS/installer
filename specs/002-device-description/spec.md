@@ -160,7 +160,10 @@ pinned to,
 - **FR-011**: Where a mode's protocol departs from its standard, the mode says how, as data
   its backend understands (for example, that every transfer must have one length, and which
   length). A departure that must be known before the device is recognised names the first
-  answer that tells it (FR-012).
+  answer that tells it (FR-012). An operation can be one never to send at all, or one
+  allowed only after a check of the device's state that shows it changes nothing (for
+  example, booting an image only when the active slot's flags show it writes none of them);
+  in any other state it needs the person's acceptance.
 - **FR-012**: A backend reaches an unrecognised device with an opening that is safe whether
   or not a departure applies. It chooses how to go on from the first answer, using the
   departures of every description it has, before matching any.

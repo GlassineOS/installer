@@ -500,6 +500,16 @@ pub const DEPARTURES: &[Kind] = &[
         ],
     },
     Kind {
+        id: "check-slot-flags",
+        doc: "an operation that may change the A/B slot flags: before it is sent, the active slot's flags are read, and it goes on without the person's acceptance only when they show it changes nothing",
+        backends: &["android-bootloader"],
+        modes: &["fastboot"],
+        params: &[
+            p("operation", T::Operation, true, "the operation"),
+            p("reason", T::Text, true, "what it may change, and when, in plain words"),
+        ],
+    },
+    Kind {
         id: "single-variables-only",
         doc: "variables are read one at a time; the protocol's all-variables request is not used",
         backends: &["android-bootloader"],

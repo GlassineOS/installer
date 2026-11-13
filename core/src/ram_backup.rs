@@ -303,17 +303,23 @@ pub fn prepare(ds: &[&Description], snapshot: &Snapshot, framing: Framing, image
     }
     let d = ds.iter().find(|d| d.id == rule.description).expect("a rule's description");
     let mode: &Mode = d.modes.iter().find(|m| m.id == rule.mode).expect("a rule's mode");
-    let never = mode
-        .departures
-        .iter()
-        .find(|x| x.kind == "never-use" && x.params.get("operation").and_then(|v| v.as_str()) == Some("boot-image"));
-    // The mode restarts into the RAM environment, or the description says
-    // booting an image here is possible but changes the device (never-use):
-    // then it is only done when accepted.
+    if boot_image_departure(mode, "never-use").is_some() {
+        let reason = boot_image_departure(mode, "never-use")
+            .and_then(|x| x.params.get("reason"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("no reason given");
+        return Err(BackupError::Refused(format!(
+            "{} mode {} says never to boot an image here ({reason})",
+            d.id, mode.id
+        )));
+    }
+    let check = boot_image_departure(mode, "check-slot-flags");
+    // The mode restarts into the RAM environment, or its description allows
+    // booting an image after the slot-flag check.
     let ram_mode = d
         .modes
         .iter()
-        .find(|m| m.kind == RAM_MODE_KIND && (mode.restarts_into.contains(&m.id) || never.is_some()))
+        .find(|m| m.kind == RAM_MODE_KIND && (mode.restarts_into.contains(&m.id) || check.is_some()))
         .ok_or_else(|| BackupError::Refused(format!("{} mode {} doesn't restart into a RAM environment", d.id, mode.id)))?;
     let ram = ram_mode
         .usb
@@ -345,14 +351,14 @@ pub fn prepare(ds: &[&Description], snapshot: &Snapshot, framing: Framing, image
     }
 
     let slots = slot_count(snapshot);
-    // A description that says not to boot an image here names the slot-flag
+    // A description that asks for the slot-flag check (check-slot-flags) names the
     // hazard; the flags read live tell whether it applies.
-    let slots = if never.is_some() { slots.max(2) } else { slots };
+    let slots = if check.is_some() { slots.max(2) } else { slots };
     let slot_flags = slot_flag_changes(slots, flags).map(|w| {
         let mut m = format!("booting the RAM environment changes the device: {w}");
-        if let Some(n) = never {
+        if let Some(n) = check {
             let reason = n.params.get("reason").and_then(|v| v.as_str()).unwrap_or("no reason given");
-            m += &format!(" ({} mode {} says not to boot an image here: {reason})", d.id, mode.id);
+            m += &format!(" ({} mode {} asks for this check: {reason})", d.id, mode.id);
         }
         m
     });
@@ -381,8 +387,16 @@ fn current_slot(snapshot: &Snapshot) -> Option<String> {
     (!s.is_empty() && s.bytes().all(|b| b.is_ascii_alphanumeric())).then(|| s.to_string())
 }
 
-/// Whether the mode the boot loader is in says never-use boot-image.
-fn never_boot_image(ds: &[&Description], snapshot: &Snapshot) -> bool {
+/// The mode's departure of `kind` about `boot-image`, if it has one.
+fn boot_image_departure<'a>(mode: &'a Mode, kind: &str) -> Option<&'a crate::format1::Departure> {
+    mode.departures
+        .iter()
+        .find(|x| x.kind == kind && x.params.get("operation").and_then(|v| v.as_str()) == Some("boot-image"))
+}
+
+/// Whether the mode the boot loader is in asks for the slot-flag check
+/// before an image is booted (`check-slot-flags` on `boot-image`).
+fn asks_slot_check(ds: &[&Description], snapshot: &Snapshot) -> bool {
     let Ok(table) = inspect::framing_table(ds) else { return false };
     let Ok((_, holding)) = inspect::choose_framing(&table, snapshot_var(snapshot, "product").as_deref()) else {
         return false;
@@ -391,8 +405,7 @@ fn never_boot_image(ds: &[&Description], snapshot: &Snapshot) -> bool {
         ds.iter()
             .filter(|d| d.id == r.description)
             .flat_map(|d| d.modes.iter().filter(|m| m.id == r.mode))
-            .flat_map(|m| m.departures.iter())
-            .any(|x| x.kind == "never-use" && x.params.get("operation").and_then(|v| v.as_str()) == Some("boot-image"))
+            .any(|m| boot_image_departure(m, "check-slot-flags").is_some())
     })
 }
 
@@ -440,7 +453,7 @@ pub async fn back_up_device<T: Transport, E: BackupEdge>(
     let (got, mut s) = inspect::inspect_open(ds, fastboot, ids, host).await?;
     // The active slot's flags, read now: what `boot` would change depends on them.
     let flags = match current_slot(&got.snapshot) {
-        Some(slot) if slot_count(&got.snapshot) >= 2 || never_boot_image(ds, &got.snapshot) => {
+        Some(slot) if slot_count(&got.snapshot) >= 2 || asks_slot_check(ds, &got.snapshot) => {
             let mut answers: [Option<String>; 3] = Default::default();
             for (a, v) in answers.iter_mut().zip(slot_flag_variables(&slot)) {
                 *a = s.getvar(&v).await.map_err(InspectError::from)?;

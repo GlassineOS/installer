@@ -301,7 +301,7 @@ fn two_slots_without_published_flags_are_refused_without_acceptance() {
     let e = run_backup(&mut boot, &mut edge, &ram_image(), false).unwrap_err();
     let BackupError::SlotFlags(why) = &e else { panic!("{e}") };
     assert!(why.contains("reports 2 slots but doesn't publish slot b's flags"), "{why}");
-    assert!(why.contains("onyx-noteair mode fastboot says not to boot an image here"), "{why}");
+    assert!(why.contains("onyx-noteair mode fastboot asks for this check"), "{why}");
     only_reads(&boot.commands());
     assert!(!boot.booted.get());
     assert!(edge.asked.is_none() && edge.files.is_empty() && edge.manifest.is_none());
@@ -511,5 +511,53 @@ fn a_device_without_a_ram_mode_is_refused() {
     };
     let e = pollster::block_on(back_up_device(&refs, &mut boot, &fastboot_usb(), &host(), opts, &mut edge)).unwrap_err();
     assert!(e.to_string().contains("has no USB ids with the interface ff-47-52"), "{e}");
+    only_reads(&boot.commands());
+}
+
+/// The Note Air's GlassineOS boot loader mode with its boot-image departure
+/// changed to `kind`.
+fn with_boot_image_departure(kind: &str) -> Vec<Description> {
+    vec![
+        valid(&mutate(&noteair(), "kind = \"check-slot-flags\"", &format!("kind = \"{kind}\""))),
+        valid(&pc()),
+    ]
+}
+
+fn run_with(ds: &[Description], boot: &mut Boot, edge: &mut Edge, accept: bool) -> Result<BackupDone, BackupError> {
+    let refs: Vec<&Description> = ds.iter().collect();
+    let image = ram_image();
+    let opts = BackupOptions {
+        image: &image,
+        accept_slot_flags: accept,
+    };
+    pollster::block_on(back_up_device(&refs, boot, &fastboot_usb(), &host(), opts, edge))
+}
+
+#[test]
+fn never_use_boot_image_is_refused_even_with_acceptance_and_clean_flags() {
+    let ds = with_boot_image_departure("never-use");
+    let (mut boot, mut edge) = with_flags("noteair-recorded-glassine-fastboot", "yes", "no", "7");
+    let e = run_with(&ds, &mut boot, &mut edge, true).unwrap_err();
+    assert!(matches!(e, BackupError::Refused(_)), "{e}");
+    assert!(e.to_string().contains("says never to boot an image here"), "{e}");
+    only_reads(&boot.commands());
+    assert!(!boot.booted.get() && edge.asked.is_none());
+}
+
+#[test]
+fn check_slot_flags_is_what_lets_the_glassine_boot_loader_reach_the_ram_environment() {
+    // with it, clean flags boot unasked
+    let (mut boot, mut edge) = with_flags("noteair-recorded-glassine-fastboot", "yes", "no", "7");
+    let done = run_with(&descriptions(), &mut boot, &mut edge, false).unwrap();
+    assert_eq!(done.prepared.mode, "fastboot");
+    assert!(done.prepared.slot_flags.is_none());
+    // without it, the mode doesn't restart into the RAM environment at all
+    let text = noteair();
+    let start = text.find("[[modes.departures]]\nkind = \"check-slot-flags\"").unwrap();
+    let end = start + text[start..].find("\n\n").unwrap() + 2;
+    let ds = vec![valid(&format!("{}{}", &text[..start], &text[end..])), valid(&pc())];
+    let (mut boot, mut edge) = with_flags("noteair-recorded-glassine-fastboot", "yes", "no", "7");
+    let e = run_with(&ds, &mut boot, &mut edge, true).unwrap_err();
+    assert!(e.to_string().contains("doesn't restart into a RAM environment"), "{e}");
     only_reads(&boot.commands());
 }
