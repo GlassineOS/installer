@@ -4,13 +4,16 @@
 
 import { html, Admonition, Actions, Page } from '../lib/parts.js';
 import { BROWSERS } from '../lib/words.js';
+import { useDevice, DeviceCard } from '../lib/device.js';
 
 export function Start({ s, state }) {
   const live = s ? s.live || state === 'live' : state === 'live';
   const noUsb = state === 'nowebusb';
   const connect = (kind) => (s ? s.connect(kind) : '#/start');
+  const dev = useDevice(s);
   return html`<${Page} s=${null} step="start" eyebrow="GlassineOS installer" title="Install GlassineOS"
       lead="The installer finds out what your machine is, shows you everything it would do, and does it only after you confirm. If anything goes wrong, it says how to get back.">
+    ${noUsb ? null : html`<${DeviceCard} s=${s} dev=${dev} offer />`}
     ${noUsb ? html`<${Admonition} kind="warning" seal="G" label="This browser can’t reach devices" title="Open this page in a Chromium-based browser" id="nowebusb">
       <p>This browser can’t talk to devices over USB. These can: ${BROWSERS}, on a computer with Linux, Windows or macOS.</p>
       <p><strong>Way out:</strong> nothing has happened. Close this page.</p>

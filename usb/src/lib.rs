@@ -279,6 +279,18 @@ mod web {
     }
 
     impl UsbTransport {
+        /// Lets go of the interface and waits for the browser to do it. Its
+        /// failure is ignored: a device that is gone (unplugged, or
+        /// restarting) has no interface to let go of. Dropping the transport
+        /// does the same without waiting, and the browser's rejection then
+        /// goes unhandled.
+        pub async fn close(mut self) {
+            if let Some(Open { out, inp, _intf }) = self.open.take() {
+                drop((out, inp));
+                let _ = _intf.release().await;
+            }
+        }
+
         /// After a timeout: WebUSB has no cancel, so release the interface
         /// (which aborts what is pending) and never use it again.
         fn kill(&mut self, what: &str) -> FbError {
