@@ -15,7 +15,10 @@ mkdir -p "$here/out"
 # name:cargo features (comma separated; empty = variant A)
 variants='
 a:
-b:xbl-sec-trampoline
+s:xbl-sec-trampoline
+u:probe-unmask
+r:probe-resets
+g:probe-mask
 e:probe-spin
 d:probe-pshold
 f:probe-ret

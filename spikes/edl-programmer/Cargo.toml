@@ -21,6 +21,9 @@ xbl-sec-trampoline = []
 probe-spin = ["xbl-sec-trampoline"]   # E: b .
 probe-pshold = ["xbl-sec-trampoline"] # D: PS_HOLD low, b .
 probe-ret = ["xbl-sec-trampoline"]    # F: ret
+probe-unmask = ["xbl-sec-trampoline"] # U: mask, 1.0 s, unmask
+probe-resets = ["xbl-sec-trampoline"] # R: PS_HOLD at 0.5 s, watchdog at 0.8 s, unmask at 2 s
+probe-mask = ["xbl-sec-trampoline"]   # G: mask, spin
 
 [profile.release]
 opt-level = "s"
