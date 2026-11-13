@@ -21,6 +21,7 @@ pub mod pcfacts;
 pub mod plan;
 pub mod ram_backup;
 pub mod recognize;
+pub mod release;
 pub mod report;
 pub mod shape;
 pub mod table;

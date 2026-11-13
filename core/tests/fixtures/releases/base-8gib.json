@@ -1,0 +1,8 @@
+{
+  "release_format": 1,
+  "artifacts": {
+    "base": {
+      "min_partition_bytes": 8589934592
+    }
+  }
+}

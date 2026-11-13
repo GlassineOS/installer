@@ -406,7 +406,13 @@ job = "install"
 kind = "write-partition-table"
 mode = "fastboot"
 after = ["replace-boot-loader"]
-params = { artifact = "partition-layout", renames = { boot = "boot_a", system = "system_a", vendor = "vendor_a" } }
+params.artifact = "partition-layout"
+params.renames = { boot = "boot_a", system = "system_a", vendor = "vendor_a" }
+# slot B's system partition is as big as slot A's: a release whose base needs
+# more is refused at the plan.
+params.partitions = [
+  { name = "system_b", size = "3GiB", at_least = "release:base", role = "system" },
+]
 writes = ["role:partition-table"]
 creates = ["boot_b", "system_b", "vendor_b"]
 resizes = ["userdata"]

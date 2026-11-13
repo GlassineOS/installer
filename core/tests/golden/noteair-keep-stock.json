@@ -209,7 +209,16 @@
     ],
     "total_at_least": 9200000000,
     "exact": false,
-    "disk": null
+    "disk": null,
+    "minimums": [
+      {
+        "partition": "system_b",
+        "role": "base",
+        "at_least": null,
+        "size": 3221225472,
+        "lacks": 0
+      }
+    ]
   },
   "capabilities": [
     {
