@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# softfloat: the boot ROM may leave FP/SIMD trapped (CPTR_EL3.TFP), so no FP registers.
+[toolchain]
+channel = "1.99.1"
+targets = ["aarch64-unknown-none-softfloat"]
+profile = "minimal"

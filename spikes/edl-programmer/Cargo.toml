@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Spike: a minimal programmer for the SDM636 boot ROM's emergency mode (Sahara, 9008).
+# Its own workspace, so the installer's workspace and toolchain stay untouched.
+[package]
+name = "glassine-edl-programmer"
+version = "0.0.1"
+edition = "2024"
+license = "GPL-2.0-or-later"
+publish = false
+
+[[bin]]
+name = "programmer"
+path = "src/main.rs"
+test = false
+bench = false
+
+[features]
+# Variant B: add the XBL_SEC-typed trampoline segment (link-xblsec.ld).
+xbl-sec-trampoline = []
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+debug = false
+
+[profile.dev]
+panic = "abort"
+
+[workspace]

@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+[build]
+target = "aarch64-unknown-none-softfloat"
+
+[target.aarch64-unknown-none-softfloat]
+# Fixed load address, no relocations. The target already has +strict-align (with the MMU
+# off every data access is Device memory, where an unaligned access faults) and no FP/SIMD.
+rustflags = ["-C", "relocation-model=static"]
