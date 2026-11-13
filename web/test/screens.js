@@ -49,7 +49,8 @@ function bareIds(plan) {
 
 async function main() {
   const server = await serve(0);
-  const base = `http://127.0.0.1:${server.address().port}/web/`;
+  // The screens with the core's test records (?fixtures=1); live.js runs them with the core itself.
+  const base = `http://127.0.0.1:${server.address().port}/web/?fixtures=1`;
   const exe = process.env.CHROMIUM || '/usr/bin/chromium';
   const noSandbox = process.env.WEB_NO_SANDBOX === '1' || process.getuid?.() === 0;
   const browser = await puppeteer.launch({ executablePath: exe, headless: true, args: [...(noSandbox ? ['--no-sandbox'] : []), '--disable-gpu', '--font-render-hinting=none'] });

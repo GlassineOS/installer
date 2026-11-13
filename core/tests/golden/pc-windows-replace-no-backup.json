@@ -184,7 +184,13 @@
       "kernel"
     ],
     "total_at_least": 69632,
-    "exact": false
+    "exact": false,
+    "disk": {
+      "disk": 0,
+      "free": 537621692416,
+      "needs": 9663676416,
+      "lacks": 0
+    }
   },
   "capabilities": [
     {

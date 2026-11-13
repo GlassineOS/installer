@@ -8,7 +8,7 @@ mod common;
 use common::*;
 use glassine_installer::fastboot::{FbError, Framing, Transport, readable_variable};
 use glassine_installer::format1::Description;
-use glassine_installer::inspect::{Host, InspectError, Inspected, UsbIds, inspect, reads};
+use glassine_installer::inspect::{Host, InspectError, Inspected, UsbIds, inspect, inspect_open, reads};
 use glassine_installer::plan::{Input, plan, render};
 use glassine_installer::recognize::recognize;
 use std::collections::{BTreeMap, VecDeque};
@@ -343,6 +343,31 @@ fn reboot_only_when_asked_and_last() {
     let got = run_on(&descriptions(), &mut sim, true).unwrap();
     assert!(!got.rebooted && got.reboot_error.is_some());
     covers_fixture(&got, "noteair-prepared-fastboot");
+}
+
+#[test]
+fn an_open_session_restarts_later_with_one_padded_reboot() {
+    // The browser keeps the session after the inspect and restarts the device
+    // when the person asks: in the same session, so the Note Air's boot
+    // loader, which only answers a fresh start, still takes it.
+    let ds = descriptions();
+    let refs: Vec<&Description> = ds.iter().collect();
+    let mut sim = Sim::from_fixture("noteair-prepared-fastboot", true);
+    let (got, mut s) = block(inspect_open(&refs, &mut sim, &fastboot_usb(), &host())).unwrap();
+    assert!(!got.rebooted && got.reboot_error.is_none());
+    covers_fixture(&got, "noteair-prepared-fastboot");
+    let sent = s.transport().log.len();
+    only_reads(&s.transport().log, false);
+    assert!(!s.transport().rebooted);
+    block(s.reboot()).unwrap();
+    drop(s);
+    assert!(sim.rebooted);
+    assert_eq!(sim.log.len(), sent + 1, "the restart sent more than one transfer");
+    let last = sim.log.last().unwrap();
+    assert_eq!(last.len(), LEN);
+    assert_eq!(&last[..7], b"reboot\0");
+    assert!(last[6..].iter().all(|&b| b == 0));
+    only_reads(&sim.log, true);
 }
 
 #[test]

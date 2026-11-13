@@ -1595,6 +1595,19 @@
                         "additionalProperties": false,
                         "description": "a partition to create",
                         "properties": {
+                          "at_least": {
+                            "description": "for a relative size, the least it may be: a disk whose free space can't give it is refused",
+                            "oneOf": [
+                              {
+                                "minimum": 0,
+                                "type": "integer"
+                              },
+                              {
+                                "pattern": "^[0-9]+(KiB|MiB|GiB|TiB)$",
+                                "type": "string"
+                              }
+                            ]
+                          },
                           "name": {
                             "description": "the partition's name (GlassineOS's own)",
                             "pattern": "^[a-z0-9-]+$",

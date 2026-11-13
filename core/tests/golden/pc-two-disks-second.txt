@@ -33,6 +33,8 @@ Space on the computer:
   artifacts 0 B plus base, kernel of unknown size
   at least 68.0 KiB
 
+Space on disk 1: GlassineOS needs 9.0 GiB, it has 431.5 GiB free
+
 Afterwards the device:
   have start-kernel [untried]
   lack recovery [untried]

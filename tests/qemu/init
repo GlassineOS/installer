@@ -1,0 +1,85 @@
+#!/bin/busybox sh
+# SPDX-License-Identifier: GPL-2.0-or-later
+# The guest's /init for the PC check in QEMU (tests/qemu/run.py): a live
+# system as the installer finds one. It mounts the firmware's variables
+# read-write (so a write would land), mounts the installer's USB stick
+# read-only and runs glassine-install from it, printing the facts, the check
+# and the plans to the serial console between markers. The host hashes the
+# disks and the variable store at @@READY and @@DONE; the guest waits for a
+# line from the host at each. glassine.mode=control writes one byte to a
+# disk and one variable instead, so the host can see a write is caught.
+
+/bin/busybox mkdir -p /usr/bin /usr/sbin /proc /sys /dev /tmp /media/stick
+/bin/busybox --install -s
+export PATH=/usr/bin:/usr/sbin:/bin:/sbin
+
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+mount -t devtmpfs devtmpfs /dev
+for m in virtio_pci virtio_blk nvme sd_mod ahci xhci_pci usb_storage vfat efivarfs; do
+	modprobe "$m" 2>/dev/null
+done
+mount -t efivarfs efivarfs /sys/firmware/efi/efivars
+
+arg() { sed -n "s/.*glassine\.$1=\([^ ]*\).*/\1/p" /proc/cmdline; }
+want=$(arg disks)
+mode=$(arg mode)
+
+disks() {
+	for d in /sys/block/*; do
+		case "${d##*/}" in loop* | ram* | zram* | sr* | fd*) continue ;; esac
+		echo "${d##*/}"
+	done
+}
+i=0
+while [ "$(disks | wc -l)" -lt "$want" ] && [ $i -lt 300 ]; do
+	sleep 1
+	i=$((i + 1))
+done
+echo "@@DISKS $(disks | tr '\n' ' ')"
+
+# The stick: the one disk on USB. Its first partition holds the program.
+stick=
+for d in $(disks); do
+	case "$(readlink "/sys/block/$d")" in *"/usb"*) stick=$d ;; esac
+done
+part=$(ls -d /sys/block/"$stick"/"$stick"* 2>/dev/null | head -n 1)
+mount -t vfat -o ro "/dev/${part##*/}" /media/stick || echo "@@FAIL the stick didn't mount"
+B=/media/stick/glassine-install
+
+echo "@@READY"
+read -r _
+
+emit() {
+	name=$1
+	shift
+	echo "@@BEGIN $name"
+	"$@" 2>/tmp/err
+	echo "@@EXIT $?"
+	echo "@@END $name"
+	sed 's/^/@@ERR /' /tmp/err
+}
+
+if [ "$mode" = control ]; then
+	target=
+	for d in $(disks); do [ "$d" != "$stick" ] && target=$d && break; done
+	printf 'X' | dd of="/dev/$target" bs=1 seek=1048576 conv=notrunc,fsync 2>/dev/null
+	printf '\007\000\000\000\001' > /sys/firmware/efi/efivars/GlassineControl-6b2b5e1c-1f3e-4b55-9a5e-2c4f1d5e7a10
+	sync
+	echo "@@WROTE $target"
+else
+	emit facts "$B" inspect --pc --json
+	emit check "$B" check --pc --json
+	emit plan "$B" plan --dry-run --pc --developer --json
+	n=0
+	for d in $(disks); do
+		emit "plan-disk$n" "$B" plan --dry-run --pc --developer --choice "target-disk=disk$n" --json
+		n=$((n + 1))
+	done
+	sync
+fi
+
+echo "@@DONE"
+read -r _
+umount /media/stick
+poweroff -f

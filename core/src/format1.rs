@@ -17,6 +17,8 @@ pub const FIRST_FORMAT: i64 = 1;
 pub const ID_PATTERN: &str = "^[a-z0-9]+(-[a-z0-9]+)*$";
 /// Partition names as the device's table has them, or `role:<role>`.
 pub const PART_REF_PATTERN: &str = "^(role:[a-z-]+|[A-Za-z0-9_.-]+)$";
+/// A size in bytes with a unit, never relative.
+pub const FIXED_SIZE_PATTERN: &str = "^[0-9]+(KiB|MiB|GiB|TiB)$";
 pub const SIZE_PATTERN: &str = "^([0-9]+(KiB|MiB|GiB|TiB)|rest-of-free-space|rest-of-disk|unknown|after:[A-Za-z0-9_.-]+)$";
 pub const RECORD_PATTERN: &str = "^([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[0-9]+|https://docs\\.glassine\\.org/[A-Za-z0-9_./#-]*)$";
 pub const USB_ID_PATTERN: &str = "^[0-9a-f]{4}$";
@@ -546,19 +548,19 @@ fn condition(doc: &str, with_mode: bool, identity: bool) -> Shape {
     table(t)
 }
 
-fn params_table(id: &str, params: &[vocab::Param]) -> (String, Table) {
+fn params_table(id: &str, params: &[vocab::Param], format: i64) -> (String, Table) {
     let fields = params
         .iter()
         .map(|p| Field {
             name: p.name,
-            shape: param_shape(p.ty, p.doc),
+            shape: param_shape(p.ty, p.doc, format),
             required: p.required,
         })
         .collect();
     (id.to_string(), Table::new(format!("parameters of {id}"), fields))
 }
 
-fn param_shape(ty: ParamType, doc: &str) -> Shape {
+fn param_shape(ty: ParamType, doc: &str, format: i64) -> Shape {
     match ty {
         ParamType::Text => s(doc),
         ParamType::Number => uint(doc),
@@ -579,17 +581,31 @@ fn param_shape(ty: ParamType, doc: &str) -> Shape {
         ParamType::NewPartitions => arr1(
             table(Table::new(
                 "a partition to create",
-                vec![
-                    f("name", sp("^[a-z0-9-]+$", "the partition's name (GlassineOS's own)")),
-                    f(
-                        "size",
-                        Shape::IntOrStr {
-                            pattern: SIZE_PATTERN,
-                            doc: "bytes, or relative".into(),
-                        },
-                    ),
-                    opt("role", se(&["esp", "system"], "what it is for")),
-                ],
+                [
+                    vec![
+                        f("name", sp("^[a-z0-9-]+$", "the partition's name (GlassineOS's own)")),
+                        f(
+                            "size",
+                            Shape::IntOrStr {
+                                pattern: SIZE_PATTERN,
+                                doc: "bytes, or relative".into(),
+                            },
+                        ),
+                    ],
+                    if format >= 2 {
+                        vec![opt(
+                            "at_least",
+                            Shape::IntOrStr {
+                                pattern: FIXED_SIZE_PATTERN,
+                                doc: "for a relative size, the least it may be: a disk whose free space can't give it is refused".into(),
+                            },
+                        )]
+                    } else {
+                        vec![]
+                    },
+                    vec![opt("role", se(&["esp", "system"], "what it is for"))],
+                ]
+                .concat(),
             )),
             doc,
         ),
@@ -597,8 +613,8 @@ fn param_shape(ty: ParamType, doc: &str) -> Shape {
     }
 }
 
-fn tagged(t: Table, tag: &'static str, kinds: &[vocab::Kind]) -> Table {
-    let variants = kinds.iter().map(|k| params_table(k.id, k.params)).collect();
+fn tagged(t: Table, tag: &'static str, kinds: &[vocab::Kind], format: i64) -> Table {
+    let variants = kinds.iter().map(|k| params_table(k.id, k.params, format)).collect();
     Table {
         tagged: Some(Tagged { tag, sub: "params", variants }),
         ..t
@@ -713,6 +729,7 @@ pub fn shape_for(format: i64) -> Table {
             ),
             "kind",
             vocab::DEPARTURES,
+            format,
         )
         .one_of(&["verified", "untried"]),
     );
@@ -908,6 +925,7 @@ pub fn shape_for(format: i64) -> Table {
             ),
             "kind",
             vocab::STEP_KINDS,
+            format,
         )
         .one_of(&["verified", "untried"]),
     );
