@@ -57,15 +57,10 @@ async function main() {
       if (u.protocol === 'data:' || u.protocol === 'blob:' || (u.hostname === '127.0.0.1' && u.port === String(server.address().port))) r.continue();
       else { problems.push(`request to another site: ${r.url()}`); r.abort(); }
     });
-    page.on('console', (m) => {
-      const at = m.location() && m.location().url;
-      if ((m.type() === 'error' || m.type() === 'warn') && !(at && icon(at))) problems.push(`console ${m.type()}: ${m.text()}`);
-    });
+    page.on('console', (m) => { if (m.type() === 'error' || m.type() === 'warn') problems.push(`console ${m.type()}: ${m.text()}`); });
     page.on('pageerror', (e) => problems.push(`page error: ${e.message}`));
     page.on('requestfailed', (r) => problems.push(`request failed: ${r.url()} ${r.failure() && r.failure().errorText}`));
-    // The site has no icon of its own; the browser asks for one anyway.
-    const icon = (u) => new URL(u).pathname === '/favicon.ico';
-    page.on('response', (r) => { if (r.status() >= 400 && !icon(r.url())) problems.push(`HTTP ${r.status()}: ${r.url()}`); });
+    page.on('response', (r) => { if (r.status() >= 400) problems.push(`HTTP ${r.status()}: ${r.url()}`); });
     await page.evaluateOnNewDocument(installFakeUsb, device);
     return { page, problems };
   }
