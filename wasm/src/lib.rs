@@ -118,7 +118,7 @@ mod web {
     use std::cell::RefCell;
     use std::rc::Rc;
     use wasm_bindgen::prelude::*;
-    use wasm_bindgen_futures::{future_to_promise, js_sys};
+    use wasm_bindgen_futures::{future_to_promise, js_sys, spawn_local};
 
     fn js(r: Result<String, String>) -> Result<String, JsValue> {
         r.map_err(|e| JsValue::from_str(&e))
@@ -179,15 +179,19 @@ mod web {
             let taken = self.session.borrow_mut().take();
             future_to_promise(async move {
                 let mut s = taken.ok_or_else(|| JsValue::from_str(&error("closed", "the device's session is closed")))?;
-                s.reboot().await.map_err(|e| JsValue::from_str(&error("device", e)))?;
+                let sent = s.reboot().await;
+                s.into_transport().close().await;
+                sent.map_err(|e| JsValue::from_str(&error("device", e)))?;
                 Ok(JsValue::TRUE)
             })
         }
 
         /// Ends the session without sending anything (the device was
-        /// unplugged, or another one is chosen). Releases the interface.
+        /// unplugged, or another one is chosen) and lets go of the interface.
         pub fn close(&self) {
-            self.session.borrow_mut().take();
+            if let Some(s) = self.session.borrow_mut().take() {
+                spawn_local(s.into_transport().close());
+            }
         }
     }
 
