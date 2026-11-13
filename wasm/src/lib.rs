@@ -117,6 +117,7 @@ mod web {
     use super::*;
     use glassine_installer::fastboot;
     use glassine_installer::inspect::{self, Host};
+    use glassine_installer::sahara;
     use glassine_installer_usb as usb;
     use std::cell::RefCell;
     use std::rc::Rc;
@@ -147,6 +148,27 @@ mod web {
             facts: serde_json::to_string(&got.snapshot).unwrap(),
             session: Rc::new(RefCell::new(Some(session))),
         })
+    }
+
+    /// Asks the browser for a device in its emergency download mode (USB
+    /// 05c6:9008; call it from a click), reads what its boot ROM reports in
+    /// Sahara's command mode and resolves with the record of it as JSON
+    /// (`InfoReport`, never the serial). Sends queries only, no program; the
+    /// device stays in the mode until its power key is held ~10 s. Rejects
+    /// with an error record.
+    #[wasm_bindgen]
+    pub async fn emergency_info() -> Result<String, JsValue> {
+        let (t, ids) = usb::request_kind(usb::Kind::Emergency)
+            .await
+            .map_err(|e| JsValue::from_str(&error(e.kind(), &e)))?;
+        let read = async {
+            let mut s = sahara::Sahara::connect(t).await?;
+            let f = sahara::emergency_info(&mut s).await;
+            s.into_transport().close().await;
+            f
+        };
+        let f = read.await.map_err(|e| JsValue::from_str(&error("device", e)))?;
+        Ok(serde_json::to_string(&sahara::InfoReport::new(&f, ids.vendor_id, ids.product_id, false)).unwrap())
     }
 
     /// One inspected device and its fastboot session, still open. The Note

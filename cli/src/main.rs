@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 mod backup;
+mod emergency;
 
 include!(concat!(env!("OUT_DIR"), "/embedded.rs"));
 
@@ -28,6 +29,7 @@ const USAGE: &str = "usage:
                         [--hardware H=yes|no]... [--developer] [--free BYTES] [--job JOB] [--release RELEASE.json]
                         [--json] [--devices DIR]
   glassine-install backup --ram IMAGE --out DIR [--accept-slot-flags] [--devices DIR]
+  glassine-install emergency-info [--json] [--serial]
   glassine-install schema
   glassine-install lock-unpinned LOCKFILE
 
@@ -48,7 +50,15 @@ for it on USB, reads every disk read-only into a gzip file, checks each against 
 hashes and the stored copy, writes manifest.json and restarts the device. It sends download and
 boot, which no other command does. On a boot loader with two slots it reads the active slot's
 flags first: booting changes nothing when the slot is marked successful and not unbootable; in
-any other state (or when the flags aren't published) it is refused unless --accept-slot-flags.";
+any other state (or when the flags aren't published) it is refused unless --accept-slot-flags.
+
+emergency-info reads what the boot ROM of the one device connected in its emergency download
+mode (Qualcomm, USB 05c6:9008) reports, in Sahara's command mode: the Sahara version, the chip
+(its hardware id and, when known, its name), the hash of the maker's key and the boot ROM's
+version. It sends queries only, never a program, and leaves the device waiting in that mode:
+hold its power key ~10 s to restart it. The serial number is unique to the unit and shown only
+with --serial. Linux needs no driver (a udev rule or root for access); Windows needs the WinUSB
+driver for the device, installed once with Zadig.";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -58,6 +68,7 @@ fn main() -> ExitCode {
         Some("check") => check_cmd(&args[1..]),
         Some("plan") => plan_cmd(&args[1..]),
         Some("backup") => backup_cmd(&args[1..]),
+        Some("emergency-info") => emergency_cmd(&args[1..]),
         Some("schema") => {
             println!("{}", serde_json::to_string_pretty(&format1::json_schema()).unwrap());
             Ok(ExitCode::SUCCESS)
@@ -523,6 +534,25 @@ fn plan_cmd(args: &[String]) -> Result<ExitCode, String> {
         plan::Status::Refused => ExitCode::from(3),
         _ => ExitCode::from(4),
     })
+}
+
+fn emergency_cmd(args: &[String]) -> Result<ExitCode, String> {
+    let o = opts(args, &["--json", "--serial"], &[])?;
+    if !o.rest.is_empty() {
+        return Err(USAGE.into());
+    }
+    let r = emergency::open().and_then(|(t, ids)| pollster::block_on(emergency::run(t, &ids, o.has("--json"), o.has("--serial"))));
+    match r {
+        Ok(out) => {
+            print!("{out}");
+            eprintln!("{}", emergency::LEAVE);
+            Ok(ExitCode::SUCCESS)
+        }
+        Err(e) => {
+            eprintln!("{e}");
+            Ok(ExitCode::from(DEVICE_FAILED))
+        }
+    }
 }
 
 fn unpinned_cmd(args: &[String]) -> Result<ExitCode, String> {

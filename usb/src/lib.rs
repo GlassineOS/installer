@@ -6,11 +6,16 @@
 //! transfer that runs out of time is cancelled; WebUSB can't cancel one, so
 //! the interface is released, which aborts it, and the transport is dead.
 //! The same transport reaches the RAM environment's read-only disk interface
-//! (`glassine_read`): only the interface it claims differs.
+//! (`glassine_read`) and the boot ROM's emergency download mode (`sahara`):
+//! only the interface it claims differs. Fastboot and the RAM environment are
+//! found by their interface's class, subclass and protocol; the emergency
+//! mode by the device's USB ids, since its one interface is a plain vendor
+//! class (ff) with a bulk pair.
 
 use glassine_installer::fastboot::{FB_CLASS, FB_PROTOCOL, FB_SUBCLASS, FbError, REPLY_MAX, Transport};
 use glassine_installer::glassine_read::{RR_CLASS, RR_PROTOCOL, RR_SUBCLASS};
 use glassine_installer::inspect::UsbIds;
+use glassine_installer::sahara::{EDL_PRODUCT_ID, EDL_VENDOR_ID};
 use nusb::transfer::{Bulk, Direction, EndpointType, In, Out, TransferError};
 use nusb::{Device, Interface};
 use std::fmt;
@@ -85,13 +90,20 @@ pub enum Kind {
     Fastboot,
     /// The RAM environment's read-only disk reader.
     RamRead,
+    /// The boot ROM's emergency download mode (Sahara), USB 05c6:9008: the
+    /// first interface with a bulk IN and a bulk OUT endpoint, whatever its
+    /// class.
+    Emergency,
 }
 
 impl Kind {
-    fn triple(self) -> (u8, u8, u8) {
+    /// The interface's class, subclass and protocol, for the kinds found by
+    /// them.
+    fn triple(self) -> Option<(u8, u8, u8)> {
         match self {
-            Kind::Fastboot => (FB_CLASS, FB_SUBCLASS, FB_PROTOCOL),
-            Kind::RamRead => (RR_CLASS, RR_SUBCLASS, RR_PROTOCOL),
+            Kind::Fastboot => Some((FB_CLASS, FB_SUBCLASS, FB_PROTOCOL)),
+            Kind::RamRead => Some((RR_CLASS, RR_SUBCLASS, RR_PROTOCOL)),
+            Kind::Emergency => None,
         }
     }
 }
@@ -101,15 +113,17 @@ pub fn selector() -> nusb::DeviceSelector {
 }
 
 pub fn kind_selector(kind: Kind) -> nusb::DeviceSelector {
-    let (c, s, p) = kind.triple();
-    nusb::DeviceSelector::all().with_class_subclass_protocol(c, s, p)
+    match kind.triple() {
+        Some((c, s, p)) => nusb::DeviceSelector::all().with_class_subclass_protocol(c, s, p),
+        None => nusb::DeviceSelector::all().with_vid_pid(EDL_VENDOR_ID, EDL_PRODUCT_ID),
+    }
 }
 
 /// The interface of `kind` and its two bulk endpoints.
 fn bulk_interface(dev: &Device, kind: Kind) -> Option<(u8, u8, u8)> {
     let cfg = dev.active_configuration().ok()?;
     for alt in cfg.interface_alt_settings() {
-        if (alt.class(), alt.subclass(), alt.protocol()) != kind.triple() {
+        if kind.triple().is_some_and(|t| (alt.class(), alt.subclass(), alt.protocol()) != t) {
             continue;
         }
         let (mut out, mut inp) = (None, None);
