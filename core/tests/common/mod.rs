@@ -35,6 +35,11 @@ pub fn facts(name: &str) -> Snapshot {
     Snapshot::parse(&text(&format!("core/tests/fixtures/facts/{name}.json"))).unwrap()
 }
 
+/// A release manifest fixture (002 FR-019a).
+pub fn release(name: &str) -> glassine_installer::release::Release {
+    glassine_installer::release::Release::parse(&text(&format!("core/tests/fixtures/releases/{name}.json"))).unwrap()
+}
+
 /// Replaces `old` (which must occur exactly once) with `new`.
 pub fn mutate(t: &str, old: &str, new: &str) -> String {
     assert_eq!(t.matches(old).count(), 1, "{old:?} must occur once");

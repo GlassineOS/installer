@@ -105,7 +105,11 @@ texts the description provides.
 - The device is recognised, but by signals that contradict each other (a model name that
   doesn't match its hardware): it is treated as unsupported, and the report shows the
   conflict.
-- Not enough space for the plan: refused at the plan, before anything is written.
+- Not enough space for the plan, on the computer or on the machine (a disk, or a fixed
+  partition, smaller than what the installer's release states GlassineOS's system
+  partition needs, 002 FR-019a): refused at the plan, before anything is written. Where
+  no release states it yet (a dry run), the plan says the size isn't known and doesn't
+  refuse for it.
 - A required device-data file or unit-specific value can't be read: refused at the plan,
   with which one and why.
 - The computer loses the backup between backup and install (disk full, removed): the

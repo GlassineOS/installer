@@ -284,3 +284,87 @@ fn a_format_1_description_has_no_full_backup() {
     let p = plan(&refs, &f, &recognize(&refs, &f), &input(&[("backup", "off")], &[], true));
     assert_eq!(p.status, Status::Ready, "{:?}", p.reasons);
 }
+
+const GIB: u64 = 1 << 30;
+
+/// 002 FR-014a, FR-019a: the system partition's least size is the release's;
+/// a disk that can't give it is refused with what it lacks, worked out from it.
+#[test]
+fn a_disk_too_small_for_the_release_is_refused() {
+    let mut i = input(&[], &[], true);
+    i.release = Some(release("base-8gib"));
+    let p = run("pc-release-small-disk", "pc-small-disk", i);
+    assert_eq!(p.status, Status::Refused);
+    let d = p.space.disk.as_ref().unwrap();
+    // The boot partition's 1 GiB and the release's 8 GiB for the base.
+    assert_eq!((d.needs, d.free, d.lacks, d.exact), (9 * GIB, 6 * GIB, 3 * GIB, true));
+    assert!(
+        p.reasons.iter().any(|r| r.contains("disk 0 is too small") && r.contains("it lacks 3.0 GiB")),
+        "{:?}",
+        p.reasons
+    );
+    let m = &p.space.minimums[0];
+    assert_eq!(
+        (m.partition.as_str(), m.role.as_str(), m.at_least, m.size),
+        ("glassine-system", "base", Some(8 * GIB), None)
+    );
+}
+
+/// Without a release (a dry run, a test) the least isn't known yet: it never
+/// refuses, and the disk's space is only "at least".
+#[test]
+fn without_a_release_the_least_is_not_known_yet() {
+    let p = run("pc-small-disk-no-release", "pc-small-disk", input(&[], &[], true));
+    assert_eq!(p.status, Status::Ready, "{:?}", p.reasons);
+    let d = p.space.disk.as_ref().unwrap();
+    assert_eq!((d.needs, d.lacks, d.exact), (GIB, 0, false));
+    assert_eq!(p.space.minimums[0].at_least, None);
+    let txt = render(&p, Some(&valid(&pc())));
+    assert!(txt.contains("glassine-system (for the base): not known yet"), "{txt}");
+    // A release that doesn't state it is the same.
+    let mut i = input(&[], &[], true);
+    i.release = Some(glassine_installer::release::Release::parse(r#"{"release_format": 1, "artifacts": {"kernel": {}}}"#).unwrap());
+    let ds = [valid(&pc())];
+    let refs: Vec<&Description> = ds.iter().collect();
+    let f = facts("pc-small-disk");
+    let p = plan(&refs, &f, &recognize(&refs, &f), &i);
+    assert_eq!(p.status, Status::Ready, "{:?}", p.reasons);
+    assert!(!p.space.disk.unwrap().exact);
+}
+
+/// A fixed partition is checked the same way: a release whose base outgrows
+/// the Note Air's slot-B system partition (3 GiB) refuses the plan.
+#[test]
+fn a_release_that_outgrows_a_fixed_partition_is_refused() {
+    let mut i = input(&[], &[("emergency-cable", true)], true);
+    i.release = Some(release("base-8gib"));
+    let p = run("noteair-release-too-big", "noteair-stock-fastboot", i);
+    assert_eq!(p.status, Status::Refused);
+    let m = &p.space.minimums[0];
+    assert_eq!(
+        (m.partition.as_str(), m.at_least, m.size, m.lacks),
+        ("system_b", Some(8 * GIB), Some(3 * GIB), 5 * GIB)
+    );
+    assert!(
+        p.reasons
+            .iter()
+            .any(|r| r.contains("system_b is too small for this release") && r.contains("it lacks 5.0 GiB")),
+        "{:?}",
+        p.reasons
+    );
+    // Without the release it isn't known, and isn't a reason.
+    let p = run("noteair-cable-yes", "noteair-stock-fastboot", input(&[], &[("emergency-cable", true)], false));
+    assert_eq!(p.space.minimums[0].at_least, None);
+    assert!(p.reasons.iter().all(|r| !r.contains("too small")), "{:?}", p.reasons);
+}
+
+/// The manifest is read by its format; keys an installer doesn't know are ignored.
+#[test]
+fn the_release_manifest_is_read_by_its_format() {
+    use glassine_installer::release::Release;
+    assert_eq!(release("base-8gib").min_partition_bytes("base"), Some(8 * GIB));
+    assert!(Release::parse(r#"{"release_format": 2}"#).unwrap_err().contains("reads up to 1"));
+    assert!(Release::parse(r#"{"artifacts": {}}"#).is_err());
+    let r = Release::parse(r#"{"release_format": 1, "later": true, "artifacts": {"base": {"min_partition_bytes": 5, "other": 1}}}"#).unwrap();
+    assert_eq!(r.min_partition_bytes("base"), Some(5));
+}

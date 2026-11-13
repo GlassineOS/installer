@@ -51,12 +51,16 @@ export const GOLDEN_PLANS = {
   'pc-windows-replace-no-backup': { machine: 'pc-windows', input: { choices: { 'systems.1': 'replace', backup: 'off' }, developer: true } },
   'pc-two-disks-first': { machine: 'pc-two-disks', input: { developer: true } },
   'pc-two-disks-second': { machine: 'pc-two-disks', input: { choices: { 'target-disk': 'disk1' }, developer: true } },
+  'pc-small-disk-no-release': { machine: 'pc-small-disk', input: { developer: true } },
+  'pc-release-small-disk': { machine: 'pc-small-disk', input: { developer: true, release: 'base-8gib' } },
+  'noteair-release-too-big': { machine: 'noteair-stock-fastboot', input: { hardware: { 'emergency-cable': true }, developer: true, release: 'base-8gib' } },
 };
 
 // The check reports there are records of (one per facts snapshot of the core's tests).
 export const REPORTS = [
   'noteair-stock-fastboot', 'noteair-stock-adb', 'noteair-prepared-fastboot', 'noteair-conflict-fastboot',
   'unknown-fastboot', 'pc-windows', 'pc-windows-other-model', 'pc-two-disks', 'noteair-recorded-glassine-fastboot',
+  'pc-small-disk',
 ];
 
 const cache = new Map();
@@ -71,8 +75,11 @@ function load(url, kind) {
   return cache.get(key);
 }
 
+// `release` names a release manifest fixture of the core's tests (core/tests/fixtures/releases/):
+// a fixtures-only part of the input. Live, the page has no release manifest yet, so the least
+// sizes it would state are not known yet (spec 002 FR-019a).
 export function normalInput(input = {}) {
-  return { choices: { ...(input.choices || {}) }, hardware: { ...(input.hardware || {}) }, developer: !!input.developer };
+  return { choices: { ...(input.choices || {}) }, hardware: { ...(input.hardware || {}) }, developer: !!input.developer, release: input.release || null };
 }
 
 // A choice left at its default is the same input as the choice not given. Defaults are per
@@ -89,7 +96,7 @@ async function defaults(machine) {
 function sameInput(a, b, dflt) {
   const choices = (x) => Object.entries(x.choices).filter(([k, v]) => dflt[k] !== v).sort().join('|');
   const hardware = (x) => Object.entries(x.hardware).sort().join('|');
-  return choices(a) === choices(b) && hardware(a) === hardware(b) && a.developer === b.developer;
+  return choices(a) === choices(b) && hardware(a) === hardware(b) && a.developer === b.developer && a.release === b.release;
 }
 
 const golden = (name) => load(at(`../../core/tests/golden/${name}.json`), 'json');
@@ -247,7 +254,8 @@ export async function inspect(machine) {
 export async function plan(machine, input) {
   if (FIXTURES) return fixturePlan(machine, input);
   const got = liveFacts(machine), m = await wasm();
-  return call(() => m.plan(got.facts, JSON.stringify(normalInput(input))));
+  const { release: _fixture, ...answers } = normalInput(input);
+  return call(() => m.plan(got.facts, JSON.stringify(answers)));
 }
 
 export async function description(id) {
