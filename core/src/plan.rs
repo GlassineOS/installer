@@ -39,6 +39,9 @@ pub struct Input {
     pub job: Option<String>,
     /// Free space on the computer for the backup, when known.
     pub free_bytes: Option<u64>,
+    /// The installer release's manifest (002 FR-019a), when there is one: the
+    /// least sizes a new partition's `at_least = "release:<role>"` reads.
+    pub release: Option<crate::release::Release>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -201,6 +204,8 @@ pub struct Space {
     pub exact: bool,
     /// Room on the disk GlassineOS goes on, where the plan makes partitions.
     pub disk: Option<DiskSpace>,
+    /// The new partitions whose least size the release states (002 FR-019a).
+    pub minimums: Vec<Minimum>,
 }
 
 /// What the new partitions need on their disk and what it has (001: not
@@ -213,6 +218,27 @@ pub struct DiskSpace {
     /// The fixed sizes and the least each relative size may be.
     pub needs: u64,
     /// How much more the disk would need: 0 when it fits.
+    pub lacks: u64,
+    /// False while a least size the release states isn't known yet: then
+    /// `needs` counts it as nothing, and only what is known can refuse.
+    pub exact: bool,
+}
+
+/// A new partition whose least size comes from the release (`at_least =
+/// "release:<role>"`): what the release asks and, for a fixed size, what the
+/// partition is.
+#[derive(Debug, Clone, Serialize)]
+pub struct Minimum {
+    pub partition: String,
+    /// The artifact role whose least size it is (`base`: the system partition).
+    pub role: String,
+    /// What the release states; None while it isn't known yet (no release,
+    /// or one that doesn't state it).
+    pub at_least: Option<u64>,
+    /// A fixed partition's size (what inspecting saw, where it saw the partition, else
+    /// the description's); None for a relative size, which `disk` checks.
+    pub size: Option<u64>,
+    /// How much more a fixed partition would need: 0 when it fits or isn't known.
     pub lacks: u64,
 }
 
@@ -707,9 +733,57 @@ pub fn plan(ds: &[&Description], facts: &Snapshot, rec: &Recognition, input: &In
         });
     }
 
+    // The least sizes the release states (002 FR-019a), for every partition a
+    // step makes with `at_least = "release:<role>"`.
+    let release_least = |v: Option<&toml::Value>| -> Option<(String, Option<u64>)> {
+        let role = v?.as_str()?.strip_prefix("release:")?;
+        Some((role.to_string(), input.release.as_ref().and_then(|r| r.min_partition_bytes(role))))
+    };
+    let mut minimums = Vec::new();
+    for inst in &insts {
+        let Some(toml::Value::Array(news)) = inst.step.params.get("partitions") else {
+            continue;
+        };
+        for p in news.iter().filter_map(|p| p.as_table()) {
+            let Some((role, at_least)) = release_least(p.get("at_least")) else {
+                continue;
+            };
+            let name = p.get("name").and_then(|x| x.as_str()).unwrap_or_default().to_string();
+            let fixed = p.get("size").and_then(fixed_size);
+            let size = fixed.map(|f| {
+                parts
+                    .iter()
+                    .find(|x| x.name.as_deref() == Some(name.as_str()))
+                    .and_then(|x| x.size)
+                    .unwrap_or(f)
+            });
+            let lacks = match (size, at_least) {
+                (Some(s), Some(a)) => a.saturating_sub(s),
+                _ => 0,
+            };
+            if lacks > 0 {
+                reasons.push(format!(
+                    "{name} is too small for this release: its {role} needs at least {} there and it is {}; it lacks {} ({lacks} bytes)",
+                    human(at_least.unwrap_or_default()),
+                    human(size.unwrap_or_default()),
+                    human(lacks)
+                ));
+            }
+            if !minimums.iter().any(|m: &Minimum| m.partition == name) {
+                minimums.push(Minimum {
+                    partition: name,
+                    role,
+                    at_least,
+                    size,
+                    lacks,
+                });
+            }
+        }
+    }
+
     // Room for the new partitions on their disk.
     let mut disk_space = None;
-    for inst in &insts {
+    for inst in insts.iter().filter(|i| i.step.kind == "create-partitions") {
         let Some(toml::Value::Array(news)) = inst.step.params.get("partitions") else {
             continue;
         };
@@ -717,14 +791,24 @@ pub fn plan(ds: &[&Description], facts: &Snapshot, rec: &Recognition, input: &In
         let Some(disk) = facts.storage.as_ref().and_then(|s| s.disks.iter().find(|x| x.index == n)) else {
             continue;
         };
+        // A fixed size, else the least a relative size may be; a least the
+        // release doesn't state yet counts as nothing and makes it inexact.
+        let mut exact = true;
         let needs: u64 = news
             .iter()
             .filter_map(|p| p.as_table())
             .map(|p| {
-                p.get("size")
-                    .and_then(fixed_size)
-                    .or_else(|| p.get("at_least").and_then(fixed_size))
-                    .unwrap_or(0)
+                if let Some(f) = p.get("size").and_then(fixed_size) {
+                    return f;
+                }
+                match release_least(p.get("at_least")) {
+                    Some((_, Some(a))) => a,
+                    Some((_, None)) => {
+                        exact = false;
+                        0
+                    }
+                    None => p.get("at_least").and_then(fixed_size).unwrap_or(0),
+                }
             })
             .sum();
         // What the plan removes on that disk may join the free space; counted
@@ -739,13 +823,20 @@ pub fn plan(ds: &[&Description], facts: &Snapshot, rec: &Recognition, input: &In
         let lacks = needs.saturating_sub(free);
         if lacks > 0 {
             reasons.push(format!(
-                "disk {n} is too small: GlassineOS needs {} there and it has {} free; it lacks {} ({lacks} bytes)",
+                "disk {n} is too small: GlassineOS needs {}{} there and it has {} free; it lacks {} ({lacks} bytes)",
+                if exact { "" } else { "at least " },
                 human(needs),
                 human(free),
                 human(lacks)
             ));
         }
-        disk_space = Some(DiskSpace { disk: n, free, needs, lacks });
+        disk_space = Some(DiskSpace {
+            disk: n,
+            free,
+            needs,
+            lacks,
+            exact,
+        });
     }
     for n in &touched_disks {
         if facts
@@ -872,6 +963,7 @@ pub fn plan(ds: &[&Description], facts: &Snapshot, rec: &Recognition, input: &In
         artifacts_unknown,
         total_at_least: backup_bytes + artifact_bytes,
         disk: disk_space,
+        minimums,
     };
     if let Some(free) = input.free_bytes
         && space.total_at_least > free
@@ -1299,20 +1391,47 @@ pub fn render(p: &Plan, d: Option<&Description>) -> String {
         );
         line(&mut o, format!("  {} {}", if s.exact { "total" } else { "at least" }, human(s.total_at_least)));
         if let Some(d) = &s.disk {
+            let unknown: Vec<String> = s
+                .minimums
+                .iter()
+                .filter(|m| m.size.is_none() && m.at_least.is_none())
+                .map(|m| format!("{}'s least size", m.partition))
+                .collect();
+            let needs = if unknown.is_empty() {
+                human(d.needs)
+            } else {
+                format!("{} plus {} (not known yet)", human(d.needs), unknown.join(" and "))
+            };
+            let lacks = if d.lacks > 0 {
+                format!("; it lacks {}", human(d.lacks))
+            } else {
+                String::new()
+            };
             line(
                 &mut o,
-                format!(
-                    "\nSpace on disk {}: GlassineOS needs {}, it has {} free{}",
-                    d.disk,
-                    human(d.needs),
-                    human(d.free),
-                    if d.lacks > 0 {
-                        format!("; it lacks {}", human(d.lacks))
-                    } else {
-                        String::new()
-                    }
-                ),
+                format!("\nSpace on disk {}: GlassineOS needs {needs}, it has {} free{lacks}", d.disk, human(d.free)),
             );
+        }
+        if !s.minimums.is_empty() {
+            line(&mut o, "\nLeast sizes from the release:".into());
+            for m in &s.minimums {
+                let text = match (m.size, m.at_least) {
+                    (None, Some(a)) => format!("at least {}", human(a)),
+                    (None, None) => "not known yet".into(),
+                    (Some(n), Some(a)) => format!(
+                        "{}, the release asks at least {}{}",
+                        human(n),
+                        human(a),
+                        if m.lacks > 0 {
+                            format!("; it lacks {}", human(m.lacks))
+                        } else {
+                            String::new()
+                        }
+                    ),
+                    (Some(n), None) => format!("{}; what the release asks is not known yet", human(n)),
+                };
+                line(&mut o, format!("  {} (for the {}): {text}", m.partition, m.role));
+            }
         }
     }
     if !p.capabilities.is_empty() {

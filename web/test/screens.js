@@ -236,6 +236,18 @@ async function main() {
     await pick('backup', 'full', 'choice.backup=full', '#backup-images');
   });
 
+  await test('a least size no release states yet is shown as not known yet', async () => {
+    const rows = async () => page.evaluate(() => document.body.innerText);
+    await go(page, '#/plan?plan=pc-small-disk-no-release');
+    assert.match(await rows(), /On disk 0\s+1\.0 GiB and GlassineOS’s system partition, whose size is not known yet, of 6\.0 GiB free/);
+    await go(page, '#/plan?plan=noteair-keep-stock');
+    assert.match(await rows(), /GlassineOS’s system partition\s+3\.0 GiB; what this release needs there is not known yet/);
+    assert.ok(!/null|undefined|NaN/.test(await rows()), 'a size that isn’t known shows as a word');
+    // A release that states more than the fixed partition holds: refused, with the core's reason.
+    await go(page, '#/plan?plan=noteair-release-too-big');
+    assert.match(await page.$eval('#refused', (x) => x.textContent), /System_b is too small for this release: its base needs at least 8\.0 GiB there and it is 3\.0 GiB/);
+  });
+
   await test('the disk GlassineOS goes on: each fixed disk, and the plan of the one chosen', async () => {
     await go(page, '#/plan?plan=pc-two-disks-first');
     const disks = () => page.$$eval('input[name="choice-target-disk"]', (xs) => xs.map((x) => x.value + (x.checked ? '*' : '')));

@@ -14,8 +14,9 @@ plan with --pc and prints their records. The host asserts:
   writes its store while booting, so the store is compared over the
   installer's run only);
 - the general PC description fits; every disk and system is listed; the
-  installer's own disk is named and refused as a target; a disk too small is
-  refused with the space it lacks;
+  installer's own disk is named and refused as a target; a disk too small for
+  the release's least system partition (the release manifest fixture on the
+  stick) is refused with the space it lacks;
 - a control run that writes one disk byte and one variable is caught.
 
 Needs: qemu-system-x86_64, OVMF, sgdisk, mkfs.ext4, mkfs.fat, mcopy,
@@ -36,6 +37,9 @@ import urllib.request
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+# The release manifest the plans read (spec 002 FR-019a): its base's least
+# system partition decides what the small disk lacks.
+RELEASE = HERE.parent.parent / "core" / "tests" / "fixtures" / "releases" / "base-8gib.json"
 MIB = 1 << 20
 GIB = 1 << 30
 
@@ -239,6 +243,7 @@ def make_stick(p: Path, binary: Path):
     off, size = part_start(p, 1)
     run("mkfs.fat", "-F", "32", "-n", "GLINSTALL", "--offset", off // 512, p, size // 1024)
     run("mcopy", "-i", f"{p}@@{off}", binary, "::/glassine-install")
+    run("mcopy", "-i", f"{p}@@{off}", RELEASE, "::/release.json")
 
 
 # Each disk: (file, how QEMU attaches it, its size, what is on it).
@@ -472,7 +477,9 @@ def case(name, args, boot, work: Path):
         p = rec.get(f"plan-disk{d['index']}", (None, None))[1] or {}
         sp = (p.get("space") or {}).get("disk") or {}
         if what == "small":
-            needs, free = 9 * GIB, d["free"][0] if d["free"] else 0
+            # The boot partition's fixed 1 GiB and the release's least system partition.
+            least = json.loads(RELEASE.read_text())["artifacts"]["base"]["min_partition_bytes"]
+            needs, free = GIB + least, d["free"][0] if d["free"] else 0
             check(p.get("status") == "refused", f"the small disk is refused: {p.get('reasons')}")
             check(sp.get("lacks") == needs - free and sp.get("lacks", 0) > 0, f"with the space it lacks: {sp}")
             check(any("too small" in r and "lacks" in r for r in p.get("reasons", [])), "the reason says so")

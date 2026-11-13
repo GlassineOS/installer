@@ -37,7 +37,7 @@ function parse() {
 }
 
 function inputOf(q) {
-  const input = { choices: {}, hardware: {}, developer: q.get('developer') === '1' };
+  const input = { choices: {}, hardware: {}, developer: q.get('developer') === '1', release: q.get('release') };
   for (const [k, v] of q) {
     if (k.startsWith('choice.')) input.choices[k.slice(7)] = v;
     if (k.startsWith('hardware.')) input.hardware[k.slice(9)] = v === 'yes';
@@ -73,6 +73,7 @@ async function openSession(route, q) {
     for (const [k, v] of Object.entries(inp.choices || {})) p.set('choice.' + k, v);
     for (const [k, v] of Object.entries(inp.hardware || {})) p.set('hardware.' + k, v ? 'yes' : 'no');
     if (inp.developer) p.set('developer', '1');
+    if (inp.release) p.set('release', inp.release);
     for (const k of CARRIED) if (q.get(k)) p.set(k, q.get(k));
     for (const [k, v] of Object.entries(extra)) if (v !== undefined && v !== null) p.set(k, String(v));
     return `#/${to}?${p}`;
