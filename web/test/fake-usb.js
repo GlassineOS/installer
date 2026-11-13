@@ -10,13 +10,27 @@
 //
 // installFakeUsb is serialised into the page (page.evaluateOnNewDocument): it uses nothing from
 // outside its body. window.__fakeUsb holds what the page sent:
-//   outs:   every bulk OUT transfer: { len, cmd (up to the first NUL), nulPadded, allX }
+//   outs:   every bulk OUT transfer: { len, cmd (up to the first NUL), nulPadded, allX, seen }
+//           (seen: the command the simulated device decoded from it, under its length bug)
 //   calls:  every other call on the device or navigator.usb, by name, with its arguments
+//   unplug(): the device goes away: a disconnect event, and every later call on it fails
+// A device that answered `reboot` goes away the same way shortly after (with silentReboot it
+// goes without answering, as a boot loader may). A transfer still waiting fails when it goes. Every OUT transfer is
+// also appended, as it is made, to sessionStorage['fakeUsb.outs'], which outlives a reload of
+// the page (the pagehide test reads it there).
 'use strict';
 
-function installFakeUsb({ vars, warm = false, cancel = false, serial = 'SECRET-UNIT-1234' }) {
-  const log = { outs: [], calls: [], requested: 0 };
+function installFakeUsb({ vars, warm = false, cancel = false, silentReboot = false, serial = 'SECRET-UNIT-1234' }) {
+  const log = { outs: [], calls: [], requested: 0, gone: false };
   window.__fakeUsb = log;
+  const keep = (o) => {
+    try {
+      const k = 'fakeUsb.outs', all = JSON.parse(sessionStorage.getItem(k) || '[]');
+      all.push(o); sessionStorage.setItem(k, JSON.stringify(all));
+    } catch { /* no storage in this document */ }
+  };
+  const listeners = { connect: [], disconnect: [] };
+  const waiting = [];
   const enc = new TextEncoder(), dec = new TextDecoder();
   const sim = { n: warm ? 5 : 0, prev: warm ? 30 : 0, cmdbuf: new Uint8Array(64), replies: [] };
   if (warm) sim.cmdbuf.set(enc.encode('getvar:max-download-size'));
@@ -53,6 +67,16 @@ function installFakeUsb({ vars, warm = false, cancel = false, serial = 'SECRET-U
   const config = { configurationValue: 1, configurationName: null, interfaces: [iface] };
   const called = (name, args) => { log.calls.push({ name, args: JSON.parse(JSON.stringify(args)) }); };
   const never = () => new Promise(() => {});
+  const gone = () => Promise.reject(new DOMException('The device was disconnected.', 'NotFoundError'));
+  const unplug = () => {
+    if (log.gone) return;
+    log.gone = true; iface.claimed = false; device.opened = false;
+    for (const fail of waiting.splice(0)) fail(new DOMException('The device was disconnected.', 'NotFoundError'));
+    const ev = { type: 'disconnect', device };
+    for (const f of listeners.disconnect) f(ev);
+    if (typeof usb.ondisconnect === 'function') usb.ondisconnect(ev);
+  };
+  log.unplug = unplug;
 
   const device = {
     vendorId: 0x18d1, productId: 0xd00d, deviceClass: 0, deviceSubclass: 0, deviceProtocol: 0,
@@ -63,7 +87,7 @@ function installFakeUsb({ vars, warm = false, cancel = false, serial = 'SECRET-U
     async open() { called('open', []); this.opened = true; },
     async close() { called('close', []); this.opened = false; },
     async claimInterface(n) { called('claimInterface', [n]); iface.claimed = true; },
-    async releaseInterface(n) { called('releaseInterface', [n]); iface.claimed = false; },
+    async releaseInterface(n) { called('releaseInterface', [n]); if (log.gone) return gone(); iface.claimed = false; },
     async selectConfiguration(v) { called('selectConfiguration', [v]); },
     async selectAlternateInterface(n, a) { called('selectAlternateInterface', [n, a]); },
     async reset() { called('reset', []); },
@@ -82,17 +106,23 @@ function installFakeUsb({ vars, warm = false, cancel = false, serial = 'SECRET-U
     async isochronousTransferIn(...a) { called('isochronousTransferIn', a); return never(); },
     async isochronousTransferOut(...a) { called('isochronousTransferOut', a); return never(); },
     async transferOut(n, data) {
+      if (log.gone) { called('transferOut-unplugged', [n]); return gone(); }
       const d = new Uint8Array(data.buffer ? data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) : data);
       const z = d.indexOf(0), end = z < 0 ? d.length : z;
-      log.outs.push({ endpoint: n, len: d.length, cmd: dec.decode(d.subarray(0, Math.min(end, 64))), nulPadded: d.subarray(end).every((b) => b === 0), allX: d.every((b) => b === 0x78) });
       const c = command(d);
+      const o = { endpoint: n, len: d.length, cmd: dec.decode(d.subarray(0, Math.min(end, 64))), nulPadded: d.subarray(end).every((b) => b === 0), allX: d.every((b) => b === 0x78), seen: c };
+      log.outs.push(o); keep(o);
       sim.n += 1; sim.prev = d.length;
-      sim.replies.push(enc.encode(answer(c)));
+      // It restarts: off the bus a moment after its answer (or, silently, without one).
+      if (c === 'reboot' && silentReboot) setTimeout(unplug, 300);
+      else sim.replies.push(enc.encode(answer(c)));
+      if (c === 'reboot' && !silentReboot) setTimeout(unplug, 300);
       return { status: 'ok', bytesWritten: d.length };
     },
     async transferIn(n, length) {
+      if (log.gone) return gone();
       const r = sim.replies.shift();
-      if (!r) { called('transferIn-unanswered', [n, length]); return never(); }
+      if (!r) { called('transferIn-unanswered', [n, length]); return new Promise((_, fail) => waiting.push(fail)); }
       return { status: 'ok', data: view(r) };
     },
   };
@@ -104,7 +134,9 @@ function installFakeUsb({ vars, warm = false, cancel = false, serial = 'SECRET-U
       return device;
     },
     async getDevices() { called('getDevices', []); return []; },
-    addEventListener() {}, removeEventListener() {}, onconnect: null, ondisconnect: null,
+    addEventListener(type, f) { if (listeners[type]) listeners[type].push(f); },
+    removeEventListener(type, f) { if (listeners[type]) listeners[type] = listeners[type].filter((x) => x !== f); },
+    onconnect: null, ondisconnect: null,
   };
   Object.defineProperty(Navigator.prototype, 'usb', { configurable: true, get: () => usb });
 }
