@@ -162,15 +162,75 @@ glassine_exception_entry:
 6:  wfe
     b       6b
 
-    // Variant B only (link-xblsec.ld): an XBL_SEC-typed segment holding nothing but a jump
-    // to _start, so the image runs whichever entry the boot ROM takes. Discarded in A.
+"#
+);
+
+// The XBL_SEC-typed segment (link-xblsec.ld; variant B and the probes). The boot ROM starts
+// execution here (device run 2026-11-13: B != E/D/F, which differ only in these bytes). Each
+// variant is written out word for word, so a build reproduces the images that ran.
+#[cfg(all(feature = "xbl-sec-trampoline", not(any(feature = "probe-spin",
+    feature = "probe-pshold", feature = "probe-ret"))))]
+global_asm!(
+    r#"
     .section .xblsec_tramp, "ax"
     .global glassine_xblsec_entry
 glassine_xblsec_entry:
-    ldr     x19, =0x474c534e5853454b
-    ldr     x16, =_start
+    ldr     x19, 1f             // TRAMPOLINE_MAGIC: _start knows it came this way
+    ldr     x16, 2f
     br      x16
-    .ltorg
+    .word   0
+1:  .quad   0x474c534e5853454b
+2:  .quad   _start
+"#
+);
+
+// Probe E: spin at the XBL_SEC entry (device: bulk IN EPROTO at T0+4 ms, fresh 9008).
+#[cfg(feature = "probe-spin")]
+global_asm!(
+    r#"
+    .section .xblsec_tramp, "ax"
+    .global glassine_xblsec_entry
+glassine_xblsec_entry:
+    b       .
+    ldr     x16, 2f             // the rest is B's, unreachable
+    br      x16
+    .word   0
+    .quad   0x474c534e5853454b
+2:  .quad   _start
+"#
+);
+
+// Probe F: return to whatever x30 holds (device: same as E).
+#[cfg(feature = "probe-ret")]
+global_asm!(
+    r#"
+    .section .xblsec_tramp, "ax"
+    .global glassine_xblsec_entry
+glassine_xblsec_entry:
+    ret
+    ldr     x16, 2f             // the rest is B's, unreachable
+    br      x16
+    .word   0
+    .quad   0x474c534e5853454b
+2:  .quad   _start
+"#
+);
+
+// Probe D: PS_HOLD low, then spin (device: same as E). The tail is what was left of B's
+// literals when the image was first patched by hand: kept so the build matches it.
+#[cfg(feature = "probe-pshold")]
+global_asm!(
+    r#"
+    .section .xblsec_tramp, "ax"
+    .global glassine_xblsec_entry
+glassine_xblsec_entry:
+    movz    x0, #0xc000
+    movk    x0, #0x010a, lsl #16
+    str     wzr, [x0]
+    dsb     sy
+    b       .
+    .word   0x474c534e
+    .quad   _start
 "#
 );
 
