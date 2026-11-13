@@ -94,6 +94,15 @@ pub fn parse_reply(buf: &[u8]) -> Result<Reply, FbError> {
 pub trait Transport {
     fn send(&mut self, data: &[u8]) -> impl Future<Output = Result<(), FbError>>;
     fn recv(&mut self) -> impl Future<Output = Result<Vec<u8>, FbError>>;
+    /// One bulk IN transfer of up to `max` bytes (rounded up to the endpoint's
+    /// packet size by the edge), for protocols that stream data
+    /// ([`crate::glassine_read`]). It returns what one transfer delivered, which
+    /// may be less than `max`. A transport that only carries short replies
+    /// keeps the default: one [`Transport::recv`].
+    fn recv_max(&mut self, max: usize) -> impl Future<Output = Result<Vec<u8>, FbError>> {
+        let _ = max;
+        self.recv()
+    }
 }
 
 impl<T: Transport> Transport for &mut T {
@@ -102,6 +111,9 @@ impl<T: Transport> Transport for &mut T {
     }
     fn recv(&mut self) -> impl Future<Output = Result<Vec<u8>, FbError>> {
         (**self).recv()
+    }
+    fn recv_max(&mut self, max: usize) -> impl Future<Output = Result<Vec<u8>, FbError>> {
+        (**self).recv_max(max)
     }
 }
 
