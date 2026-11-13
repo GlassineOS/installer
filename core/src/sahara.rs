@@ -148,7 +148,11 @@ impl Exec {
 }
 
 /// The NAK statuses of END_IMAGE_TX, the ones that help a person: the rest
-/// are shown as their number.
+/// are shown as their number. Numbers follow the status enum of the `edl`
+/// tool (`sahara_defs.py`); its description table and the enum's trailing
+/// comments are shifted by one (each describes the next constant, e.g.
+/// `UNKNOWN_HOST_ERROR = 0x15  # Timeout while receiving data`), so the
+/// names here come from the enum identifiers, not the descriptions.
 pub const STATUS_NAMES: &[(u32, &str)] = &[
     (0x00, "success"),
     (0x01, "invalid command in this state"),
@@ -158,13 +162,21 @@ pub const STATUS_NAMES: &[(u32, &str)] = &[
     (0x05, "invalid packet size"),
     (0x06, "unexpected image id"),
     (0x0d, "error while sending READ_DATA"),
-    (0x17, "invalid mode"),
-    (0x1c, "command failed"),
-    (0x1e, "unsupported command"),
-    (0x20, "hash table authentication failed"),
-    (0x21, "segment hash verification failed"),
-    (0x22, "no hash table in the image"),
-    (0x24, "image authentication failed (not signed for this chip)"),
+    (0x0e, "unsupported number of program headers"),
+    (0x0f, "invalid program header size"),
+    (0x12, "invalid destination address"),
+    (0x14, "invalid ELF header"),
+    (0x18, "invalid mode"),
+    (0x1d, "command failed"),
+    (0x1f, "unsupported command"),
+    (0x21, "hash table authentication failed"),
+    (0x22, "segment hash verification failed"),
+    (0x23, "no hash table in the image"),
+    (0x24, "target init failure"),
+    (0x25, "image authentication failed (not signed for this chip)"),
+    (0x26, "invalid image hash table size"),
+    (0x27, "enumeration failure"),
+    (0x28, "hardware bulk transfer error"),
 ];
 
 pub fn status_name(status: u32) -> &'static str {
