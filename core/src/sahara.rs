@@ -882,3 +882,69 @@ pub async fn emergency_info<T: Transport>(s: &mut Sahara<T>) -> Result<Emergency
     s.switch_mode(Mode::Command).await?;
     Ok(f)
 }
+
+/// What `emergency-info` shows of [`EmergencyFacts`]: the numbers as hex
+/// strings, the way the USB ids of a facts snapshot are written. The serial
+/// is in it only when asked for ([`InfoReport::new`]'s `with_serial`): it is
+/// unique to the unit, so nothing shown by default carries it.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct InfoReport {
+    /// The USB ids the device was found by, `05c6` and `9008`.
+    pub vendor_id: String,
+    pub product_id: String,
+    pub sahara_version: u32,
+    pub sahara_version_min: u32,
+    /// The MSM hardware id, all 16 hex digits.
+    pub hw_id: String,
+    pub msm_id: String,
+    pub oem_id: String,
+    pub model_id: String,
+    /// The chip's name, when [`KNOWN_CHIPS`] has its msm id.
+    pub chip: Option<String>,
+    /// The OEM's key hash, folded ([`EmergencyFacts::pk_hash`]).
+    pub oem_pk_hash: String,
+    /// `None` when the boot ROM refused the question.
+    pub sbl_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub serial: Option<String>,
+}
+
+impl InfoReport {
+    pub fn new(f: &EmergencyFacts, vendor_id: u16, product_id: u16, with_serial: bool) -> Self {
+        let hw = f.hw();
+        InfoReport {
+            vendor_id: format!("{vendor_id:04x}"),
+            product_id: format!("{product_id:04x}"),
+            sahara_version: f.sahara_version,
+            sahara_version_min: f.sahara_version_min,
+            hw_id: format!("{:016x}", f.hw_id),
+            msm_id: format!("{:08x}", hw.msm_id),
+            oem_id: format!("{:04x}", hw.oem_id),
+            model_id: format!("{:04x}", hw.model_id),
+            chip: hw.chip().map(str::to_string),
+            oem_pk_hash: f.pk_hash_hex(),
+            sbl_version: f.sbl_version.map(|v| format!("{v:08x}")),
+            serial: with_serial.then(|| format!("{:08x}", f.serial)),
+        }
+    }
+
+    /// The text form, one fact a line.
+    pub fn render(&self) -> String {
+        let mut o = format!("emergency download device {}:{}\n", self.vendor_id, self.product_id);
+        o += &format!("sahara: version {} (oldest {})\n", self.sahara_version, self.sahara_version_min);
+        let ids = format!("msm id {}, oem id {}, model id {}", self.msm_id, self.oem_id, self.model_id);
+        match &self.chip {
+            Some(c) => o += &format!("chip: {c} ({ids})\n"),
+            None => o += &format!("chip: not one this installer knows ({ids})\n"),
+        }
+        o += &format!("oem pk hash: {}\n", self.oem_pk_hash);
+        match &self.sbl_version {
+            Some(v) => o += &format!("sbl version: {v}\n"),
+            None => o += "sbl version: not reported (the boot ROM refused the question)\n",
+        }
+        if let Some(s) = &self.serial {
+            o += &format!("serial: {s}\n");
+        }
+        o
+    }
+}
