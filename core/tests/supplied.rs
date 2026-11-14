@@ -187,6 +187,14 @@ fn noteair_for(root: &[u8], known: &str) -> Description {
     valid(&t)
 }
 
+/// The same, for a boot ROM that enforces the signing key.
+fn enforced(root: &[u8], known: &str) -> Description {
+    let pk = hex(&Sha256::digest(root));
+    let t = noteair().replace(DESC_PK, &pk).replace(DESC_KNOWN, known);
+    let t = mutate(&t, "boot_rom = \"test-keys-accepted\"", "boot_rom = \"enforced\"");
+    valid(&t)
+}
+
 fn programmer(wide: bool, version: u32, hw_id: &str, root_cn: &str) -> (Vec<u8>, Vec<u8>) {
     let c = chain(hw_id, root_cn);
     (elf(wide, &hash_segment(version, &c.der, 17)), c.root)
@@ -244,7 +252,8 @@ fn a_file_that_fits_but_isnt_known() {
     let (b, root) = programmer(true, 5, HW_ID, "Root CA");
     let d = noteair_for(&root, OTHER);
     match check(&d, &b, None) {
-        Verdict::FitsUnknown { values } => {
+        Verdict::FitsUnknown { values, differs } => {
+            assert!(differs.is_empty());
             assert_eq!(values["chip"], CHIP);
             assert_eq!(values["pk_hash"], hex(&Sha256::digest(&root)));
         }
@@ -256,7 +265,7 @@ fn a_file_that_fits_but_isnt_known() {
 #[test]
 fn a_file_for_another_chip() {
     let (b, root) = programmer(false, 5, "0014D0E100000000", "Root CA");
-    let d = noteair_for(&root, OTHER);
+    let d = enforced(&root, OTHER);
     match check(&d, &b, None) {
         Verdict::WrongChipOrKey {
             made_for, differs, reported, ..
@@ -273,7 +282,7 @@ fn a_file_for_another_chip() {
 fn a_file_signed_with_another_key() {
     let (_, root) = programmer(false, 5, HW_ID, "Root CA");
     let (b, _) = programmer(false, 5, HW_ID, "Another root");
-    let d = noteair_for(&root, OTHER);
+    let d = enforced(&root, OTHER);
     match check(&d, &b, None) {
         Verdict::WrongChipOrKey { differs, .. } => assert_eq!(differs, ["pk_hash"]),
         v => panic!("{v:?}"),
@@ -431,9 +440,36 @@ fn a_soc_hardware_version_is_not_a_chip() {
     let c = [cert(&ca_name, &attest, 3), cert(&root_name, &ca_name, 2), root.clone()].concat();
     let b = elf(true, &hash_segment(5, &c, 0));
     assert_eq!(qualcomm::read(&b).unwrap().chip, "soc-hw-version:000c");
-    let d = noteair_for(&root, OTHER);
+    let d = enforced(&root, OTHER);
     match check(&d, &b, None) {
         Verdict::WrongChipOrKey { differs, .. } => assert_eq!(differs, ["chip"]),
         v => panic!("{v:?}"),
     }
+}
+
+/// 004 FR-004: where the boot ROM accepts test keys, a programmer that names
+/// another chip or key is not refused for it: it fits unknown, and the
+/// warning shows what it names. Unparsable files and a contradicting device
+/// report are still refused; a known checksum is still known.
+#[test]
+fn test_keys_accepted_makes_the_files_claims_no_evidence() {
+    let (_, root) = programmer(false, 5, HW_ID, "Root CA");
+    let d = noteair_for(&root, OTHER);
+    assert!(d.supplied_files[0].signature.test_keys_accepted());
+    let (other_chip, _) = programmer(false, 5, "0014D0E100000000", "Root CA");
+    let (other_key, _) = programmer(true, 5, HW_ID, "Another root");
+    for (b, want) in [(&other_chip, "chip"), (&other_key, "pk_hash")] {
+        match check(&d, b, None) {
+            Verdict::FitsUnknown { differs, .. } => assert_eq!(differs, [want]),
+            v => panic!("{v:?}"),
+        }
+        assert_eq!(check(&d, b, None).sendable(), Some(true));
+    }
+    assert!(matches!(check(&d, b"garbage", None), Verdict::NotAProgrammer { .. }));
+    match check(&d, &other_chip, Some(&device("0014d0e1", &d.supplied_files[0].matches["pk_hash"]))) {
+        Verdict::WrongChipOrKey { .. } => {}
+        v => panic!("{v:?}"),
+    }
+    let d = noteair_for(&root, &hex(&Sha256::digest(&other_chip)));
+    assert_eq!(check(&d, &other_chip, None), Verdict::Known { verified: false });
 }
