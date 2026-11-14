@@ -33,7 +33,7 @@ const USAGE: &str = "usage:
                         [--json] [--devices DIR]
   glassine-install backup --ram IMAGE --out DIR [--accept-slot-flags] [--devices DIR]
   glassine-install emergency-info [--json] [--serial]
-  glassine-install emergency-read --programmer FILE (--only-gpt | --out DIR [--partition NAME]...)
+  glassine-install emergency-read --programmer FILE (--only-gpt | --out DIR [--only-boot-areas | --partition NAME...])
   glassine-install supplied-check [--device ID] [--file ID] [--reported KEY=VALUE]... [--json] [--devices DIR] FILE
   glassine-install schema
   glassine-install lock-unpinned LOCKFILE
@@ -67,18 +67,20 @@ driver for the device, installed once with Zadig.
 
 emergency-read reads the storage of that device through a programmer the person supplies:
 --programmer names the file, and nothing else is ever looked for or sent. It reads the boot ROM's
-facts (a chip this installer doesn't know gets nothing), sends the file, waits for the programmer's
-first answer (none: the file isn't working on this device), then only lists, reads and restarts:
-the partition table (GPT; when the primary at LBA 1 is damaged, the backup at the disk's last
-sector, and only both bad stop the run), then with --out DIR (new or empty) the partitions named by
---partition, or without --partition the whole disk: the eMMC's user area and its two boot areas
-when the device has them (emmc-boot1, emmc-boot2; RPMB never). Each image is read twice range by
-range, compared, stored as NAME.img.gz.partial, read back and checked, and only then renamed to
+facts (a chip this installer doesn't know gets nothing), sends the file, waits for the
+programmer's first answer (none: the file isn't working on this device), then only lists, reads
+and restarts: the partition table (GPT; when the primary at LBA 1 is damaged, the backup at the
+disk's last sector, and only both bad stop the run), then with --out DIR (new or empty) the
+partitions named by --partition, or without --partition the whole disk: the eMMC's user area and
+its two boot areas when the device has them (emmc-boot1, emmc-boot2; RPMB never).
+--only-boot-areas reads just the two boot areas, the same way (the partition table is still read
+first); a device that has neither ends the run with why. Each image is read twice range by range,
+compared, stored as NAME.img.gz.partial, read back and checked, and only then renamed to
 NAME.img.gz; one that fails becomes NAME.img.gz.incomplete. manifest.json, written last, lists
-them; a run that stopped before it leaves no NAME.img.gz that wasn't checked. At the end the device
-is restarted. On a device not read this way before, take it in steps: --only-gpt first, then one
-small partition (--partition devinfo --out DIR), then the whole disk. GLASSINE_USB_TRACE=1 logs
-every USB transfer.
+them; a run that stopped before it leaves no NAME.img.gz that wasn't checked. At the end the
+device is restarted. On a device not read this way before, take it in steps: --only-gpt first,
+then one small partition (--partition devinfo --out DIR), then the boot areas (--only-boot-areas
+--out DIR), then the whole disk. GLASSINE_USB_TRACE=1 logs every USB transfer.
 
 supplied-check checks FILE as a file the device's description needs from the person (a programmer
 for its emergency mode), as the installer does before sending one: its checksum against the files
@@ -587,7 +589,7 @@ fn emergency_cmd(args: &[String]) -> Result<ExitCode, String> {
 }
 
 fn emergency_read_cmd(args: &[String]) -> Result<ExitCode, String> {
-    let o = opts(args, &["--only-gpt"], &["--programmer", "--out", "--partition"])?;
+    let o = opts(args, &["--only-gpt", "--only-boot-areas"], &["--programmer", "--out", "--partition"])?;
     if !o.rest.is_empty() {
         return Err(USAGE.into());
     }
@@ -596,7 +598,12 @@ fn emergency_read_cmd(args: &[String]) -> Result<ExitCode, String> {
             "emergency-read needs --programmer FILE: the person's own programmer for the device\n\n{USAGE}"
         ));
     };
-    let scope = emergency_read::scope(o.has("--only-gpt"), o.all("--partition"), o.one("--out").map(String::as_str))?;
+    let scope = emergency_read::scope(
+        o.has("--only-gpt"),
+        o.has("--only-boot-areas"),
+        o.all("--partition"),
+        o.one("--out").map(String::as_str),
+    )?;
     match emergency_read::run(Path::new(programmer), o.one("--out").map(Path::new), &scope) {
         Ok(out) => {
             print!("{out}");

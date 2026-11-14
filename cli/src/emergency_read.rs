@@ -22,16 +22,19 @@ pub const TIMEOUT: Duration = Duration::from_secs(10);
 
 const RESTART_BY_HAND: &str = "restart the device by hand: hold the power key ~10 s";
 
-/// The scope the options ask for: `--only-gpt`, `--partition NAME...`, or
-/// the whole disk (the user area and the eMMC boot areas the device has);
-/// storing needs `--out`.
-pub fn scope(only_gpt: bool, partitions: &[String], out: Option<&str>) -> Result<Scope, String> {
-    match (only_gpt, partitions.is_empty(), out) {
-        (true, false, _) => Err("--only-gpt reads the partition table only; it doesn't go with --partition".into()),
-        (true, true, _) => Ok(Scope::GptOnly),
-        (false, _, None) => Err("emergency-read stores images: it needs --out DIR (or --only-gpt)".into()),
-        (false, true, Some(_)) => Ok(Scope::WholeDisk),
-        (false, false, Some(_)) => Ok(Scope::Partitions(partitions.to_vec())),
+/// The scope the options ask for: `--only-gpt`, `--only-boot-areas`,
+/// `--partition NAME...`, or the whole disk (the user area and the eMMC boot
+/// areas the device has); storing needs `--out`.
+pub fn scope(only_gpt: bool, only_boot_areas: bool, partitions: &[String], out: Option<&str>) -> Result<Scope, String> {
+    match (only_gpt, only_boot_areas, partitions.is_empty(), out) {
+        (true, true, _, _) => Err("--only-gpt and --only-boot-areas are two different runs; choose one".into()),
+        (true, false, false, _) => Err("--only-gpt reads the partition table only; it doesn't go with --partition".into()),
+        (true, false, true, _) => Ok(Scope::GptOnly),
+        (false, true, false, _) => Err("--only-boot-areas reads the eMMC boot areas only; it doesn't go with --partition".into()),
+        (false, _, _, None) => Err("emergency-read stores images: it needs --out DIR (or --only-gpt)".into()),
+        (false, true, true, Some(_)) => Ok(Scope::BootAreas),
+        (false, false, true, Some(_)) => Ok(Scope::WholeDisk),
+        (false, false, false, Some(_)) => Ok(Scope::Partitions(partitions.to_vec())),
     }
 }
 
@@ -134,13 +137,21 @@ mod tests {
 
     #[test]
     fn options() {
-        assert_eq!(scope(true, &[], None), Ok(Scope::GptOnly));
-        assert_eq!(scope(true, &[], Some("d")), Ok(Scope::GptOnly));
-        assert!(scope(true, &["devinfo".into()], Some("d")).is_err());
-        assert!(scope(false, &["devinfo".into()], None).unwrap_err().contains("--out"));
-        assert!(scope(false, &[], None).is_err());
-        assert_eq!(scope(false, &[], Some("d")), Ok(Scope::WholeDisk));
-        assert_eq!(scope(false, &["devinfo".into()], Some("d")), Ok(Scope::Partitions(vec!["devinfo".into()])));
+        assert_eq!(scope(true, false, &[], None), Ok(Scope::GptOnly));
+        assert_eq!(scope(true, false, &[], Some("d")), Ok(Scope::GptOnly));
+        assert!(scope(true, false, &["devinfo".into()], Some("d")).is_err());
+        assert!(scope(false, false, &["devinfo".into()], None).unwrap_err().contains("--out"));
+        assert!(scope(false, false, &[], None).is_err());
+        assert_eq!(scope(false, false, &[], Some("d")), Ok(Scope::WholeDisk));
+        assert_eq!(
+            scope(false, false, &["devinfo".into()], Some("d")),
+            Ok(Scope::Partitions(vec!["devinfo".into()]))
+        );
+        // --only-boot-areas: stored, so with --out; alone
+        assert_eq!(scope(false, true, &[], Some("d")), Ok(Scope::BootAreas));
+        assert!(scope(false, true, &[], None).unwrap_err().contains("--out"));
+        assert!(scope(true, true, &[], Some("d")).is_err());
+        assert!(scope(false, true, &["devinfo".into()], Some("d")).is_err());
     }
 
     #[test]
