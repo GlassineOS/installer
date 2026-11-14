@@ -14,7 +14,9 @@
 //   hung:       a read left unanswered (hangAtRead)
 //   disk(p):    physical partition p's bytes, base64 (for the test's comparison)
 // Options: refuse (the boot ROM ends the upload with an error), hangAtRead (the nth read of the
-// user area gets no answer: the run is stuck mid-image, as when a tab is killed), bootSectors.
+// user area gets no answer: the run is stuck mid-image, as when a tab is killed), probeHangs
+// (getstorageinfo answers the user area's numbers for a boot area, so the core searches its size,
+// and a read past a boot area's end gets no answer instead of a NAK), bootSectors.
 //
 // installFakeDir: window.showDirectoryPicker resolves with a folder that behaves as Chromium's
 // File System Access does where the test can tell: createWritable() writes to a swap and the bytes
@@ -26,7 +28,7 @@
 // its body.
 'use strict';
 
-function installFakeEdl({ refuse = false, hangAtRead = 0, bootSectors = 64, programmerSize, pkHash }) {
+function installFakeEdl({ refuse = false, hangAtRead = 0, probeHangs = false, bootSectors = 64, programmerSize, pkHash }) {
   const SECTOR = 512, SECTORS = 16384, ID = 0x0d;
   const enc = new TextEncoder(), dec = new TextDecoder();
   const le = (v, at, x, n) => { for (let i = 0; i < n; i++) { v[at + i] = Number(BigInt.asUintN(64, BigInt(x)) >> BigInt(8 * i) & 0xffn); } };
@@ -124,13 +126,14 @@ function installFakeEdl({ refuse = false, hangAtRead = 0, bootSectors = 64, prog
       const n = attrs.MaxPayloadSizeToTargetInBytes;
       out.push(doc(`<response value="ACK" MinVersionSupported="1" MemoryName="eMMC" MaxPayloadSizeFromTargetInBytes="4096" MaxPayloadSizeToTargetInBytes="${n}" MaxPayloadSizeToTargetInBytesSupported="${n}" MaxXMLSizeInBytes="4096" Version="1" TargetName="synthetic" />`));
     } else if (cmd === 'getstorageinfo') {
-      const total = areas[p] ? areas[p].length / SECTOR : 0;
+      const total = probeHangs && p > 0 ? SECTORS : areas[p] ? areas[p].length / SECTOR : 0;
       const name = p === 3 ? ', "phys_partition_name":"RPMB"' : '';
       out.push(logDoc(`INFO: {"storage_info": {"total_blocks":${total}, "block_size":512, "page_size":512, "num_physical":4, "fw_version":"1", "mem_type":"eMMC", "prod_name":"SYNTH"${name}}}`), doc('<response value="ACK" />'));
     } else if (cmd === 'read') {
       const start = Number(attrs.start_sector), n = Number(attrs.num_partition_sectors), area = areas[p];
+      if (probeHangs && p > 0 && area && start + n > area.length / SECTOR) { log.hung = true; log.hungAt = Date.now(); return; }
       if (!area || start + n > area.length / SECTOR) { out.push(logDoc('ERROR: sectors out of range'), doc('<response value="NAK" />')); return; }
-      if (p === 0 && ++reads === hangAtRead) { log.hung = true; return; }
+      if (p === 0 && ++reads === hangAtRead) { log.hung = true; log.hungAt = Date.now(); return; }
       out.push(doc('<response value="ACK" rawmode="true" />'), area.slice(start * SECTOR, (start + n) * SECTOR), doc('<response value="ACK" rawmode="false" />'));
     } else if (cmd === 'power') {
       out.push(doc('<response value="ACK" />'));

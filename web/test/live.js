@@ -434,7 +434,8 @@ async function main() {
   // What the boot ROM reports: the description's chip and key (public values of the description).
   const PK = '7be49b72f9e4337223ccb84d6eccca4e61ce16e3602ac2008cb18b75babe6d09';
   const edlOpts = (more = {}) => ({ programmerSize: PROGRAMMER.length, pkHash: PK, ...more });
-  const PLAN_Q = 'machine=live-1&hardware.emergency-cable=yes';
+  // A plan that is ready (Confirm would let it start): the golden noteair-no-stock-developer's input.
+  const PLAN_Q = 'machine=live-1&choice.keep-stock=no&hardware.emergency-cable=yes&developer=1';
   const edlLog = (page) => page.evaluate(() => { const { disk, ...rest } = window.__fakeEdl; return JSON.parse(JSON.stringify(rest)); });
   const tree = (page) => page.evaluate(() => window.__fakeDir.tree());
   const files = (t) => Object.keys(t).filter((k) => !k.endsWith('/')).sort();
@@ -542,12 +543,33 @@ async function main() {
     await page.close();
   });
 
+  await test('a programmer that hangs on a read past a boot area’s end: the 5 s probe wait ends the run, the user area kept', async () => {
+    const { page, problems } = await open({ vars: answers('noteair-stock-fastboot') }, { edl: edlOpts({ probeHangs: true }), dir: {} });
+    await toBackup(page);
+    await page.click('#start-backup');
+    await page.waitForFunction(() => window.__fakeEdl.hung, { timeout: 60000 });
+    await page.waitForSelector('#failed-run', { timeout: 30000 });
+    const waited = await page.evaluate(() => Date.now() - window.__fakeEdl.hungAt);
+    assert.ok(waited < 9000, `the probe waited ${waited} ms: the transfer bound, not the 5 s probe wait`);
+    const run = await records(page, 'backupRun', 'live-1');
+    assert.deepStrictEqual([run.record.outcome, run.record.error], ['failed', 'probe-hangs']);
+    const names = files(await tree(page));
+    const folder = names[0].split('/')[0];
+    assert.deepStrictEqual(names.map((n) => n.slice(folder.length + 1)), ['emmc-user.img.gz', 'manifest.json']);
+    const manifest = JSON.parse(Buffer.from(await page.evaluate((p) => window.__fakeDir.bytes(p), `${folder}/manifest.json`), 'base64').toString());
+    assert.deepStrictEqual(manifest.disks.map((d) => d.name), ['emmc-user']);
+    assert.ok(manifest.not_read.some((k) => k.name === 'emmc-boot1'), 'the manifest doesn’t say emmc-boot1 wasn’t read');
+    readsOnly(await edlLog(page));
+    assert.deepStrictEqual(problems, []);
+    await page.close();
+  });
+
   await test('a file the boot ROM refuses: Back up says refused, the file is marked, nothing is read or stored', async () => {
     const { page, problems } = await open({ vars: answers('noteair-stock-fastboot') }, { edl: edlOpts({ refuse: true }), dir: {} });
     await toBackup(page);
     await page.click('#start-backup');
     await page.waitForSelector('#refused', { timeout: 30000 });
-    assert.match(await text(page), /didn’t accept the emergency programmer|didn’t accept the/);
+    assert.match(await text(page), /didn’t accept the programmer/);
     assert.ok(await page.$('#another-file'));
     const log = await edlLog(page);
     assert.strictEqual(log.uploaded, sha(PROGRAMMER));
@@ -585,6 +607,18 @@ async function main() {
     assert.deepStrictEqual(Object.fromEntries(rows).pk_hash, 'Differs');
     // Not the file's fault: it isn't marked refused.
     assert.ok(!(await records(page, 'deviceRefused', 'live-1', 'emergency-programmer', sha(PROGRAMMER))));
+    assert.deepStrictEqual(problems, []);
+    await page.close();
+  });
+
+  await test('a plan that isn’t ready: Back up starts nothing', async () => {
+    const { page, problems } = await open({ vars: answers('noteair-stock-fastboot') }, { edl: edlOpts(), dir: {} });
+    await connect(page);
+    await rendered(page, 'check');
+    await go(page, '#/backup?machine=live-1&hardware.emergency-cable=yes', 'backup');
+    assert.ok(await page.$('#not-ready'));
+    assert.strictEqual(await page.$('#start-backup'), null);
+    assert.strictEqual(await page.$('#choose-folder'), null);
     assert.deepStrictEqual(problems, []);
     await page.close();
   });

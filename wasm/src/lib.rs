@@ -8,9 +8,13 @@
 //! texts the screens show, `supplied_check(device, file, bytes, reported)` the
 //! check of a file the person picked for a mode (`supplied_check_format`),
 //! made in the page: the file's bytes never leave it.
+//! `emergency_read(device, file, bytes, accept_unknown, scope, store)` reads a
+//! device in its emergency download mode through that file and stores the
+//! images in the page's `store` (`emergency_read_format`; list, read and
+//! restart only).
 //! A failure is a record too: `{"error": KIND, "message": TEXT}`, KIND one of
 //! no-device, several-devices, busy, permission, usb, not-fresh, timeout,
-//! device, descriptions, facts, input, closed.
+//! device, descriptions, facts, input, closed, not-sendable.
 //!
 //! The records are built by plain functions (tested natively); the browser
 //! entry points only add WebUSB around them.

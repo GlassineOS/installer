@@ -160,6 +160,18 @@ export function LiveBackup({ s, run }) {
     'other-device': ['Back up · stopped, nothing was sent', `This isn’t ${the} as described`, 'The installation didn’t start.'],
     'nothing-sent': ['Back up · stopped, nothing was sent', `${cap(the)} wasn’t read`, 'The installation didn’t start.'],
   }[st];
+  // Only a plan Confirm would let start (001 FR-006); the page keeps no record of the
+  // confirmation itself, so an address can reach this screen without it.
+  if (p.status !== 'ready') {
+    return html`<${Page} s=${s} step="backup" eyebrow="Back up · step 1 of the plan" title=${`Backing up ${the}`}>
+      <${Admonition} kind="warning" seal="G" label="Can’t start" title="This plan isn’t ready" id="not-ready">
+        <p>The plan says: ${p.status.replace(/-/g, ' ')}. Nothing is sent to ${the} for it.</p>
+        <p><strong>Way out:</strong> ${unchanged}</p>
+      </${Admonition}>
+      <${Actions} next="Nothing, until the plan is ready and confirmed." out=${'Stop here. ' + unchanged}
+        buttons=${[{ label: 'Back to the plan', href: s.link('plan'), primary: true }, { label: 'Stop here', href: s.link('start'), push: true }]} />
+    </${Page}>`;
+  }
   if (!s.canStoreBackup()) {
     return html`<${Page} s=${s} step="backup" eyebrow="Back up · step 1 of the plan" title=${`Backing up ${the}`}>
       <${Admonition} kind="warning" seal="G" label="This browser can’t store the backup" title="Use another browser, or the command line" id="nofolder">

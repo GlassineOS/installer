@@ -170,7 +170,8 @@ export function folderStore(folder, on = () => {}) {
       const out = back.rest.slice(0, n);
       back.rest = back.rest.subarray(n);
       back.done += n;
-      on({ kind: 'checking', name: back.name, done: back.done });
+      // Told every 4 MiB (and at the start): a read-back of a whole disk is many small reads.
+      if (back.done - (back.told || 0) >= 4 << 20 || !back.told) { back.told = back.done; on({ kind: 'checking', name: back.name, done: back.done }); }
       return out;
     },
 
