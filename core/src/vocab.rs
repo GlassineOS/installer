@@ -618,6 +618,21 @@ pub fn supplied_matches(kind: &str) -> Vec<&'static SuppliedMatch> {
     SUPPLIED_MATCHES.iter().filter(|m| m.mode_kind == kind).collect()
 }
 
+/// Whether a device's boot ROM enforces the signing key a supplied program
+/// must carry (FR-018b, 004 FR-004). From format 3 on.
+pub const SIGNATURE_RULES: &[Entry] = &[
+    since(
+        3,
+        "enforced",
+        "the boot ROM runs only programs signed with the key it reports: a file must be made for the chip and key the description names",
+    ),
+    since(
+        3,
+        "test-keys-accepted",
+        "the boot ROM runs programs signed with test keys: the chip and key a file names prove nothing, an unknown programmer is sent after the person confirms",
+    ),
+];
+
 pub const NEEDS: &[Entry] = &[
     e("hands", "the person does it by hand"),
     e("usb-debugging", "a setting on the device: USB debugging on in the stock system"),

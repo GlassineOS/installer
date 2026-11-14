@@ -58,11 +58,11 @@ search for it themselves. It names no site and opens no page.
 
 **Given** a picked file,
 **When** the installer checks it,
-**Then** it says one of: a known good file for this device; a file for this chip and key
-that isn't known (with a warning, and sent only if the person confirms); a file for
-another chip or key, or not a programmer at all (refused). Once the device is in its
-emergency mode, the installer compares the chip and key the boot ROM reports with the
-file before sending it.
+**Then** it says one of: a known good file for this device; a programmer that isn't known
+(with a warning, and sent only if the person confirms); a file for another chip or key,
+where the device's boot ROM enforces the signing key, or not a programmer at all
+(refused). Once the device is in its emergency mode, the installer compares the chip and
+key the boot ROM reports with the description before sending anything.
 
 ### Scenario 4 – No programmer at hand (P2)
 
@@ -104,9 +104,16 @@ person is told how to restart the device into the system it had.
   and uses it for that session. GlassineOS doesn't ship, download, host or link any
   programmer, and the installer doesn't upload the file anywhere.
 - **FR-004**: The installer checks a picked file before sending it: its checksum against
-  the known ones, then that the route recognises it as a programmer for the reported
-  chip and key. An unknown checksum is sent only after the person confirms a warning
-  that says why it matters; a file for another chip or key is never sent.
+  the known ones, then that the route recognises it as a programmer. The description
+  states whether the device's boot ROM enforces the signing key. Where it does, the
+  file must be made for the chip and key the description names, and a file for another
+  chip or key is never sent. Where it doesn't (the boot ROM runs programs signed with
+  test keys), the chip and key the file names are not evidence: a programmer with an
+  unknown checksum is sent only after the person confirms the warning, which shows what
+  the file names. An unknown checksum is always sent only after the person confirms a
+  warning that says why it matters. A file the route doesn't recognise as a programmer
+  is never sent, and nothing is sent when the device reports a chip or key the
+  description doesn't name.
 - **FR-005**: The installer never builds or sends a program of its own.
 - **FR-006**: A programmer counts as working for a device only once the device has
   accepted it and it answers the installer's first request; until then nothing is read.

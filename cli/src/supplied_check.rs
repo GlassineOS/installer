@@ -80,11 +80,19 @@ pub fn render(c: &Check, path: &str) -> String {
             "known: the same as a file known to work on this device{}\n",
             if *verified { "" } else { " (seen in development, not yet in a recorded run)" }
         ),
-        Verdict::FitsUnknown { values } => format!(
-            "fits, not known: made for {}, but not the same as any file known to work on this device.\n\
-             The installer sends it only after you confirm.\n",
-            pairs(values)
-        ),
+        Verdict::FitsUnknown { values, differs } => {
+            let mut s = format!(
+                "a programmer, not known: it names {}, and it isn't the same as any file known to work on this device.\n",
+                pairs(values)
+            );
+            if !differs.is_empty() {
+                s += &format!(
+                    "Its {} differ from the description's; this device's boot ROM runs test-signed programs, so that proves nothing either way.\n",
+                    differs.join(" and ")
+                );
+            }
+            s + "The installer sends it only after you confirm.\n"
+        }
         Verdict::WrongChipOrKey {
             made_for,
             want,
