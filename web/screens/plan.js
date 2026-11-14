@@ -13,6 +13,10 @@ import { EraseNote } from './check.js';
 // The flow's own choices (the backup and its place), shown by BackupChoice and on Confirm.
 const FLOW_CHOICES = ['backup', 'backup-to'];
 
+// A pick inside the folded choices re-plans and re-renders the screen: the fold stays open for it.
+let keepOpen = false;
+const repick = (s, input) => { keepOpen = true; s.withInput(input); };
+
 const numbers = (plan, ids) => ids.map((id) => plan.steps.findIndex((x) => x.id === id) + 1).filter((n) => n > 0);
 
 function Choice({ s, c }) {
@@ -24,7 +28,7 @@ function Choice({ s, c }) {
   // The disk GlassineOS goes on: `first` (the core's default, the first fixed disk) or diskN.
   const disks = base === 'target-disk' ? s.report.machine.disks.map((d, i) => ({ ...d, i })).filter((d) => !d.removable) : [];
   const diskText = (d) => `${d.i === disks[0].i ? 'The first disk' : 'Disk ' + d.i}: ${human(d.size)}, ${d.kind.toUpperCase()}. ${d.free ? human(d.free) + ' of it is free.' : ''}`;
-  const pick = (v) => s.withInput({ ...s.input, choices: { ...s.input.choices, [c.choice]: v } });
+  const pick = (v) => repick(s, { ...s.input, choices: { ...s.input.choices, [c.choice]: v } });
   const row = (v, text) => {
     const [title, body] = splitSentence(text);
     return html`<label class="ins-choice"><input type="radio" name=${'choice-' + c.choice} value=${v} checked=${c.value === v} onChange=${() => pick(v)} />
@@ -61,7 +65,7 @@ function Question({ s, q }) {
 
 export function BackupChoice({ s }) {
   const b = backupView(s);
-  const pick = (v) => s.withInput({ ...s.input, choices: { ...s.input.choices, backup: v } });
+  const pick = (v) => repick(s, { ...s.input, choices: { ...s.input.choices, backup: v } });
   return html`<fieldset class="ins-stack" style="border:0;margin:0;padding:0" id="backup" data-choice="backup">
     <legend class="il-label" style="margin-bottom:8px">The backup</legend>
     <label class="ins-choice"><input type="radio" name="backup" value="full" checked=${b.on} onChange=${() => pick('full')} /><span class="ins-choice__body">
@@ -169,6 +173,8 @@ export function Plan({ s }) {
   const b = backupView(s);
   const { need, got, ok: fileOk } = suppliedState(s);
   const choices = p.choices.filter((c) => !FLOW_CHOICES.includes(c.choice));
+  const openChoices = keepOpen || gone.length > 0 || (!refused && !b.on);
+  keepOpen = false;
   const unchanged = pc ? 'the PC starts as before.' : 'the device starts its system as before.';
   const fileTag = !got ? ['Not chosen yet', 'ins-tag ins-tag--dashed'] : fileOk ? ['Chosen and checked', 'ins-tag'] : got.check.verdict === 'fits-unknown' ? ['Chosen, not a known file', 'ins-tag ins-tag--heavy'] : ['Chosen, doesn’t fit', 'ins-tag ins-tag--heavy'];
   return html`<${Page} s=${s} step="plan" eyebrow=${refused ? 'Plan · refused, nothing was changed' : 'Plan · nothing is written yet'} title=${title}
@@ -205,7 +211,7 @@ export function Plan({ s }) {
         <${Steps} views=${stepViews(s)} mode="plan" />
       </details>
     </section>`}
-    ${choices.length || !refused ? html`<details class="il-details" id="choices" open=${gone.length > 0 || (!refused && !b.on)}><summary>Change the choices · ${choiceLine(s)}</summary>
+    ${choices.length || !refused ? html`<details class="il-details" id="choices" open=${openChoices}><summary>Change the choices · ${choiceLine(s)}</summary>
       <section class="ins-stack ins-stack--wide" style="margin-top:12px">
         ${choices.map((c) => html`<${Choice} s=${s} c=${c} />`)}
         ${refused ? null : html`<${BackupChoice} s=${s} />`}

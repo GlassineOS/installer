@@ -288,6 +288,7 @@ async function main() {
     const disks = () => page.$$eval('input[name="choice-target-disk"]', (xs) => xs.map((x) => x.value + (x.checked ? '*' : '')));
     assert.deepStrictEqual(await disks(), ['first*', 'disk1']);
     await pick('choice-target-disk', 'disk1', 'choice.target-disk=disk1', '#backup-images');
+    assert.ok(await page.$eval('#choices', (d) => d.open), 'a pick in the folded choices shut them');
     await unfold();
     assert.deepStrictEqual(await disks(), ['first', 'disk1*']);
     assert.match(await page.$eval('#backup-images', (x) => x.innerText), /Disk 1/);

@@ -9,7 +9,7 @@
 
 import { useRef, useState } from 'preact/hooks';
 import { html, Admonition, Actions, Button, Owed, Page, Tick, Bang } from '../lib/parts.js';
-import { cap, human } from '../lib/words.js';
+import { cap, human, list } from '../lib/words.js';
 import { suppliedFor, suppliedState, shortValue } from '../lib/model.js';
 import { NoRecord } from './plan.js';
 
@@ -51,6 +51,8 @@ export function Supply({ s, state }) {
   const c = got && got.check;
   const st = state === 'nofile' ? 'nofile' : v || 'guide';
   const T = need.texts, the = s.m.the;
+  // "chip and signing key": the values the route checks, named as the route names them.
+  const keys = list(need.matches.map((m) => m.name.toLowerCase())) || 'values';
   const choose = () => input.current && input.current.click();
   const pick = async (ev) => {
     const f = ev.target.files && ev.target.files[0];
@@ -91,11 +93,11 @@ export function Supply({ s, state }) {
     guide: ['Plan · needed for the backup', need.title, `The backup needs one file that only you can provide. Nothing is sent to ${the} until the installer has checked it.`],
     known: ['Plan · the file is checked', `A known ${need.noun}`, `This exact file has worked on ${the} before${c && c.verified ? '' : ', in development'}. It is used for the backup, and kept only in this page.`],
     'fits-unknown': ['Plan · the file is checked', `This ${need.noun} isn’t a known one`, differs.length
-      ? `It is a ${need.noun}, but not one of the files known to work on ${the}, and it names another chip or signing key than ${the}’s.`
-      : `It is made for ${the}’s chip and signing key, but it isn’t one of the files known to work.`],
+      ? `It is a ${need.noun}, but not one of the files known to work on ${the}, and it names another ${keys} than ${the}’s.`
+      : `It is made for ${the}’s ${keys}, but it isn’t one of the files known to work.`],
     'wrong-chip-or-key': ['Plan · the file is checked', `This file doesn’t fit ${the}`, c && c.reported
-      ? `The device reports another chip or signing key than ${the}’s description names. Nothing is sent to it.`
-      : `The installer sends only a file made for ${the}’s chip and signing key.`],
+      ? `The device reports another ${keys} than ${the}’s description names. Nothing is sent to it.`
+      : `The installer sends only a file made for ${the}’s ${keys}.`],
     'known-bad': ['Plan · the file is checked', `This file doesn’t work on ${the}`, 'It is known not to work there, so it is never sent.'],
     'not-a-programmer': ['Plan · the file is checked', `This isn’t ${/^[aeiou]/.test(need.noun) ? 'an' : 'a'} ${need.noun}`, 'The installer doesn’t recognise it as one, so it is never sent.'],
     nofile: ['Plan · needed for the backup', `Without the ${need.noun}`, 'The backup can’t be made without it. You decide how to go on.'],
@@ -165,9 +167,9 @@ export function Supply({ s, state }) {
       <p>${String(error.message || error)}</p>
       <p><strong>Way out:</strong> choose another file. Nothing was sent; ${the} hasn’t changed.</p>
     </${Admonition}>` : null}
-    ${fits ? html`<${Admonition} kind="danger" seal="!" label="Not a known file" title=${differs.length ? 'It names another chip or key, and nobody has tried it' : 'It fits, but nobody has tried this exact file'} id="unknown">
+    ${fits ? html`<${Admonition} kind="danger" seal="!" label="Not a known file" title=${differs.length ? `It names another ${keys}, and nobody has tried it` : 'It fits, but nobody has tried this exact file'} id="unknown">
       <p>A ${need.short} can read and change all of ${the}’s storage. A changed or wrong file could damage ${the} or what is on it. A known file is the same, byte for byte, as one that has worked on ${the} before.</p>
-      ${need.testKeys || differs.length ? html`<p>${cap(the)} runs programs signed with test keys, so the chip and signing key a file names prove nothing either way. What this file names:</p>` : html`<p>What this file names:</p>`}
+      ${need.testKeys || differs.length ? html`<p>${cap(the)} runs programs signed with test keys, so the ${keys} a file names prove nothing either way. What this file names:</p>` : html`<p>What this file names:</p>`}
       <${ValueTable} head=${['', 'The file names', `${cap(the)} has`, '']} rows=${need.matches.map((m) => [m.name, val(c.values, m.key), shortValue(m.value), differs.includes(m.key) ? 'Differs' : 'The same'])} />
       <label class="ins-check"><input type="checkbox" id="trust" checked=${!!got.trusted} onChange=${(ev) => trust(ev.target.checked)} /><span>I trust where this file comes from. Send it to ${the} anyway.</span></label>
       <p><strong>Way out:</strong> choose another file, such as one whose checksum is known. Until you tick the box, nothing is sent.</p>
