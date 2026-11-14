@@ -116,13 +116,13 @@ fn every_problem_at_once() {
 
 #[test]
 fn format_first() {
-    let t = mutate(&noteair(), "format = 2\nid = \"onyx-noteair\"", "id = \"onyx-noteair\"\nformat = 2");
+    let t = mutate(&noteair(), "format = 3\nid = \"onyx-noteair\"", "id = \"onyx-noteair\"\nformat = 3");
     rejects(&t, "format");
 }
 
 #[test]
 fn unknown_format() {
-    na("format = 2", "format = 0", "format");
+    na("format = 3", "format = 0", "format");
 }
 
 #[test]
@@ -134,8 +134,8 @@ fn not_toml() {
 /// nothing of it is read.
 #[test]
 fn newer_format_is_too_new_not_invalid() {
-    let t = mutate(&noteair(), "format = 2", "format = 3\nnew_key_of_format_3 = true");
-    assert!(matches!(load(&t), Loaded::TooNew { format: 3 }));
+    let t = mutate(&noteair(), "format = 3", "format = 4\nnew_key_of_format_4 = true");
+    assert!(matches!(load(&t), Loaded::TooNew { format: 4 }));
 }
 
 /// FR-003: a reader reads every earlier format too.
@@ -191,6 +191,162 @@ fn format_1_has_no_layout_partitions() {
         "renames = { boot = \"boot_a\", system = \"system_a\", vendor = \"vendor_a\" }, partitions = [{ name = \"system_b\", size = \"3GiB\" }] }",
     );
     rejects(&t, "steps[2].params.partitions");
+}
+
+/// FR-003: format 2 still reads, and what format 3 added isn't in it.
+fn format2() -> String {
+    text("core/tests/fixtures/descriptions/onyx-noteair-format2.toml")
+}
+
+#[test]
+fn format_2_still_reads() {
+    assert_eq!(valid(&format2()).format, 2);
+}
+
+#[test]
+fn format_2_has_no_supplied_files() {
+    let t = format2() + "\n[[supplied_files]]\nid = \"p\"\nwhat = \"p\"\nusual_name = \"p\"\nmatches = { chip = \"000cc0e1\" }\n";
+    rejects(&t, "supplied_files");
+}
+
+#[test]
+fn format_2_has_no_mode_needs() {
+    let t = mutate(
+        &format2(),
+        "usb = { vendor_id = \"05c6\", product_id = \"9008\" }",
+        "usb = { vendor_id = \"05c6\", product_id = \"9008\" }\nneeds = \"p\"",
+    );
+    rejects(&t, "modes[4].needs");
+}
+
+#[test]
+fn format_2_has_no_boot_rom_facts() {
+    let t = mutate(
+        &format2(),
+        "# ---- install states",
+        "[[identity]]\nkey = \"emergency.chip\"\nequals = \"000cc0e1\"\nrequired = false\nuntried = \"x\"\n\n# ---- install states",
+    );
+    rejects(&t, "identity[3].key");
+}
+
+#[test]
+fn format_2_never_holds_a_key_hash() {
+    let t = mutate(
+        &format2(),
+        "# ---- install states",
+        "# 7be49b72f9e4337223ccb84d6eccca4e61ce16e3602ac2008cb18b75babe6d09\n# ---- install states",
+    );
+    match load(&t) {
+        Loaded::Invalid(ps) => assert!(ps.iter().any(|p| p.path.starts_with("line ")), "{ps:#?}"),
+        _ => panic!("accepted a hash in format 2"),
+    }
+}
+
+// ---- FR-010, FR-018b: supplied files (format 3) --------------------------------------
+
+const PK: &str = "7be49b72f9e4337223ccb84d6eccca4e61ce16e3602ac2008cb18b75babe6d09";
+const KNOWN: &str = "b3e409558677f9b280fed7851e8cc66f0079ad78ef0b07519a3a98d86c14d41b";
+
+#[test]
+fn a_mode_needs_a_supplied_file_that_exists() {
+    na("needs = \"emergency-programmer\"", "needs = \"programmer\"", "modes[4].needs");
+}
+
+#[test]
+fn only_a_route_that_runs_a_program_needs_a_file() {
+    na(
+        "restarts_into = [\"glassine\", \"android\", \"emergency\"]",
+        "restarts_into = [\"glassine\", \"android\", \"emergency\"]\nneeds = \"emergency-programmer\"",
+        "modes[1].needs",
+    );
+}
+
+#[test]
+fn every_supplied_file_is_needed() {
+    na("needs = \"emergency-programmer\"\n", "", "supplied_files[0].id");
+}
+
+#[test]
+fn a_supplied_file_has_its_texts() {
+    na("what = \"emergency-programmer\"", "what = \"programmer\"", "supplied_files[0].what");
+    na(
+        "[texts.supplied_files.emergency-programmer]",
+        "[texts.supplied_files.programmer]",
+        "texts.supplied_files.programmer",
+    );
+    na(
+        "why = \"It belongs to the chip's maker",
+        "why = \"It **belongs** to the chip's maker",
+        "texts.supplied_files.emergency-programmer.why",
+    );
+}
+
+#[test]
+fn a_supplied_file_matches_what_its_route_checks() {
+    na("matches = { chip = \"000cc0e1\", ", "matches = { ", "supplied_files[0].matches.chip");
+    na(
+        "matches = { chip = \"000cc0e1\", ",
+        "matches = { chip = \"cc0e1\", ",
+        "supplied_files[0].matches.chip",
+    );
+    na(
+        "matches = { chip = \"000cc0e1\", ",
+        "matches = { chip = \"000cc0e1\", storage = \"emmc\", ",
+        "supplied_files[0].matches.storage",
+    );
+}
+
+#[test]
+fn a_supplied_file_agrees_with_the_identity() {
+    na(
+        "matches = { chip = \"000cc0e1\", ",
+        "matches = { chip = \"0014d0e1\", ",
+        "supplied_files[0].matches.chip",
+    );
+}
+
+/// "What a description never holds": a place to get a vendor file.
+#[test]
+fn a_supplied_file_names_no_place_to_get_it() {
+    na(
+        "usual_name = \"000cc0e100000000_7be49b72f9e43372_\"",
+        "usual_name = \"https://example.org/000cc0e100000000_7be49b72f9e43372_\"",
+        "supplied_files[0].usual_name",
+    );
+    na(
+        "untried = \"the edl tool read and wrote",
+        "untried = \"from www.example.org; the edl tool read and wrote",
+        "supplied_files[0].known[0].untried",
+    );
+    na(
+        "Search for a file whose name starts",
+        "Search ftp://example.org for a file whose name starts",
+        "texts.supplied_files.emergency-programmer.recognise",
+    );
+}
+
+#[test]
+fn a_known_file_is_a_sha256_tried_or_not() {
+    na(&format!("sha256 = \"{KNOWN}\""), "sha256 = \"b3e40955\"", "supplied_files[0].known[0].sha256");
+    na(
+        "untried = \"the edl tool read and wrote the Note Air through it in development (2026-06-02); not a recorded installer run\"\n",
+        "",
+        "supplied_files[0].known[0]",
+    );
+}
+
+/// Format 3 holds a supplied file's checksums and key hash, and no other hash.
+#[test]
+fn only_a_supplied_files_hashes_are_held() {
+    let t = valid(&noteair());
+    assert!(noteair().contains(PK) && noteair().contains(KNOWN));
+    assert_eq!(t.supplied_files[0].known[0].sha256, KNOWN);
+    let other = "a3e409558677f9b280fed7851e8cc66f0079ad78ef0b07519a3a98d86c14d41b";
+    let t = mutate(&noteair(), "# ---- install states", &format!("# {other}\n# ---- install states"));
+    match load(&t) {
+        Loaded::Invalid(ps) => assert!(ps.iter().any(|p| p.path.starts_with("line ")), "{ps:#?}"),
+        _ => panic!("accepted another hash"),
+    }
 }
 
 // ---- FR-025: names the vocabularies or the backend don't have ----------------------
@@ -253,8 +409,8 @@ fn unknown_role() {
 #[test]
 fn backup_means_of_another_mode() {
     na(
-        "back_up = { mode = \"ram\", means = \"glassine-read\", check = \"read-back-compare\", size = 9200000000 }",
-        "back_up = { mode = \"ram\", means = \"block-read\", check = \"read-back-compare\", size = 9200000000 }",
+        "back_up = { mode = \"emergency\", means = \"emergency-read\", check = \"read-back-compare\", size = 9200000000 }",
+        "back_up = { mode = \"emergency\", means = \"glassine-read\", check = \"read-back-compare\", size = 9200000000 }",
         "partitions[7].back_up.means",
     );
 }
@@ -352,7 +508,7 @@ fn installer_transition_needs_a_restart() {
     na(
         "restarts_into = [\"glassine\", \"android\", \"emergency\"]",
         "restarts_into = [\"glassine\", \"emergency\"]",
-        "transitions[8].by",
+        "transitions[11].by",
     );
 }
 
@@ -395,7 +551,7 @@ fn replace_names_its_backup_in_format_1() {
 #[test]
 fn the_whole_disk_names_how_it_is_read() {
     na(
-        "back_up = { mode = \"ram\", means = \"glassine-read\", check = \"read-back-compare\", size = 9200000000 }",
+        "back_up = { mode = \"emergency\", means = \"emergency-read\", check = \"read-back-compare\", size = 9200000000 }",
         "back_up = { with = \"role:partition-table\" }",
         "partitions[7].back_up",
     );
@@ -443,8 +599,8 @@ fn the_backup_choice_is_reserved() {
 #[test]
 fn backup_mode_exists() {
     na(
-        "back_up = { mode = \"ram\", means = \"glassine-read\", check = \"read-back-compare\", size = 9200000000 }",
-        "back_up = { mode = \"edl\", means = \"glassine-read\", check = \"read-back-compare\", size = 9200000000 }",
+        "back_up = { mode = \"emergency\", means = \"emergency-read\", check = \"read-back-compare\", size = 9200000000 }",
+        "back_up = { mode = \"edl\", means = \"emergency-read\", check = \"read-back-compare\", size = 9200000000 }",
         "partitions[7].back_up.mode",
     );
 }
