@@ -4,7 +4,7 @@
 **Created:** 2026-11-12 · **Status:** spec, for review; nothing built
 **Decision:** [docs 0014](https://docs.glassine.org/decisions/0014-installation-and-provisioning/),
 [docs 0015](https://docs.glassine.org/decisions/0015-installer-stack/) · **Builds on:**
-[001](../001-install-from-stock/spec.md) · **Contract:** owned by this repository, format 2
+[001](../001-install-from-stock/spec.md) · **Contract:** owned by this repository, format 3
 
 ## Summary
 
@@ -80,7 +80,7 @@ pinned to,
 ### File and versions
 
 - **FR-001**: A description is one TOML file. Its first key is `format`; this spec is
-  `format = 2`. The format includes its vocabularies: the fact keys signals read, the mode
+  `format = 3`. The format includes its vocabularies: the fact keys signals read, the mode
   kinds, step kinds, boot-setting kinds and capability ids, each with what its parameters
   are.
 - **FR-002**: A reader rejects a description with an unknown key, a missing required key, a
@@ -93,7 +93,8 @@ pinned to,
   | Format | Differs from the one after it |
   |--------|-------------------------------|
   | 1      | No `disk` role (FR-016a): each `back-up` and `replace` rule names its own backup, and no job must image whole disks. The classes `read` and `back-up` exist and mean `never-write`. A new partition has no `at_least`, a layout's partitions have no sizes (FR-014a), and device data is only named (FR-018). |
-  | 2      | This spec. |
+  | 2      | No `[[supplied_files]]` (FR-018b): a mode never needs a file from the person, and the emergency mode's boot ROM facts are not fact keys. |
+  | 3      | This spec. |
 - **FR-004**: The format, vocabularies included, is also published as a machine-readable
   schema for each `format`, so editors and the device repositories' own checks validate a
   description completely without the installer. The schema names every key of the format;
@@ -156,7 +157,9 @@ pinned to,
   installer running on it. Each mode has an `id`, a `kind` (the boot loader's protocol, the
   stock system's, the device's emergency mode, a GlassineOS one, or `local`), how it shows
   on USB, and what it can do: `identify`, `read` (partitions or files), `write`, and the
-  modes it can restart into.
+  modes it can restart into. A mode kind is a route: one backend per kind, so a device on
+  a known kind needs a description only. A mode that runs a program the person supplies
+  names it (`needs`, an id from FR-018b).
 - **FR-011**: Where a mode's protocol departs from its standard, the mode says how, as data
   its backend understands (for example, that every transfer must have one length, and which
   length). A departure that must be known before the device is recognised names the first
@@ -245,6 +248,15 @@ pinned to,
   device itself ([0008](https://docs.glassine.org/decisions/0008-bring-your-own-stock-kernel/)):
   what each is, where on the device it is read, and what uses it. They stay on the person's
   computer for the installation only (001 FR-011).
+- **FR-018b**: `[[supplied_files]]` lists the files a mode needs that the person supplies
+  and GlassineOS can't (such as a programmer the chip maker signed for an emergency mode,
+  [004](../004-emergency-mode/spec.md)). Each has an `id`, what it is (a text key, FR-026),
+  the name it is usually found under (shown for the person to copy), the values the mode's
+  backend checks it against (for an emergency mode: the chip and signing key its boot ROM
+  reports, which are also fact keys of that mode kind, FR-006), and `known`: the SHA-256 of
+  each file seen working on this device, with whether that was verified (FR-023a). It
+  names no place to get a file. The file stays on the person's computer for the session
+  only and is never uploaded.
 
 ### What an installation does
 
@@ -300,7 +312,8 @@ pinned to,
 ### Texts
 
 - **FR-026**: `[texts]` holds what the installer shows for this device: the name, how to
-  reach each mode by hand, what each choice means here. Plain text, no markup, English
+  reach each mode by hand, what each choice means here, and for each supplied file what it
+  is, why GlassineOS can't supply it and how to recognise it. Plain text, no markup, English
   first; keys the flow asks for are listed by the flow.
 
 ### Pinned copies
@@ -327,18 +340,21 @@ pinned to,
 
 - Commands, scripts or code of any kind. The device's runtime code (services, bring-up of
   its radios and sound) is in its package.
-- Vendor files, or hashes or excerpts of them; values unique to one unit (serial numbers,
+- Vendor files, or excerpts of them, or hashes of them other than a supplied file's
+  `known` checksums (FR-018b); links or searches for any vendor file; values unique to one unit (serial numbers,
   addresses, calibration); anything learned from one person's device.
 - Markup in texts.
 
 ## Key entities
 
-- **Description**: one kind of machine, in format 2.
+- **Description**: one kind of machine, in format 3.
 - **Signal**: one test of one fact, required or supporting, verified or not.
 - **State**: an install state and the conditions that tell it, each in the mode it is
   observable in.
 - **Mode**: a way the installer talks to the device, with its departures from the standard.
 - **Transition**: how the device gets from one mode to another, and what that needs.
+- **Supplied file**: a file a mode needs from the person, what it must match, and the
+  checksums of files known to work.
 - **Partition rule**: a selection and the most any job may do; unselected means never
   written. The rule for the role `disk` says how the whole-disk backup is read.
 - **Step**: a kind from the backend, its parameters, its `done` condition and its escape.
@@ -350,7 +366,7 @@ pinned to,
 
 ## Success criteria
 
-- **SC-001**: The descriptions of the Note Air and of a UEFI PC are both written in format 2
+- **SC-001**: The descriptions of the Note Air and of a UEFI PC are both written in format 3
   and accepted, and the same installer recognises and plans for both with no device named
   in its code.
 - **SC-002**: For every rule of FR-002 and FR-025 there is a description that breaks it, and
