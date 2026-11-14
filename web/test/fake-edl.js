@@ -16,7 +16,10 @@
 // Options: refuse (the boot ROM ends the upload with an error), hangAtRead (the nth read of the
 // user area gets no answer: the run is stuck mid-image, as when a tab is killed), probeHangs
 // (getstorageinfo answers the user area's numbers for a boot area, so the core searches its size,
-// and a read past a boot area's end gets no answer instead of a NAK), bootSectors.
+// and a read past a boot area's end gets no answer instead of a NAK), pauseAtRead (the nth read
+// of the user area is answered only at window.__fakeEdl.release(), so a test can act mid-run),
+// bootSectors. A bulk IN with nothing to read waits until there is (as a real one does), so a
+// transfer the page keeps after its own timeout gets the next answer.
 //
 // installFakeDir: window.showDirectoryPicker resolves with a folder that behaves as Chromium's
 // File System Access does where the test can tell: createWritable() writes to a swap and the bytes
@@ -28,7 +31,7 @@
 // its body.
 'use strict';
 
-function installFakeEdl({ refuse = false, hangAtRead = 0, probeHangs = false, bootSectors = 64, programmerSize, pkHash }) {
+function installFakeEdl({ refuse = false, hangAtRead = 0, pauseAtRead = 0, probeHangs = false, bootSectors = 64, programmerSize, pkHash }) {
   const SECTOR = 512, SECTORS = 16384, ID = 0x0d;
   const enc = new TextEncoder(), dec = new TextDecoder();
   const le = (v, at, x, n) => { for (let i = 0; i < n; i++) { v[at + i] = Number(BigInt.asUintN(64, BigInt(x)) >> BigInt(8 * i) & 0xffn); } };
@@ -79,17 +82,23 @@ function installFakeEdl({ refuse = false, hangAtRead = 0, probeHangs = false, bo
     pkt(1, [2, 1, 0x400, 0, 0, 0, 0, 0, 0, 0]),
     pkt(0x03, [ID, 0, programmerSize]),
   ];
-  const log = { outs: [], uploaded: null, hung: false, gone: false, calls: [] };
+  const log = { outs: [], uploaded: null, hung: false, gone: false, calls: [], paused: false, release: () => {} };
   window.__fakeEdl = log;
   let up = [], upLen = 0, done = false, reads = 0;
+  // Bulk INs waiting for bytes: { length, resolve, reject }, served in order as bytes come.
   const waiting = [];
+  const take = (length) => { let r = out.shift(); if (r.length > length) { out.unshift(r.subarray(length)); r = r.subarray(0, length); } return { status: 'ok', data: view(r) }; };
+  const pump = () => { while (waiting.length && out.length && !log.gone) { const w = waiting.shift(); w.resolve(take(w.length)); } };
+  const queued = out.push.bind(out);
+  out.push = (...xs) => { const n = queued(...xs); pump(); return n; };
+  const cancel = (e) => { for (const w of waiting.splice(0)) w.reject(e); };
   const doc = (body) => enc.encode(`<?xml version="1.0" encoding="UTF-8" ?>\n<data>\n${body}\n</data>`);
   const logDoc = (v) => doc(`<log value="${v}" />`);
   let device = null;
   const unplug = () => {
     if (log.gone) return;
     log.gone = true;
-    for (const f of waiting.splice(0)) f(new DOMException('The device was disconnected.', 'NotFoundError'));
+    cancel(new DOMException('The device was disconnected.', 'NotFoundError'));
     const ev = { type: 'disconnect', device };
     for (const f of window.__fakeUsbDisconnect || []) f(ev);
   };
@@ -134,7 +143,9 @@ function installFakeEdl({ refuse = false, hangAtRead = 0, probeHangs = false, bo
       if (probeHangs && p > 0 && area && start + n > area.length / SECTOR) { log.hung = true; log.hungAt = Date.now(); return; }
       if (!area || start + n > area.length / SECTOR) { out.push(logDoc('ERROR: sectors out of range'), doc('<response value="NAK" />')); return; }
       if (p === 0 && ++reads === hangAtRead) { log.hung = true; log.hungAt = Date.now(); return; }
-      out.push(doc('<response value="ACK" rawmode="true" />'), area.slice(start * SECTOR, (start + n) * SECTOR), doc('<response value="ACK" rawmode="false" />'));
+      const answer = () => out.push(doc('<response value="ACK" rawmode="true" />'), area.slice(start * SECTOR, (start + n) * SECTOR), doc('<response value="ACK" rawmode="false" />'));
+      if (p === 0 && reads === pauseAtRead) { log.paused = true; log.release = () => { log.paused = false; log.release = () => {}; answer(); }; return; }
+      answer();
     } else if (cmd === 'power') {
       out.push(doc('<response value="ACK" />'));
       setTimeout(unplug, 300);
@@ -164,7 +175,7 @@ function installFakeEdl({ refuse = false, hangAtRead = 0, probeHangs = false, bo
     async claimInterface() { called('claimInterface'); iface.claimed = true; },
     async releaseInterface() {
       called('releaseInterface');
-      for (const f of waiting.splice(0)) f(new DOMException('The transfer was cancelled.', 'AbortError'));
+      cancel(new DOMException('The transfer was cancelled.', 'AbortError'));
       if (log.gone) return gone();
       iface.claimed = false;
     },
@@ -189,10 +200,8 @@ function installFakeEdl({ refuse = false, hangAtRead = 0, probeHangs = false, bo
     },
     async transferIn(n, length) {
       if (log.gone) return gone();
-      let r = out.shift();
-      if (!r) return new Promise((_, fail) => waiting.push(fail));
-      if (r.length > length) { out.unshift(r.subarray(length)); r = r.subarray(0, length); }
-      return { status: 'ok', data: view(r) };
+      if (!out.length || waiting.length) return new Promise((resolve, reject) => waiting.push({ length, resolve, reject }));
+      return take(length);
     },
   };
   window.__fakeEdlDevice = device;

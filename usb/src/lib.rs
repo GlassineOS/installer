@@ -171,6 +171,13 @@ pub struct UsbTransport {
     /// [`Transport::set_short_wait`]'s bound, while set (native only).
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     short: Option<Duration>,
+    /// In the browser: a bulk IN that timed out stays submitted and the next
+    /// read waits for it, instead of the transport closing
+    /// ([`UsbTransport::keep_after_timeout`]).
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    keep: bool,
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    in_pending: bool,
 }
 
 fn endpoints(intf: Interface, o: u8, i: u8) -> Result<UsbTransport, OpenError> {
@@ -180,6 +187,8 @@ fn endpoints(intf: Interface, o: u8, i: u8) -> Result<UsbTransport, OpenError> {
         open: Some(Open { out, inp, _intf: intf }),
         timeout: TRANSFER_TIMEOUT,
         short: None,
+        keep: false,
+        in_pending: false,
     })
 }
 
@@ -422,6 +431,16 @@ mod web {
             }
         }
 
+        /// A bulk IN that runs out of time no longer closes the transport:
+        /// WebUSB can't cancel it, so it stays submitted and the next read
+        /// takes what it brings. A protocol that waits out a pause (Firehose's
+        /// listening, `configure` resent, the size search's short wait) needs
+        /// that. A send that runs out of time still closes it. The emergency
+        /// read's route only; the fastboot route keeps closing.
+        pub fn keep_after_timeout(&mut self) {
+            self.keep = true;
+        }
+
         /// After a timeout: WebUSB has no cancel, so release the interface
         /// (which aborts what is pending) and never use it again.
         fn kill(&mut self, what: &str) -> FbError {
@@ -448,13 +467,20 @@ mod web {
         async fn recv_max(&mut self, max: usize) -> Result<Vec<u8>, FbError> {
             let timeout = self.timeout;
             let o = self.open.as_mut().ok_or_else(UsbTransport::dead)?;
-            let mps = o.inp.max_packet_size().max(1);
-            let buf = o.inp.allocate(max.max(1).div_ceil(mps) * mps);
-            o.inp.submit(buf);
+            if !self.in_pending {
+                let mps = o.inp.max_packet_size().max(1);
+                let buf = o.inp.allocate(max.max(1).div_ceil(mps) * mps);
+                o.inp.submit(buf);
+            }
             match within(o.inp.next_complete(), timeout).await {
                 Some(c) => {
+                    self.in_pending = false;
                     completed(c.status, "waiting for an answer")?;
                     Ok(c.buffer[..c.actual_len].to_vec())
+                }
+                None if self.keep => {
+                    self.in_pending = true;
+                    Err(FbError::Timeout("waiting for an answer".into()))
                 }
                 None => Err(self.kill("waiting for an answer")),
             }

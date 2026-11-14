@@ -15,7 +15,7 @@
 // IndexedDB) or to a download: an image is as big as the device's storage.
 //
 // The core drives it (wasm emergency_read, its ImageStore): every step returns a promise but
-// write, which queues the bytes into a gzip stream to the file and throws a failure of an
+// write, stop and stopped; write queues the bytes into a gzip stream to the file and throws a failure of an
 // earlier write. ready() resolves once the queued bytes are under QUEUE_MAX: the core waits for
 // it before each transfer from the device, so a slow disk slows the read instead of filling
 // memory.
@@ -88,6 +88,7 @@ export function folderStore(folder, on = () => {}) {
   let back = null; // the image being read back: { name, reader, rest, done }
   let pending = 0;
   let waiters = [];
+  let stopped = false;
   const wake = () => {
     if (pending > QUEUE_MAX && !(cur && cur.error)) return;
     const w = waiters;
@@ -213,6 +214,11 @@ export function folderStore(folder, on = () => {}) {
       await h.move(MANIFEST);
       on({ kind: 'manifest' });
     },
+
+    // The person stopped the run: the core asks the device for nothing more but its restart,
+    // marks the image being read incomplete and stores the manifest.
+    stop() { if (!stopped) { stopped = true; on({ kind: 'note', line: 'stopped by you: the device is asked to restart' }); } },
+    stopped() { return stopped; },
 
     progress(name, done, size) { on({ kind: 'saved', name, done, size }); },
     note(line) { on({ kind: 'note', line }); },

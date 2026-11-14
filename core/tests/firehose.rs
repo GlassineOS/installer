@@ -976,7 +976,7 @@ fn a_programmer_that_listens_only_after_its_logs() {
     };
     let run = go_opts(f, Scope::GptOnly, Mem::default(), no);
     let e = run.r.unwrap_err();
-    assert!(matches!(e.error, EmergencyError::NotWorking(_)), "{:?}", e.error);
+    assert!(matches!(e.error, EmergencyError::NoAnswer(_)), "{:?}", e.error);
     assert_eq!(commands(&run.dev), ["configure"]);
 }
 
@@ -1004,7 +1004,7 @@ fn a_silent_programmer_is_not_working() {
         Scope::GptOnly,
     );
     let f = run.r.unwrap_err();
-    assert!(matches!(f.error, EmergencyError::NotWorking(_)), "{:?}", f.error);
+    assert!(matches!(f.error, EmergencyError::NoAnswer(_)), "{:?}", f.error);
     assert!(f.error.to_string().contains("isn't working on this device"));
     assert_eq!(f.restart, Restart::NotPossible);
     // configure every short wait for about 5 s, nothing read, nothing more.
@@ -1024,7 +1024,7 @@ fn a_silent_programmer_is_not_working() {
             ..OPTS
         },
     );
-    assert!(matches!(run.r.unwrap_err().error, EmergencyError::NotWorking(_)));
+    assert!(matches!(run.r.unwrap_err().error, EmergencyError::NoAnswer(_)));
     assert_eq!(commands(&run.dev), ["configure"]);
     assert!(run.dev.waits.is_empty());
 }

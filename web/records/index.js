@@ -23,6 +23,8 @@
 //                             -> the backup through the emergency mode (spec 004 FR-010): the
 //                                folder it goes to, then the device's chooser and the core's
 //                                read, stored by lib/store.js
+//   stopBackup(machine)       -> stops the running backup at its next request to the device: the
+//                                image being read is marked incomplete, the device restarted
 //   backupRun(machine) / onBackupRun(fn)
 //                             -> that run: { state, folder, images, record, error, notes }, and
 //                                fn called whenever it changes
@@ -335,7 +337,7 @@ export const refuseSupplied = (machine, file, sha256) => {
 
 // The run of this page (one at a time), for the machine it was started for:
 //   state   idle (a folder is chosen) | running | done | refused | other-device | nothing-sent |
-//           failed |
+//           failed | stopped (by the person) |
 //           not-started (nothing was sent: the chooser was closed, the device's interface busy,
 //           the file not sendable; error says why)
 //   folder  the name of the folder the person picked, then of the new folder in it
@@ -353,7 +355,8 @@ export const canStoreBackup = () => !FIXTURES && storeSupported();
 
 export function backupRun(machine) {
   if (!run || run.machine !== machine) return null;
-  const { parent: _p, ...v } = run;
+  const { parent: _p, store: st, ...v } = run;
+  v.stopping = !!(st && st.stopped());
   return { ...v, images: run.images.map((i) => ({ ...i })), notes: run.notes.slice() };
 }
 
@@ -373,6 +376,18 @@ export async function chooseBackupFolder(machine) {
   run = { machine, state: 'idle', parent, folder: parent.name, images: [], record: null, error: null, notes: [] };
   runChanged();
   return backupRun(machine);
+}
+
+export function stopBackup(machine) {
+  if (run && run.machine === machine && run.state === 'running' && run.store) run.store.stop();
+  runChanged();
+}
+
+// Leaving the page while a backup runs ends it without a restart: the browser asks first.
+if (!FIXTURES && typeof addEventListener === 'function') {
+  addEventListener('beforeunload', (ev) => {
+    if (run && run.state === 'running') { ev.preventDefault(); ev.returnValue = ''; }
+  });
 }
 
 function onStore(r, ev) {
@@ -407,6 +422,7 @@ export async function startBackup(machine, device, file, scope = 'whole-disk') {
     runChanged();
     return dir;
   }, (ev) => onStore(r, ev));
+  r.store = store;
   try {
     r.record = JSON.parse(await m.emergency_read(device, file, got.bytes, !!got.trusted, scope, store));
     r.state = r.record.outcome;
@@ -416,6 +432,7 @@ export async function startBackup(machine, device, file, scope = 'whole-disk') {
     r.state = 'not-started';
     r.error = failure(e);
   }
+  r.store = null;
   runChanged();
   return backupRun(machine);
 }

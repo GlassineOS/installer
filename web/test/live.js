@@ -543,6 +543,44 @@ async function main() {
     await page.close();
   });
 
+  await test('Stop mid-image: the next request isn’t sent, the image is marked incomplete, the device restarted; leaving asks first', async () => {
+    const { page, problems } = await open({ vars: answers('noteair-stock-fastboot') }, { edl: edlOpts({ pauseAtRead: 2 }), dir: {} });
+    await toBackup(page);
+    const leave = () => page.evaluate(() => { const e = new Event('beforeunload', { cancelable: true }); window.dispatchEvent(e); return e.defaultPrevented; });
+    assert.strictEqual(await leave(), false, 'leaving asks before the backup runs');
+    await page.click('#start-backup');
+    await page.waitForFunction(() => window.__fakeEdl.paused, { timeout: 30000 });
+    assert.strictEqual(await leave(), true, 'leaving doesn’t ask while the backup runs');
+    await page.waitForSelector('#stop-backup', { timeout: 15000 });
+    const before = (await edlLog(page)).outs.length;
+    await page.click('#stop-backup');
+    await page.waitForFunction(() => document.querySelector('#stop-backup').disabled, { timeout: 15000 });
+    await page.evaluate(() => window.__fakeEdl.release());
+    await page.waitForSelector('#stopped', { timeout: 30000 });
+    const log = await edlLog(page);
+    const after = readsOnly({ outs: log.outs.slice(before) });
+    assert.deepStrictEqual(after.map((o) => o.xml.cmd), ['power'], 'something but the restart was sent after Stop');
+    const t = await tree(page);
+    const names = files(t);
+    const folder = names[0].split('/')[0];
+    assert.deepStrictEqual(names.map((n) => n.slice(folder.length + 1)), ['emmc-user.img.gz.incomplete', 'manifest.json']);
+    for (const n of names) assert.strictEqual(t[n].open, 0, `${n} is still open`);
+    const manifest = JSON.parse(Buffer.from(await page.evaluate((p) => window.__fakeDir.bytes(p), `${folder}/manifest.json`), 'base64').toString());
+    assert.deepStrictEqual(manifest.disks, []);
+    assert.deepStrictEqual(manifest.incomplete.map((i) => [i.name, i.file]), [['emmc-user', 'emmc-user.img.gz.incomplete']]);
+    const run = await records(page, 'backupRun', 'live-1');
+    assert.deepStrictEqual([run.record.outcome, run.record.restart], ['stopped', 'done']);
+    assert.match(await text(page), /restarts into its own system by itself/);
+    // Stopping says nothing against the file: it stays chosen, unmarked.
+    assert.ok((await records(page, 'supplied', 'live-1', 'emergency-programmer')).bytes);
+    assert.ok(!(await records(page, 'deviceRefused', 'live-1', 'emergency-programmer', sha(PROGRAMMER))));
+    assert.ok(await page.$('#again'), 'no way to back up again');
+    assert.strictEqual(await leave(), false, 'leaving still asks after the backup ended');
+    readOnly(await usbLog(page));
+    assert.deepStrictEqual(problems, []);
+    await page.close();
+  });
+
   await test('a programmer that hangs on a read past a boot area’s end: the 5 s probe wait ends the run, the user area kept', async () => {
     const { page, problems } = await open({ vars: answers('noteair-stock-fastboot') }, { edl: edlOpts({ probeHangs: true }), dir: {} });
     await toBackup(page);

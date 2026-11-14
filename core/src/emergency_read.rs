@@ -238,8 +238,14 @@ pub enum EmergencyError {
     ProbeHangs { image: String, physical: u32, lba: u64 },
     /// The boot ROM refused the programmer, or didn't start it.
     Refused(String),
-    /// The programmer didn't answer its first request (FR-006).
+    /// The programmer refused its first request (FR-006): a NAK, or it
+    /// wants authentication.
     NotWorking(String),
+    /// The boot ROM stopped answering during the upload, or the programmer
+    /// didn't answer its first request in time (FR-006: it doesn't count as
+    /// working). No verdict on the file: a cable or a slow start looks the
+    /// same.
+    NoAnswer(String),
     /// The programmer answered, then something failed.
     Firehose(FirehoseError),
     /// The storage isn't what this route reads (block size, no GPT, ...).
@@ -267,6 +273,7 @@ impl fmt::Display for EmergencyError {
             ),
             EmergencyError::Refused(w) => write!(f, "the programmer isn't working on this device: {w}"),
             EmergencyError::NotWorking(w) => write!(f, "the programmer isn't working on this device: {w}"),
+            EmergencyError::NoAnswer(w) => write!(f, "the programmer isn't working on this device, or the connection was lost: {w}"),
             EmergencyError::Firehose(e) => write!(f, "{e}"),
             EmergencyError::Storage(w) => write!(f, "the storage: {w}"),
             EmergencyError::Partition(w) => write!(f, "{w}"),
@@ -603,28 +610,33 @@ async fn run_for<T: Transport, E: AsyncImageEdge>(
     edge.note(&format!("sending the programmer ({} bytes)", programmer.len()));
     let refused = match s.upload(programmer).await {
         Ok(up) if up.done == DoneStatus::Complete => None,
-        Ok(up) => Some(format!("the boot ROM ended the transfer without starting it ({:?})", up.done)),
-        Err(e) => Some(e.to_string()),
+        Ok(up) => Some(EmergencyError::Refused(format!(
+            "the boot ROM ended the transfer without starting it ({:?})",
+            up.done
+        ))),
+        // Silence or a lost connection is no answer about the file.
+        Err(e @ SaharaError::Transport(_)) => Some(EmergencyError::NoAnswer(format!("the boot ROM stopped answering during the upload: {e}"))),
+        Err(e) => Some(EmergencyError::Refused(e.to_string())),
     };
-    if let Some(why) = refused {
+    if let Some(error) = refused {
         let restart = match s.reset().await {
             Ok(()) => Restart::Done,
             Err(e) => Restart::Failed(e.to_string()),
         };
-        return Err(fail(EmergencyError::Refused(why), restart));
+        return Err(fail(error, restart));
     }
     let mut fh = Firehose::new(s.into_transport());
     if opts.listen_first {
         match fh.listen().await {
             Ok(n) => edge.note(&format!("the programmer started and logged {n} line(s)")),
-            Err(e) => return Err(fail(EmergencyError::NotWorking(e.to_string()), Restart::NotPossible)),
+            Err(e) => return Err(fail(EmergencyError::NoAnswer(e.to_string()), Restart::NotPossible)),
         }
     }
     let c = match fh.configure(opts.resend_configure).await {
         Ok(c) => c.clone(),
         Err(FirehoseError::NoAnswer) => {
             return Err(fail(
-                EmergencyError::NotWorking("the boot ROM took it, but it didn't answer its first request".into()),
+                EmergencyError::NoAnswer("the boot ROM took it, but it didn't answer its first request".into()),
                 Restart::NotPossible,
             ));
         }
@@ -636,7 +648,7 @@ async fn run_for<T: Transport, E: AsyncImageEdge>(
             };
             return Err(fail(EmergencyError::NotWorking(e.to_string()), restart));
         }
-        Err(e) => return Err(fail(EmergencyError::NotWorking(e.to_string()), Restart::NotPossible)),
+        Err(e) => return Err(fail(EmergencyError::NoAnswer(e.to_string()), Restart::NotPossible)),
     };
     edge.note(&format!(
         "the programmer answers{}{}",

@@ -137,7 +137,7 @@ export function LiveBackup({ s, run }) {
   const cur = r && r.images.length ? r.images[r.images.length - 1] : null;
   const st = rs === 'running' ? (cur && cur.phase === 'checking' ? 'verifying' : 'saving')
     : rs === 'done' ? 'verified'
-    : ['refused', 'failed', 'nothing-sent', 'other-device'].includes(rs) ? rs
+    : ['refused', 'failed', 'nothing-sent', 'other-device', 'stopped'].includes(rs) ? rs
     : 'ready';
   const rec = r && r.record;
   const restarted = rec && rec.restart === 'done';
@@ -150,6 +150,7 @@ export function LiveBackup({ s, run }) {
   };
   const chooseFolder = act(() => s.chooseBackupFolder(s.machine));
   const start = act(() => s.startBackup(s.machine, s.desc.id, need.id));
+  const stop = () => s.stopBackup(s.machine);
   const T = {
     ready: ['Back up · step 1 of the plan', `Backing up ${the}`, `The installer reads each disk the plan writes to, whole, through the ${need.short} you chose, and stores it in a folder on this computer. Nothing on ${the} is written.`],
     saving: ['Back up · step 1 of the plan', `Backing up ${the}`, `The installer reads each disk twice and stores it. Nothing on ${the} is written.`],
@@ -159,6 +160,7 @@ export function LiveBackup({ s, run }) {
     refused: ['Back up · stopped, nothing was read', `The ${need.short} didn’t work`, 'The installation didn’t start.'],
     'other-device': ['Back up · stopped, nothing was sent', `This isn’t ${the} as described`, 'The installation didn’t start.'],
     'nothing-sent': ['Back up · stopped, nothing was sent', `${cap(the)} wasn’t read`, 'The installation didn’t start.'],
+    stopped: ['Back up · stopped by you, nothing was written', 'You stopped the backup', 'The installation didn’t start.'],
   }[st];
   // Only a plan Confirm would let start (001 FR-006); the page keeps no record of the
   // confirmation itself, so an address can reach this screen without it.
@@ -198,7 +200,12 @@ export function LiveBackup({ s, run }) {
     </${Admonition}>` : null}
     ${st === 'failed' ? html`<${Admonition} kind="warning" seal="G" label="The installation didn’t start" title="The backup stopped before it was complete" id="failed-run">
       <p>${rec.message}.</p>
+      ${rec.error === 'no-answer' ? html`<p>The ${need.short} is the one known to work on ${the}, so it stays chosen: a missing answer says nothing against it. Check the cable and that ${the} is in its emergency mode.</p>` : null}
       <p>Images that read back the same are kept; any other is marked incomplete (its name ends in .incomplete) and is never used as a backup.</p>
+      <p><strong>Way out:</strong> ${restartWords} Nothing on ${the} was written. Back up again, or go back to the plan.</p>
+    </${Admonition}>` : null}
+    ${st === 'stopped' ? html`<${Admonition} kind="warning" seal="G" label="The installation didn’t start" title="The backup stopped where you stopped it" id="stopped">
+      <p>Images that read back the same are kept; the one being read is marked incomplete (its name ends in .incomplete) and is never used as a backup.</p>
       <p><strong>Way out:</strong> ${restartWords} Nothing on ${the} was written. Back up again, or go back to the plan.</p>
     </${Admonition}>` : null}
     ${st === 'other-device' ? html`<${Admonition} kind="warning" seal="G" label="Nothing was sent" title=${`The device connected isn’t ${the} as described`} id="other-device">
@@ -218,6 +225,7 @@ export function LiveBackup({ s, run }) {
     </${Admonition}>` : null}
     ${r && r.state === 'not-started' ? html`<${Admonition} kind="warning" seal="G" label="Not started" title="The backup didn’t start" id="not-started">
       <p>${r.error.kind === 'no-device' ? 'No device was chosen.' : r.error.message}</p>
+      ${['permission', 'busy'].includes(r.error.kind) ? html`<p id="host-access">${r.error.kind === 'busy' ? 'Another program on this computer holds the device; close it. ' : ''}On Linux the browser needs access to the emergency mode device (USB 05c6:9008): a udev rule for it, as for the fastboot route. On Windows the device needs the WinUSB driver (install it with Zadig).</p>` : null}
       <p><strong>Way out:</strong> nothing was sent. If ${the} is in its emergency mode, ${leave.charAt(0).toLowerCase() + leave.slice(1)} Or choose it again.</p>
     </${Admonition}>` : null}
     ${error ? html`<${Admonition} kind="warning" seal="G" label="Not started" title="That didn’t work" id="backup-error">
@@ -259,9 +267,9 @@ export function LiveBackup({ s, run }) {
         : st === 'verified' ? 'The installation starts with step 2.'
         : st === 'refused' ? `Nothing, until ${articleOf(need.short)} ${need.short} works on ${the}.`
         : 'Nothing, until there is a backup that reads back.'}
-      out=${running ? 'Keep this page open. Closing it stops the backup; what is stored so far is never taken for a backup.' : 'Stop here. ' + unchanged}
+      out=${running ? 'Stop ends the backup at its next read and restarts the device. Keep this page open: closing it stops the backup without the restart; what is stored so far is never taken for a backup.' : 'Stop here. ' + unchanged}
       buttons=${st === 'ready' ? [{ label: 'Choose the device and back up', onClick: start, primary: true, id: 'start-backup', disabled: busy || !r || !r.folder || !fileOk }, { label: 'Back to the file', href: s.link('supply') }, { label: 'Stop here', href: s.link('start'), push: true }]
-        : running ? []
+        : running ? [{ label: r.stopping ? 'Stopping…' : 'Stop', onClick: stop, id: 'stop-backup', disabled: !!r.stopping }]
         : st === 'verified' ? [{ label: 'Continue', href: s.link('install', { state: p.steps.some((x) => x.point_of_no_return) ? 'ponr' : 'midway' }), primary: true }]
         : st === 'refused' ? [{ label: 'Choose another file', href: s.link('supply'), primary: true, id: 'another-file' }, { label: 'Back to the plan', href: s.link('plan') }, { label: 'Stop here', href: s.link('start'), push: true }]
         : [{ label: 'Back up again', onClick: start, primary: true, id: 'again', disabled: busy || !fileOk }, { label: 'Back to the plan', href: s.link('plan') }, { label: 'Stop here', href: s.link('start'), push: true }]} />

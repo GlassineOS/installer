@@ -143,19 +143,20 @@ pub fn supplied_record(device: &str, file: &str, bytes: &[u8], reported: &str) -
 /// here as the command line does before it opens a device (004 FR-004): a
 /// known file goes on; one that fits but isn't known only with
 /// `accept_unknown` (the person ticked the warning); any other never does.
-/// The page's own check isn't trusted. Gives the description, for the
+/// The page's own check isn't trusted. Gives whether the file is a known
+/// one (its checksum is in the description's `known`) and the description, for the
 /// comparison with what the device reports before the upload
 /// ([`emergency_read::run_checked`]). A refusal is an error record
 /// (`not-sendable`, or `input` for a question the description can't answer).
-pub fn emergency_programmer(device: &str, file: &str, bytes: &[u8], accept_unknown: bool) -> Result<Description, String> {
+pub fn emergency_programmer(device: &str, file: &str, bytes: &[u8], accept_unknown: bool) -> Result<(Description, bool), String> {
     let d = descriptions()
         .into_iter()
         .find(|d| d.id == device)
         .ok_or_else(|| error("input", format!("no description {device:?}")))?;
     let c = glassine_installer::supplied::check(&d, file, bytes, None).map_err(|e| error("input", e))?;
     match c.verdict.sendable() {
-        Some(false) => Ok(d),
-        Some(true) if accept_unknown => Ok(d),
+        Some(false) => Ok((d, true)),
+        Some(true) if accept_unknown => Ok((d, false)),
         Some(true) => Err(error(
             "not-sendable",
             "the file isn't a known one and its warning wasn't confirmed; nothing was sent",
@@ -191,18 +192,26 @@ fn restart_record(r: &Restart) -> (&'static str, Option<String>) {
 }
 
 /// The record of an emergency read (`emergency_read_format` 1). `outcome`:
-/// `done`; `refused` (the boot ROM didn't take the file, or it didn't answer
-/// its first request: it doesn't work on this device, 004 FR-006, and
-/// nothing was read); `other-device` (the boot ROM reports another chip or
-/// key than the description names: nothing was sent; `other_device` holds
-/// `reported`, `expected` and `differs`); `nothing-sent` (the boot ROM didn't
-/// answer, reports a chip this installer doesn't know, or the file isn't one
-/// to send to it); `failed` (anything after the
-/// programmer answered: the images that are complete and those that aren't
-/// are in `manifest`). `restart`: `done`, `failed` (sent, not confirmed;
-/// `restart_why`) or `by-hand` (nothing answers that could restart it).
-/// No serial or other value unique to the unit.
-pub fn emergency_record(r: &Result<Done, Failure>) -> String {
+/// - `done`;
+/// - `refused`: the file doesn't work on this device (004 FR-006) and is
+///   never sent again: the boot ROM refused it, the programmer refused its
+///   first request, or (a file that isn't a known one) didn't answer it.
+///   Nothing was read;
+/// - `failed`: anything else that stopped the run, a known file that got no
+///   answer included (a timeout says nothing about a file that has worked);
+///   the images that are complete and those that aren't are in `manifest`;
+/// - `stopped`: the person stopped it (`stopped`), at the next transfer;
+/// - `other-device`: the boot ROM reports another chip or key than the
+///   description names: nothing was sent; `other_device` holds `reported`,
+///   `expected` and `differs`;
+/// - `nothing-sent`: the boot ROM didn't answer, reports a chip this
+///   installer doesn't know, or the file isn't one to send to it.
+///
+/// `known`: the file's checksum is one the description knows. `restart`:
+/// `done`, `failed` (sent, not confirmed; `restart_why`) or `by-hand`
+/// (nothing answers that could restart it). No serial or other value unique
+/// to the unit.
+pub fn emergency_record(r: &Result<Done, Failure>, known: bool, stopped: bool) -> String {
     let manifest = |m: &Option<String>| m.as_deref().and_then(|t| serde_json::from_str::<Value>(t).ok());
     match r {
         Ok(d) => {
@@ -235,6 +244,9 @@ pub fn emergency_record(r: &Result<Done, Failure>) -> String {
                 _ => Value::Null,
             };
             let (outcome, kind) = match &f.error {
+                _ if stopped => ("stopped", "stopped"),
+                EmergencyError::NoAnswer(_) if known => ("failed", "no-answer"),
+                EmergencyError::NoAnswer(_) => ("refused", "no-answer"),
                 EmergencyError::NotSent(Unsendable::OtherDevice { .. }) => ("other-device", "other-device"),
                 EmergencyError::NotSent(Unsendable::File(_)) => ("nothing-sent", "file"),
                 EmergencyError::ProbeHangs { .. } => ("failed", "probe-hangs"),
@@ -331,6 +343,9 @@ mod web {
     /// and `note`. `ready()` resolves once the queued bytes are few enough
     /// to read on: the read waits for it before each transfer from the
     /// device, so a slow disk slows the read instead of filling memory.
+    /// `stopped()` says the person stopped the run: the next request to the
+    /// device fails, but `power reset`, so the route marks the image
+    /// incomplete, stores the manifest and restarts the device.
     #[wasm_bindgen]
     extern "C" {
         pub type ImageStore;
@@ -356,6 +371,8 @@ mod web {
         fn note(this: &ImageStore, line: &str);
         #[wasm_bindgen(method)]
         fn ready(this: &ImageStore) -> js_sys::Promise;
+        #[wasm_bindgen(method)]
+        fn stopped(this: &ImageStore) -> bool;
     }
 
     /// A JS failure in words.
@@ -440,6 +457,11 @@ mod web {
 
     impl Transport for Paced {
         async fn send(&mut self, data: &[u8]) -> Result<(), FbError> {
+            // Stopped: nothing more is asked of the device but its restart. A request is
+            // sent only between whole answers, so the session stays in step for it.
+            if self.store.stopped() && !is_power_reset(data) {
+                return Err(FbError::Usb("stopped by the person".into()));
+            }
             self.t()?.send(data).await
         }
         async fn recv(&mut self) -> Result<Vec<u8>, FbError> {
@@ -459,6 +481,11 @@ mod web {
                 t.set_timeout(wait.unwrap_or(EMERGENCY_TIMEOUT));
             }
         }
+    }
+
+    /// Whether a transfer is Firehose's `power` request (the restart).
+    fn is_power_reset(data: &[u8]) -> bool {
+        data.windows(6).any(|w| w == b"<power")
     }
 
     /// The bound on one transfer during an emergency read: the command
@@ -491,11 +518,12 @@ mod web {
         store: ImageStore,
     ) -> Result<String, JsValue> {
         let scope = super::emergency_scope(&scope).map_err(|e| JsValue::from_str(&e))?;
-        let d = super::emergency_programmer(&device, &file, &programmer, accept_unknown).map_err(|e| JsValue::from_str(&e))?;
+        let (d, known) = super::emergency_programmer(&device, &file, &programmer, accept_unknown).map_err(|e| JsValue::from_str(&e))?;
         let (mut t, _ids) = usb::request_kind(usb::Kind::Emergency)
             .await
             .map_err(|e| JsValue::from_str(&error(e.kind(), &e)))?;
         t.set_timeout(EMERGENCY_TIMEOUT);
+        t.keep_after_timeout();
         let store = Rc::new(store);
         let back = Rc::new(RefCell::new(None));
         let paced = Paced {
@@ -505,12 +533,20 @@ mod web {
         };
         let mut edge = WebEdge(store);
         let expected = emergency_read::Expected { description: &d, file: &file };
-        let r = emergency_read::run_checked(paced, &programmer, expected, &scope, emergency_read::Options::default(), &mut edge).await;
+        // As the command line and the device runs: the programmer's own log lines first, then
+        // configure, sent again while it isn't answered.
+        let opts = emergency_read::Options {
+            listen_first: true,
+            resend_configure: true,
+            ..emergency_read::Options::default()
+        };
+        let r = emergency_read::run_checked(paced, &programmer, expected, &scope, opts, &mut edge).await;
+        let stopped = edge.0.stopped();
         let left = back.borrow_mut().take();
         if let Some(t) = left {
             t.close().await;
         }
-        Ok(super::emergency_record(&r))
+        Ok(super::emergency_record(&r, known, stopped))
     }
 
     /// One inspected device and its fastboot session, still open. The Note
@@ -649,8 +685,8 @@ mod tests {
     #[test]
     fn the_emergency_read_checks_the_file_again() {
         let fits = supplied("fits-unknown");
-        assert!(emergency_programmer("onyx-noteair", "emergency-programmer", &fits, true).is_ok());
-        let kind = |r: Result<Description, String>| serde_json::from_str::<Value>(&r.map(|_| ()).unwrap_err()).unwrap()["error"].clone();
+        assert!(!emergency_programmer("onyx-noteair", "emergency-programmer", &fits, true).unwrap().1);
+        let kind = |r: Result<(Description, bool), String>| serde_json::from_str::<Value>(&r.map(|_| ()).unwrap_err()).unwrap()["error"].clone();
         assert_eq!(kind(emergency_programmer("onyx-noteair", "emergency-programmer", &fits, false)), "not-sendable");
         let junk = supplied("not-a-programmer");
         assert_eq!(kind(emergency_programmer("onyx-noteair", "emergency-programmer", &junk, true)), "not-sendable");
@@ -715,29 +751,49 @@ mod tests {
                 "probe-hangs",
             ),
         ] {
-            let r: Value = serde_json::from_str(&emergency_record(&Err(fail(e)))).unwrap();
+            let r: Value = serde_json::from_str(&emergency_record(&Err(fail(e)), false, false)).unwrap();
             assert_eq!(r["emergency_read_format"], 1);
             assert_eq!((r["outcome"].as_str().unwrap(), r["error"].as_str().unwrap()), (outcome, kind));
             assert_eq!(r["restart"], "by-hand");
             assert!(r["manifest"].is_null());
         }
+        // No answer: a known file fails (no refusal mark), an unknown one is refused; a run the
+        // person stopped is stopped whatever ended it.
+        let no = || Err(fail(EmergencyError::NoAnswer("x".into())));
+        let out = |r: String| -> (String, String) {
+            let v: Value = serde_json::from_str(&r).unwrap();
+            (v["outcome"].as_str().unwrap().into(), v["error"].as_str().unwrap().into())
+        };
+        assert_eq!(out(emergency_record(&no(), true, false)), ("failed".into(), "no-answer".into()));
+        assert_eq!(out(emergency_record(&no(), false, false)), ("refused".into(), "no-answer".into()));
+        assert_eq!(out(emergency_record(&no(), true, true)), ("stopped".into(), "stopped".into()));
+        let r: Value = serde_json::from_str(&emergency_record(&Err(fail(EmergencyError::Refused("x".into()))), true, false)).unwrap();
+        assert_eq!(r["outcome"], "refused", "a boot ROM's refusal marks even a known file");
         // Another device: nothing sent, what it reported beside what the description names.
         let m = |k: &str, v: &str| std::collections::BTreeMap::from([("chip".to_string(), "000cc0e1".to_string()), (k.to_string(), v.to_string())]);
-        let r: Value = serde_json::from_str(&emergency_record(&Err(fail(EmergencyError::NotSent(Unsendable::OtherDevice {
-            reported: m("pk_hash", "aa"),
-            expected: m("pk_hash", "bb"),
-            differs: vec!["pk_hash".into()],
-        })))))
+        let r: Value = serde_json::from_str(&emergency_record(
+            &Err(fail(EmergencyError::NotSent(Unsendable::OtherDevice {
+                reported: m("pk_hash", "aa"),
+                expected: m("pk_hash", "bb"),
+                differs: vec!["pk_hash".into()],
+            }))),
+            false,
+            false,
+        ))
         .unwrap();
         assert_eq!((r["outcome"].as_str(), r["error"].as_str()), (Some("other-device"), Some("other-device")));
         assert_eq!(r["other_device"]["reported"]["pk_hash"], "aa");
         assert_eq!(r["other_device"]["expected"]["pk_hash"], "bb");
         assert_eq!(r["other_device"]["differs"], json!(["pk_hash"]));
-        let r: Value = serde_json::from_str(&emergency_record(&Err(Failure {
-            error: EmergencyError::Edge("disk full".into()),
-            restart: Restart::Failed("no answer".into()),
-            manifest: Some("{\"manifest_format\": 1}".into()),
-        })))
+        let r: Value = serde_json::from_str(&emergency_record(
+            &Err(Failure {
+                error: EmergencyError::Edge("disk full".into()),
+                restart: Restart::Failed("no answer".into()),
+                manifest: Some("{\"manifest_format\": 1}".into()),
+            }),
+            false,
+            false,
+        ))
         .unwrap();
         assert_eq!((r["restart"].as_str(), r["restart_why"].as_str()), (Some("failed"), Some("no answer")));
         assert_eq!(r["manifest"]["manifest_format"], 1);
