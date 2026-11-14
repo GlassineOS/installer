@@ -4,6 +4,8 @@
 // match and the name it is usually found under, all from the device description. Then the core's
 // check of the picked file (records.suppliedCheck) and what may happen with it: a known file
 // goes on, one that isn't known only after the person ticks the warning, every other is refused.
+// A file the device refused in this page (Back up, state refused; 004 FR-006) is shown as refused
+// by the device, whatever its check said, until another file is picked.
 // state: nofile (the person has none). The file is read here, with the browser's File API, and
 // kept in this page's memory only: it is never uploaded, and no page names a place to get one.
 
@@ -41,7 +43,7 @@ export function Supply({ s, state }) {
     return html`<${Page} s=${s} step="plan" eyebrow="Plan · nothing is written yet" title="A file for the backup"><${NoRecord} s=${s} what="these choices" />
       <${Actions} next="Nothing, until there is a plan." out="Stop here. Nothing was changed." buttons=${[{ label: 'Back to the plan', href: s.link('plan') }]} /></${Page}>`;
   }
-  const { need, got, verdict: v } = suppliedState(s);
+  const { need, got, verdict: v, byDevice } = suppliedState(s);
   if (!need) {
     return html`<${Page} s=${s} step="plan" eyebrow="Plan · nothing is written yet" title="No file is needed" lead=${`The plan for ${s.m.the} needs no file from you${p.backup.choice === 'off' ? ': the backup is off' : ''}.`}>
       <${Actions} next="Confirm: you see the whole plan once more. Nothing is written before you confirm." out=${'Stop here. Nothing was changed; ' + unchanged}
@@ -49,7 +51,8 @@ export function Supply({ s, state }) {
     </${Page}>`;
   }
   const c = got && got.check;
-  const st = state === 'nofile' ? 'nofile' : v || 'guide';
+  // A file the device refused in this page (004 FR-006) is shown as that, whatever its check said.
+  const st = state === 'nofile' ? 'nofile' : byDevice ? 'device-refused' : v || 'guide';
   const T = need.texts, the = s.m.the;
   // "chip and signing key": the values the route checks, named as the route names them.
   const keys = list(need.matches.map((m) => m.name.toLowerCase())) || 'values';
@@ -62,7 +65,7 @@ export function Supply({ s, state }) {
     try {
       const bytes = new Uint8Array(await f.slice(0, MAX_BYTES + 1).arrayBuffer());
       const check = await s.suppliedCheck(s.desc.id, need.id, bytes);
-      const sendable = check.verdict === 'known' || check.verdict === 'fits-unknown';
+      const sendable = (check.verdict === 'known' || check.verdict === 'fits-unknown') && !s.deviceRefused(s.machine, need.id, check.sha256);
       // Only a file that may be sent stays in memory; of any other, only its check.
       s.keepSupplied(s.machine, need.id, { name: f.name, size: f.size, bytes: sendable ? bytes : null, check, trusted: false });
     } catch (e) {
@@ -99,12 +102,13 @@ export function Supply({ s, state }) {
       ? `The device reports another ${keys} than ${the}’s description names. Nothing is sent to it.`
       : `The installer sends only a file made for ${the}’s ${keys}.`],
     'known-bad': ['Plan · the file is checked', `This file doesn’t work on ${the}`, 'It is known not to work there, so it is never sent.'],
+    'device-refused': ['Plan · the file was refused', `${cap(the)} didn’t accept this file`, `When the backup started, ${the} didn’t accept this ${need.short}, or it didn’t answer. Nothing was read. Choose another file.`],
     'not-a-programmer': ['Plan · the file is checked', `This isn’t ${/^[aeiou]/.test(need.noun) ? 'an' : 'a'} ${need.noun}`, 'The installer doesn’t recognise it as one, so it is never sent.'],
     nofile: ['Plan · needed for the backup', `Without the ${need.noun}`, 'The backup can’t be made without it. You decide how to go on.'],
   }[st] || ['Plan · the file is checked', 'The file was checked', ''];
   const known = st === 'known', fits = st === 'fits-unknown';
   const refused = c && !known && !fits;
-  const verdictLine = known ? `Known: it has worked on ${the}` : fits ? 'Not a known file' : st === 'known-bad' ? `Known not to work on ${the}` : st === 'wrong-chip-or-key' ? 'Made for another device' : `Not ${/^[aeiou]/.test(need.noun) ? 'an' : 'a'} ${need.noun}`;
+  const verdictLine = known ? `Known: it has worked on ${the}` : st === 'device-refused' ? `Refused by ${the}` : fits ? 'Not a known file' : st === 'known-bad' ? `Known not to work on ${the}` : st === 'wrong-chip-or-key' ? 'Made for another device' : `Not ${/^[aeiou]/.test(need.noun) ? 'an' : 'a'} ${need.noun}`;
   const row = (k, made, want, rep) => [k.name, made, want, ...(rep === undefined ? [] : [rep])];
   const val = (m, k) => (m && m[k] ? shortValue(m[k]) : 'Not readable');
   const toConfirm = { label: known ? 'Continue to confirm' : 'Use this file', href: s.link('confirm'), primary: true, id: 'use' };
@@ -117,6 +121,7 @@ export function Supply({ s, state }) {
     : [{ label: 'Choose the file…', onClick: choose, primary: true, id: 'choose', disabled: busy }, { label: 'I don’t have it', href: s.link('supply', { state: 'nofile' }), id: 'nofile' }, back, stop];
   const next = known ? 'Confirm: you see the whole plan once more. The file is sent only when the backup starts.'
     : fits ? (got.trusted ? 'Confirm: you see the whole plan once more, with this file.' : 'Nothing, until you tick the box or choose another file.')
+    : st === 'device-refused' ? 'Nothing, until you choose another file.'
     : refused ? 'Nothing, until you choose a file that fits.'
     : st === 'nofile' ? 'Nothing: the installation can’t go on with a backup until you have the file.'
     : 'Choose the file: the installer checks it on this computer and shows the result.';
@@ -152,12 +157,12 @@ export function Supply({ s, state }) {
         <p class="ins-small ins-soft">The plan states what that means before you confirm it.</p></div>
     </section>` : html`<section class="ins-stack">
       <h2 class="ins-h2">The file</h2>
-      <div class=${known ? 'ins-card ins-card--strong' : c ? 'ins-card ins-card--warn' : 'ins-card'} id="file" data-verdict=${st}>
+      <div class=${known ? 'ins-card ins-card--strong' : c ? 'ins-card ins-card--warn' : 'ins-card'} id="file" data-verdict=${c ? v : st} data-sha256=${c ? c.sha256 : null} data-refused=${byDevice ? 'device' : null}>
         ${c ? html`
           <div class="ins-row"><span class=${'ins-yn ' + (known ? 'ins-yn--yes' : 'ins-yn--no')} aria-hidden="true">${known ? html`<${Tick} />` : html`<${Bang} />`}</span><span class="ins-card__title">${verdictLine}</span></div>
           <p class="ins-small" style="font-family: var(--font-mono); font-size: 13.5px; overflow-wrap: anywhere">${got.name}</p>
           <p class="ins-small ins-soft">${human(got.size)}${c.size === got.size ? html` · checksum <span style="font-family: var(--font-mono); font-size: 13.5px; overflow-wrap: anywhere">${sum(c.sha256)}</span>` : null}</p>
-          <p class="ins-small">${known ? `The same, byte for byte, as a file that has worked on ${the}${c.verified ? '' : ' in development'}.` : fits ? `A ${need.noun}, but not the same as any file known to work on ${the}.` : 'It isn’t sent to the device.'}</p>`
+          <p class="ins-small">${known ? `The same, byte for byte, as a file that has worked on ${the}${c.verified ? '' : ' in development'}.` : fits ? `A ${need.noun}, but not the same as any file known to work on ${the}.` : st === 'device-refused' ? `${cap(the)} refused it when the backup started. It isn’t sent again.` : 'It isn’t sent to the device.'}</p>`
         : html`<span class="ins-card__title">${busy ? 'Checking the file…' : 'No file chosen'}</span>
           <p class="ins-small ins-soft">Your browser opens a window to choose it on this computer. It isn’t uploaded anywhere.</p>`}
         <div class="ins-row"><${Button} label=${c ? 'Choose another file…' : 'Choose the file…'} onClick=${choose} disabled=${busy} id="choose-file" /></div>
@@ -178,6 +183,10 @@ export function Supply({ s, state }) {
       <${ValueTable} head=${['', 'The file is for', `${cap(the)} needs`, ...(c.reported ? ['The device reports'] : [])]}
         rows=${need.matches.map((m) => row(m, val(c.made_for, m.key), val(c.want, m.key), c.reported ? val(c.reported, m.key) : undefined))} />
       <p><strong>Way out:</strong> ${c.reported ? `check that the device connected is ${the}, then choose a file for it.` : 'choose another file.'} Nothing was sent; ${the} hasn’t changed.</p>
+    </${Admonition}>` : null}
+    ${st === 'device-refused' ? html`<${Admonition} kind="warning" seal="G" label="Not sent again" title=${`Refused by ${the}`} id="device-refused">
+      <p>Its check said it could be used, but ${the} didn’t accept this ${need.short}, or the ${need.short} didn’t answer the installer. A file counts as working only once ${the} has accepted it and it answers. The installer doesn’t send this file again: choosing it again gives the same answer.</p>
+      <p><strong>Way out:</strong> choose another file. Nothing was read; ${the} hasn’t changed.</p>
     </${Admonition}>` : null}
     ${st === 'known-bad' ? html`<${Admonition} kind="warning" seal="G" label="Not sent" title=${`Known not to work on ${the}`} id="known-bad">
       <p>${c.reason}</p>

@@ -3,10 +3,11 @@
 // state: saving | verifying | verified | failed | refused; at: the item being saved or read
 // (0-based); pct. There is no record of a running backup yet: these show the plan's items at that
 // moment. refused: the device didn't accept the file the person supplied, or it didn't answer
-// (spec 004 FR-006): nothing was read. It applies only where the backup needs such a file.
+// (spec 004 FR-006): nothing was read. It applies only where the backup needs such a file, and
+// the file picked on Supply is then marked refused by the device (records.refuseSupplied).
 
 import { html, Admonition, Actions, Page, Tick } from '../lib/parts.js';
-import { backupView, suppliedFor, escapeWords } from '../lib/model.js';
+import { backupView, suppliedFor, suppliedState, escapeWords } from '../lib/model.js';
 import { BOOT_SETTING, human, cap } from '../lib/words.js';
 
 // One item per disk image, then the boot settings kept outside the disks, then the values unique
@@ -24,6 +25,12 @@ export function Backup({ s, state }) {
   if (!p) return html`<${Page} s=${s} step="backup" eyebrow="Back up" title="No plan"><p><a class="il-link" href=${s.link('plan')}>Back to the plan</a></p></${Page}>`;
   const need = suppliedFor(s);
   const st = ['saving', 'verifying', 'verified', 'failed'].includes(state) || (state === 'refused' && need) ? state : 'saving';
+  // The file that was refused is the one picked on Supply: it is never offered as usable again
+  // in this page (004 FR-006). Marking it again is harmless.
+  if (st === 'refused') {
+    const { got, ok } = suppliedState(s, need);
+    if (got && ok) s.refuseSupplied(s.machine, need.id, got.check.sha256);
+  }
   const b = backupView(s);
   const items = backupItems(s), n = items.length;
   const at = st === 'verified' ? n : Math.min(s.num('at', Math.floor(n / 2)), n - 1);

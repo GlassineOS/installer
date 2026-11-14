@@ -171,12 +171,12 @@ export function Plan({ s }) {
   const e = erase(s);
   const gone = goneSystems(p);
   const b = backupView(s);
-  const { need, got, ok: fileOk } = suppliedState(s);
+  const { need, got, byDevice, ok: fileOk } = suppliedState(s);
   const choices = p.choices.filter((c) => !FLOW_CHOICES.includes(c.choice));
   const openChoices = keepOpen || gone.length > 0 || (!refused && !b.on);
   keepOpen = false;
   const unchanged = pc ? 'the PC starts as before.' : 'the device starts its system as before.';
-  const fileTag = !got ? ['Not chosen yet', 'ins-tag ins-tag--dashed'] : fileOk ? ['Chosen and checked', 'ins-tag'] : got.check.verdict === 'fits-unknown' ? ['Chosen, not a known file', 'ins-tag ins-tag--heavy'] : ['Chosen, doesn’t fit', 'ins-tag ins-tag--heavy'];
+  const fileTag = !got ? ['Not chosen yet', 'ins-tag ins-tag--dashed'] : byDevice ? [`Chosen, ${s.m.the} refused it`, 'ins-tag ins-tag--heavy'] : fileOk ? ['Chosen and checked', 'ins-tag'] : got.check.verdict === 'fits-unknown' ? ['Chosen, not a known file', 'ins-tag ins-tag--heavy'] : ['Chosen, doesn’t fit', 'ins-tag ins-tag--heavy'];
   return html`<${Page} s=${s} step="plan" eyebrow=${refused ? 'Plan · refused, nothing was changed' : 'Plan · nothing is written yet'} title=${title}
       lead=${refused ? `One answer decides whether ${s.m.the} can be installed.` : 'Read this once. The recommended choices are already made; nothing is written until you confirm.'}>
     ${refused ? null : html`<section class="ins-card ins-card--strong" id="short">

@@ -106,11 +106,13 @@ async function main() {
   const SUPPLIED = path.join(ROOT, 'web/fixtures/supplied');
   const supplied = (n) => JSON.parse(fs.readFileSync(path.join(SUPPLIED, n + '.json'), 'utf8'));
   const FILES = suppliedFiles();
-  // Picks a file on Supply, as the browser's file window would, and waits for the core's check.
+  // Picks a file on Supply, as the browser's file window would, and waits for the core's check of
+  // that file (its checksum) with the verdict the record has.
   const pickFile = async (name) => {
+    const want = supplied(name);
     const input = await page.$('#file-input');
     await input.uploadFile(path.join(FILES, name + '.bin'));
-    await page.waitForFunction((v) => { const f = document.querySelector('#file'); return f && f.dataset.verdict === v; }, { timeout: 10000 }, name);
+    await page.waitForFunction((v, sum) => { const f = document.querySelector('#file'); return f && f.dataset.verdict === v && f.dataset.sha256 === sum; }, { timeout: 10000 }, want.verdict, want.sha256);
   };
   await page.goto(base, { waitUntil: 'load' });
   await ready(page);
@@ -398,6 +400,19 @@ async function main() {
     assert.match(t, /The device reports/i);
     assert.match(t, /Chip\s+0014d0e1\s+000cc0e1\s+0014d0e1/);
     assert.strictEqual(await page.$('#use'), null);
+    // a wrong key where the boot ROM enforces it, and no device report: the file is for / the
+    // device needs, two columns
+    await pickFile('wrong-key-enforced');
+    assert.deepStrictEqual(await page.$$eval('#wrong th', (x) => x.map((h) => h.textContent)), ['', 'The file is for', 'The Onyx Boox Note Air needs']);
+    t = await page.$eval('#wrong', (x) => x.innerText);
+    assert.match(t, /This file is for another device/);
+    assert.ok(!/reports/i.test(t), 'a device report that wasn’t given');
+    assert.match(t, /Chip\s+000cc0e1\s+000cc0e1/);
+    assert.match(t, new RegExp(`Signing key\\s+${supplied('wrong-key-enforced').made_for.pk_hash.slice(0, 16)}…\\s+7be49b72f9e43372…`));
+    assert.match(t, /Way out:\s*choose another file\./);
+    assert.match(await page.evaluate(() => document.body.innerText), /The installer sends only a file made for the Onyx Boox Note Air’s chip and signing key\./);
+    assert.strictEqual(await page.$('#use'), null);
+    assert.strictEqual(await page.$('#unknown'), null, 'a wrong key offered with a warning');
     // known not to work: the description's reason
     await pickFile('known-bad');
     assert.ok((await page.$eval('#known-bad', (x) => x.innerText)).includes(supplied('known-bad').reason));
@@ -439,6 +454,62 @@ async function main() {
     // only where the backup needs a supplied file
     await go(page, '#/backup?plan=pc-windows-keep&state=refused');
     assert.strictEqual(await page.$('#refused'), null);
+  });
+
+  await test('a file the device refused stays refused (by its checksum) until another file is chosen', async () => {
+    const the = 'the Onyx Boox Note Air';
+    const ref = (k) => page.evaluate(async (key) => { const r = (await import('/web/records/index.js')).supplied('noteair-stock-fastboot', 'emergency-programmer'); return r && r[key]; }, k);
+    const card = () => page.$eval('#file', (x) => ({ verdict: x.dataset.verdict, refused: x.dataset.refused || null }));
+    await forget();
+    await go(page, '#/supply?plan=noteair-no-stock-developer');
+    await pickFile('known');
+    assert.ok(await page.$('#use'));
+    // the backup: the device didn't accept it
+    await go(page, '#/backup?plan=noteair-no-stock-developer&state=refused');
+    assert.ok(await page.$('#refused'));
+    await page.click('#another-file');
+    await page.waitForFunction(() => document.documentElement.dataset.hash.startsWith('#/supply') && document.documentElement.dataset.ready === 'supply', { timeout: 10000 });
+    assert.deepStrictEqual(await card(), { verdict: 'known', refused: 'device' });
+    assert.match(await page.$eval('h1', (x) => x.textContent), new RegExp(`${the.replace(/^t/, 'T')} didn’t accept this file`));
+    assert.match(await page.$eval('#device-refused', (x) => x.innerText), /doesn’t send this file again[\s\S]*Way out:\s*choose another file/);
+    assert.strictEqual(await page.$('#use'), null, 'the refused file can still go on to Confirm');
+    assert.strictEqual(await page.$('#unknown'), null);
+    assert.ok(await page.$('#choose'), 'no way to choose another file');
+    assert.strictEqual(await ref('bytes'), null, 'kept the bytes of a refused file');
+    // Confirm and Plan say so; nothing can be confirmed
+    await go(page, '#/confirm?plan=noteair-no-stock-developer');
+    assert.match(await page.$eval('#supplied', (x) => x.innerText), /didn’t accept it, or it didn’t answer[\s\S]*isn’t sent again/);
+    assert.ok(await page.$eval('#install', (b) => b.tagName === 'BUTTON' && b.disabled));
+    await go(page, '#/plan?plan=noteair-no-stock-developer');
+    assert.match(await page.$eval('#supply', (x) => x.innerText), new RegExp(`Chosen, ${the} refused it`, 'i'));
+    // another file that may be used: usable again, with its own warning
+    await go(page, '#/supply?plan=noteair-no-stock-developer');
+    await pickFile('fits-unknown');
+    assert.deepStrictEqual(await card(), { verdict: 'fits-unknown', refused: null });
+    assert.strictEqual(await page.$('#device-refused'), null);
+    await page.click('#trust');
+    await page.waitForFunction(() => document.querySelector('#use').tagName === 'A', { timeout: 5000 });
+    await go(page, '#/confirm?plan=noteair-no-stock-developer');
+    assert.match(await page.$eval('#supplied', (x) => x.innerText), /you confirmed its warning/);
+    // the refused file picked again: still refused, whatever its check says
+    await go(page, '#/supply?plan=noteair-no-stock-developer');
+    await pickFile('known');
+    assert.deepStrictEqual(await card(), { verdict: 'known', refused: 'device' });
+    assert.strictEqual(await page.$('#use'), null);
+    assert.strictEqual(await ref('bytes'), null, 'kept the bytes of a refused file');
+    await go(page, '#/confirm?plan=noteair-no-stock-developer');
+    assert.ok(await page.$eval('#install', (b) => b.tagName === 'BUTTON' && b.disabled));
+    // in the page's memory only: not in the address, not in the browser's storage
+    const sum = supplied('known').sha256;
+    const kept = await page.evaluate(() => [location.href, ...[localStorage, sessionStorage].flatMap((st) => Object.keys(st).map((k) => k + '=' + st.getItem(k)))].join('\n'));
+    assert.ok(!kept.includes(sum) && !kept.includes(sum.slice(0, 16)), 'the checksum is kept outside the page');
+    assert.deepStrictEqual(problems, []);
+    // a reload forgets it
+    await page.goto(base, { waitUntil: 'load' });
+    await ready(page);
+    await go(page, '#/supply?plan=noteair-no-stock-developer');
+    await pickFile('known');
+    assert.deepStrictEqual(await card(), { verdict: 'known', refused: null });
   });
 
   await page.close();

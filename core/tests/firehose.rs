@@ -755,6 +755,91 @@ fn boot_area_names_are_reserved() {
     assert!(matches!(run.r.unwrap_err().error, EmergencyError::Partition(_)));
 }
 
+/// `--only-boot-areas`: the boot areas the way a whole-disk run reads them
+/// (each twice, checked, a temporary name until then, the manifest last),
+/// without the user area: the GPT is its only read on physical partition 0.
+#[test]
+fn only_the_boot_areas() {
+    for per_partition_info in [true, false] {
+        let f = Faults {
+            boot_sectors: 640,
+            per_partition_info,
+            ..lively()
+        };
+        let run = go(f, Scope::BootAreas);
+        let done = run.r.unwrap();
+        assert_eq!(done.restart, Restart::Done);
+        assert_eq!(run.mem.files.keys().collect::<Vec<_>>(), ["emmc-boot1.img", "emmc-boot2.img"]);
+        assert_eq!(run.mem.files["emmc-boot1.img"], boot_area(1, 640));
+        assert_eq!(run.mem.files["emmc-boot2.img"], boot_area(2, 640));
+        assert_eq!(reads(&run.dev), [(0, 34), (0, 34)], "the user area was read");
+        assert!(!run.mem.events.iter().any(|e| e.contains("emmc-user")));
+        for physical in [1, 2] {
+            let r = reads_on(&run.dev, physical);
+            assert_eq!(r.iter().filter(|(_, n)| *n > 1).count(), 2 * (4 + 1), "{r:?}");
+        }
+        let m: serde_json::Value = serde_json::from_str(done.manifest.as_deref().unwrap()).unwrap();
+        assert_eq!(m["disks"].as_array().unwrap().len(), 2);
+        assert_eq!(m["disks"][0]["name"], "emmc-boot1");
+        assert_eq!(m["disks"][0]["physical_partition"], 1);
+        assert_eq!(m["disks"][1]["physical_partition"], 2);
+        assert_eq!(m["disks"][1]["size"], 640 * 512);
+        assert_eq!(m["not_read"], serde_json::json!([]));
+        // Killed at any write or read-back: never a final name before its
+        // check, never a manifest before the end.
+        assert_eq!(run.mem.events.last().unwrap(), "manifest");
+        assert!(!run.mem.kills.is_empty());
+        for (names, manifest) in &run.mem.kills {
+            assert!(!manifest, "a manifest before the end");
+            assert_eq!(names.iter().filter(|n| n.ends_with(".partial")).count(), 1, "{names:?}");
+        }
+        assert!(run.mem.kills.iter().any(|(n, _)| n == &["emmc-boot1.img", "emmc-boot2.img.partial"]));
+        assert!(!run.mem.kills.iter().any(|(n, _)| n.contains(&"emmc-boot2.img".to_string())));
+    }
+}
+
+/// RPMB stays refused with `--only-boot-areas`: a boot area the programmer
+/// names RPMB is skipped, and nothing for physical partition 3 or above is
+/// sent.
+#[test]
+fn only_the_boot_areas_never_reads_rpmb() {
+    let f = Faults {
+        boot_sectors: 640,
+        per_partition_info: true,
+        rpmb_named: Some(2),
+        ..lively()
+    };
+    let run = go(f, Scope::BootAreas);
+    let done = run.r.unwrap();
+    assert_eq!(run.mem.files.keys().collect::<Vec<_>>(), ["emmc-boot1.img"]);
+    assert!(reads_on(&run.dev, 2).is_empty());
+    let m: serde_json::Value = serde_json::from_str(done.manifest.as_deref().unwrap()).unwrap();
+    assert_eq!(m["not_read"][0]["name"], "emmc-boot2");
+    assert!(m["not_read"][0]["why"].as_str().unwrap().contains("RPMB"));
+    let at = run.dev.done_at.unwrap();
+    for d in &run.dev.sent[at + 1..] {
+        let t = std::str::from_utf8(d).unwrap();
+        assert!(!Regex::new(r#"physical_partition_number="([3-9]|\d\d)"#).unwrap().is_match(t), "{t}");
+    }
+}
+
+/// `--only-boot-areas` on a device without boot areas read nothing it was
+/// asked for: the run fails with why, and the device is still restarted.
+#[test]
+fn only_the_boot_areas_without_any_fails_with_why() {
+    let run = go(lively(), Scope::BootAreas);
+    let f = run.r.unwrap_err();
+    assert_eq!(f.restart, Restart::Done);
+    assert!(f.manifest.is_none());
+    let e = f.error.to_string();
+    assert!(
+        e.contains("no eMMC boot area was read") && e.contains("emmc-boot1:") && e.contains("emmc-boot2:"),
+        "{e}"
+    );
+    assert!(run.mem.files.is_empty());
+    assert_eq!(commands(&run.dev).last().unwrap(), "power");
+}
+
 /// 004 Scenario 5: a copy is under its final name only after both reads
 /// matched and it was read back; the manifest comes last. Whatever moment
 /// the process is killed at, no final-named image is unchecked and no

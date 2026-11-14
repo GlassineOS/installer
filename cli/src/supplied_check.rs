@@ -24,15 +24,7 @@ pub fn cmd(args: &[String]) -> Result<ExitCode, String> {
     };
     let ds = crate::descriptions(&o)?;
     let d = pick(&ds, o.one("--device").map(String::as_str))?;
-    let file = match (o.one("--file"), d.supplied_files.as_slice()) {
-        (Some(f), _) => f.clone(),
-        (None, [one]) => one.id.clone(),
-        (None, []) => return Err(format!("{} needs no supplied file", d.id)),
-        (None, many) => {
-            let ids: Vec<&str> = many.iter().map(|f| f.id.as_str()).collect();
-            return Err(format!("{} needs several supplied files; name one with --file: {}", d.id, ids.join(", ")));
-        }
-    };
+    let file = file_of(d, o.one("--file").map(String::as_str))?;
     let mut reported = BTreeMap::new();
     for kv in o.all("--reported") {
         let (k, v) = kv.split_once('=').ok_or(format!("--reported takes KEY=VALUE, not {kv:?}"))?;
@@ -52,8 +44,21 @@ pub fn cmd(args: &[String]) -> Result<ExitCode, String> {
     }))
 }
 
+/// The supplied file by id, or the description's one supplied file.
+pub fn file_of(d: &Description, id: Option<&str>) -> Result<String, String> {
+    match (id, d.supplied_files.as_slice()) {
+        (Some(f), _) => Ok(f.to_string()),
+        (None, [one]) => Ok(one.id.clone()),
+        (None, []) => Err(format!("{} needs no supplied file", d.id)),
+        (None, many) => {
+            let ids: Vec<&str> = many.iter().map(|f| f.id.as_str()).collect();
+            Err(format!("{} needs several supplied files; name one with --file: {}", d.id, ids.join(", ")))
+        }
+    }
+}
+
 /// The description by id, or the one description that has supplied files.
-fn pick<'a>(ds: &'a [Description], id: Option<&str>) -> Result<&'a Description, String> {
+pub fn pick<'a>(ds: &'a [Description], id: Option<&str>) -> Result<&'a Description, String> {
     match id {
         Some(id) => ds.iter().find(|d| d.id == id).ok_or(format!("no description {id:?}")),
         None => {

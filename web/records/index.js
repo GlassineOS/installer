@@ -14,10 +14,14 @@
 //                             -> the core's check of a file the person picked (supplied_check_format 1)
 //   supplied(machine, file)   -> the file picked for that machine in this page, or null
 //   keepSupplied(machine, file, picked) / forgetSupplied(machine, file)
+//   refuseSupplied(machine, file, sha256) / deviceRefused(machine, file, sha256)
+//                             -> marks a file the device refused (spec 004 FR-006), by its
+//                                checksum / whether it was refused
 //
 // A picked file (spec 004 FR-003) lives only in this page's memory: its bytes, the core's check
 // and whether the person confirmed the warning. It is never uploaded, put in an address or kept
-// in the browser's storage; a reload forgets it.
+// in the browser's storage; a reload forgets it. The same holds for the checksums of the files
+// the device refused: forgetting the picked file doesn't forget them, a reload does.
 //
 // Two sources, chosen by the page's address:
 //
@@ -277,8 +281,9 @@ export async function description(id) {
 
 // ---- files the person supplies (spec 004) ----------------------------------------------------
 
-// The test records of web/fixtures/supplied/, one per verdict.
-export const SUPPLIED_RECORDS = ['known', 'fits-unknown', 'wrong-chip-or-key', 'known-bad', 'not-a-programmer'];
+// The test records of web/fixtures/supplied/: one per verdict, and a wrong key where the boot ROM
+// enforces it (no device report).
+export const SUPPLIED_RECORDS = ['known', 'fits-unknown', 'wrong-chip-or-key', 'wrong-key-enforced', 'known-bad', 'not-a-programmer'];
 
 const hexOf = (buf) => [...new Uint8Array(buf)].map((x) => x.toString(16).padStart(2, '0')).join('');
 
@@ -302,3 +307,16 @@ const picked = new Map(); // `${machine} ${file}` -> { name, size, bytes, check,
 export const supplied = (machine, file) => picked.get(`${machine} ${file}`) || null;
 export const keepSupplied = (machine, file, p) => { picked.set(`${machine} ${file}`, p); };
 export const forgetSupplied = (machine, file) => { picked.delete(`${machine} ${file}`); };
+
+// Files the device didn't accept, or that didn't answer (spec 004 FR-006): their checksums.
+// Such a file is never offered as usable again, whatever its check said; the picked one, if it
+// is that file, loses its bytes.
+const refusedSums = new Map(); // `${machine} ${file}` -> Set of sha256
+export const deviceRefused = (machine, file, sha256) => !!(sha256 && refusedSums.get(`${machine} ${file}`)?.has(sha256));
+export const refuseSupplied = (machine, file, sha256) => {
+  const k = `${machine} ${file}`;
+  if (!refusedSums.has(k)) refusedSums.set(k, new Set());
+  refusedSums.get(k).add(sha256);
+  const p = picked.get(k);
+  if (p && p.check.sha256 === sha256) { p.bytes = null; p.trusted = false; }
+};

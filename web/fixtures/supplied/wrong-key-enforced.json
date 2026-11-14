@@ -1,0 +1,21 @@
+{
+  "supplied_check_format": 1,
+  "device": "onyx-noteair",
+  "file": "emergency-programmer",
+  "route": "emergency-download",
+  "size": 5888,
+  "sha256": "4aadeacf67da562cba3ceb185f5d1d40b6287057b64902e35b04208bf546ca04",
+  "verdict": "wrong-chip-or-key",
+  "made_for": {
+    "chip": "000cc0e1",
+    "pk_hash": "10ab995176c93836b85cbbc792ecf0e6efd08f9edaab9aa72a962f15765d65d9"
+  },
+  "want": {
+    "chip": "000cc0e1",
+    "pk_hash": "7be49b72f9e4337223ccb84d6eccca4e61ce16e3602ac2008cb18b75babe6d09"
+  },
+  "reported": null,
+  "differs": [
+    "pk_hash"
+  ]
+}
