@@ -88,6 +88,7 @@ pub fn run(programmer: &Path, out: Option<&Path>, scope: &Scope) -> Result<Strin
     };
     let opts = Options {
         listen_first: true,
+        resend_configure: true,
         ..Options::default()
     };
     let (mut t, _ids) = crate::emergency::open()?;
