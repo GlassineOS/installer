@@ -1,0 +1,123 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+//! Native spike tool. Writes storage only with `--flash`, and only to the
+//! partitions the core allows.
+//!
+//!   fbspike [--note-air] [--download MIB] [--flash PART FILE] [--reboot] [VAR...]
+//!
+//! `--note-air` uses the Note Air's equal-length framing (GlassineOS/abl#1);
+//! `--download` sends MIB MiB of a pattern into the bootloader's RAM;
+//! `--flash` writes FILE to PART, which must be in `FLASH_ALLOWED`.
+#[cfg(not(target_arch = "wasm32"))]
+fn main() {
+    use fbspike::{Framing, NOTE_AIR, Session, pattern, usb};
+    use nusb::MaybeFuture;
+    use std::time::Instant;
+    let (mut framing, mut mib, mut reboot, mut names) = (Framing::Plain, 0usize, false, vec![]);
+    let mut flash: Option<(String, Vec<u8>)> = None;
+    let mut args = std::env::args().skip(1);
+    while let Some(a) = args.next() {
+        match a.as_str() {
+            "--note-air" => framing = NOTE_AIR,
+            "--download" => mib = args.next().and_then(|v| v.parse().ok()).expect("--download MIB"),
+            "--reboot" => reboot = true,
+            "--flash" => {
+                let part = args.next().expect("--flash PART FILE");
+                let file = args.next().expect("--flash PART FILE");
+                if !fbspike::FLASH_ALLOWED.contains(&part.as_str()) {
+                    eprintln!("refused: flash to {part:?} (allowed: {:?})", fbspike::FLASH_ALLOWED);
+                    std::process::exit(2);
+                }
+                flash = Some((part, std::fs::read(&file).expect("read FILE")));
+            }
+            _ => names.push(a),
+        }
+    }
+    let sel = usb::selector();
+    let info = nusb::list_devices().wait().expect("list usb devices").find(|d| d.matches(&sel));
+    let Some(info) = info else {
+        eprintln!("no fastboot device");
+        std::process::exit(2);
+    };
+    eprintln!("device {:04x}:{:04x}", info.vendor_id(), info.product_id());
+    // Right after the device appears, the host may hold the interface for a
+    // moment ("interface is busy"). Retry opening only; nothing has been sent.
+    let mut t = None;
+    for _ in 0..10 {
+        match info.open().wait().map_err(|e| e.to_string()).and_then(|d| {
+            usb::UsbTransport::open_blocking(d).map_err(|e| e.to_string())
+        }) {
+            Ok(x) => {
+                t = Some(x);
+                break;
+            }
+            Err(e) => {
+                eprintln!("open: {e}; retrying");
+                std::thread::sleep(std::time::Duration::from_millis(500));
+            }
+        }
+    }
+    let Some(t) = t else {
+        eprintln!("could not open the fastboot interface");
+        std::process::exit(3);
+    };
+    let t0 = Instant::now();
+    let (mut s, product) = match pollster::block_on(Session::start(t, framing)) {
+        Ok(x) => x,
+        Err(e) => {
+            eprintln!("start: {e}");
+            std::process::exit(1);
+        }
+    };
+    println!("product: {product} ({framing:?}, {} ms)", t0.elapsed().as_millis());
+    for n in &names {
+        match pollster::block_on(s.getvar(n)) {
+            Ok((v, info)) => {
+                for i in info {
+                    println!("({n}) {i}");
+                }
+                println!("{n}: {v}");
+            }
+            Err(e) => println!("{n}: {e}"),
+        }
+    }
+    let mut ok = true;
+    if mib > 0 {
+        let data = pattern(mib << 20);
+        let t0 = Instant::now();
+        match pollster::block_on(s.download(&data)) {
+            Ok(n) => {
+                let ms = t0.elapsed().as_millis().max(1);
+                println!("download: OKAY, {n} bytes into RAM in {ms} ms ({} MB/s)", n as u128 / 1000 / ms);
+            }
+            Err(e) => {
+                println!("download: {e}");
+                ok = false;
+            }
+        }
+    }
+    if let Some((part, data)) = &flash {
+        if ok {
+            let t0 = Instant::now();
+            match pollster::block_on(s.flash(part, data)) {
+                Ok(n) => println!("flash {part}: OKAY, {n} bytes ({} of them padding) in {} ms",
+                                  n - data.len(), t0.elapsed().as_millis()),
+                Err(e) => {
+                    println!("flash {part}: {e}");
+                    ok = false;
+                }
+            }
+        }
+    }
+    if reboot {
+        match pollster::block_on(s.reboot()) {
+            Ok(()) => println!("reboot: OKAY"),
+            Err(e) => {
+                println!("reboot: {e}");
+                ok = false;
+            }
+        }
+    }
+    std::process::exit(if ok { 0 } else { 1 });
+}
+#[cfg(target_arch = "wasm32")]
+fn main() {}

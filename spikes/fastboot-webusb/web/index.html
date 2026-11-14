@@ -1,0 +1,25 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>fastboot over WebUSB (spike)</title>
+<style>body{font:16px/1.5 system-ui,sans-serif;max-width:40rem;margin:2rem auto;padding:0 1rem}pre{background:#eee;padding:1rem;white-space:pre-wrap}</style>
+<h1>fastboot over WebUSB</h1>
+<p>Spike: the Rust fastboot core compiled to WebAssembly. Writes nothing to the device's storage: it sends only <code>getvar</code>, <code>download</code> (into the bootloader's RAM) and <code>reboot</code>.</p>
+<p><input id="vars" value="version-bootloader current-slot unlocked" size="50"></p>
+<p><label><input type="checkbox" id="equal" checked> Note Air framing (equal-length transfers)</label><br>
+<label>Download test: <input id="mib" type="number" value="1" min="0" max="64" style="width:4rem"> MiB into RAM</label><br>
+<label><input type="checkbox" id="reboot" checked> Reboot the device at the end</label></p>
+<p><button id="go">Choose a fastboot device and run</button></p>
+<pre id="out">(nothing yet)</pre>
+<script type="module">
+import init, { run } from "./pkg/fbspike.js";
+await init();
+const out = document.getElementById("out");
+out.textContent = navigator.usb ? "ready (core loaded, WebUSB present)" : "This browser has no WebUSB (use a Chromium-based browser over https or localhost).";
+document.getElementById("go").onclick = async () => {
+  out.textContent = "…";
+  const t0 = performance.now();
+  try { out.textContent = await run(document.getElementById("vars").value, document.getElementById("equal").checked, +document.getElementById("mib").value, document.getElementById("reboot").checked) + `\n(${Math.round(performance.now()-t0)} ms)`; }
+  catch (e) { out.textContent = "error: " + e; }
+};
+</script>
