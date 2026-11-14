@@ -10,6 +10,7 @@ import { useState } from 'preact/hooks';
 import { html, Admonition, Actions, Page, Owed, CapRow, Caps, Tick, Bang } from '../lib/parts.js';
 import { cap } from '../lib/words.js';
 import { useDevice, isOpen, DeviceCard } from '../lib/device.js';
+import { HostAccess } from '../lib/host.js';
 
 function ways(desc) {
   if (!desc) return {};
@@ -47,7 +48,7 @@ const ChooserPicture = ({ the, name }) => html`<div class="ins-grid" style="alig
 const FAILED = {
   'no-device': ['No device was chosen', 'The browser’s window was closed without a device, or it listed none. A device is listed only in its boot loader’s USB mode, connected with a cable that carries data.'],
   'several-devices': ['More than one device', 'Connect only the device to check.'],
-  busy: ['The device is in use', 'Another program or browser tab is using it. Close it, then choose the device again.'],
+  busy: ['The device is in use', 'The browser couldn’t take it from what holds it.'],
   permission: ['Not allowed to open the device', 'The computer didn’t let the browser open it.'],
   timeout: ['The device stopped answering', 'Unplug it, start it again into its boot loader’s USB mode, and choose it again.'],
 };
@@ -85,8 +86,9 @@ function LiveReach({ s, state }) {
       <p class="ins-small ins-soft">The installer asks the device what it is. It only reads.</p>
     </div>` : null}
     ${failed ? html`<${Admonition} kind="warning" seal="G" label="Not read" title=${title} id="inspect-failed">
-      <p>${body}</p>
+      ${['permission', 'busy'].includes(failed.kind) ? null : html`<p>${body}</p>`}
       ${title !== 'The device couldn’t be read' ? html`<p class="ins-small ins-soft">${failed.message}</p>` : null}
+      <${HostAccess} s=${s} kind=${failed.kind} usb=${(u) => u.kinds.includes('fastboot')} />
       <p><strong>Way out:</strong> nothing has changed. Choose the device again, or stop here.</p>
     </${Admonition}>` : null}
     <${Actions} next="After you choose, the check starts. It only reads."

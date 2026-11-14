@@ -18,13 +18,14 @@ mod backup;
 mod emergency;
 mod emergency_read;
 mod emergency_try;
+mod host_setup;
 mod supplied_check;
 
 include!(concat!(env!("OUT_DIR"), "/embedded.rs"));
 
 const OWN_REPOSITORY: &str = "GlassineOS/installer";
 
-const USAGE: &str = "usage:
+pub(crate) const USAGE: &str = "usage:
   glassine-install validate FILE... [--lock LOCKFILE [--require-pins]]
   glassine-install inspect [--json] [--out FACTS.json] [--reboot | --pc [--root DIR]] [--devices DIR]
   glassine-install check [--facts FACTS.json | --reboot | --pc [--root DIR]] [--release RELEASE.json] [--json] [--devices DIR]
@@ -36,6 +37,7 @@ const USAGE: &str = "usage:
   glassine-install emergency-read --programmer FILE [--accept-unknown] [--device ID] [--devices DIR]
                                  (--only-gpt | --find-boot-area-sizes | --out DIR [--only-boot-areas | --partition NAME...])
   glassine-install supplied-check [--device ID] [--file ID] [--reported KEY=VALUE]... [--json] [--devices DIR] FILE
+  glassine-install host-setup [--print]
   glassine-install schema
   glassine-install lock-unpinned LOCKFILE
 
@@ -63,8 +65,8 @@ mode (Qualcomm, USB 05c6:9008) reports, in Sahara's command mode: the Sahara ver
 (its hardware id and, when known, its name), the hash of the maker's key and the boot ROM's
 version. It sends queries only, never a program, and leaves the device waiting in that mode:
 hold its power key ~10 s to restart it. The serial number is unique to the unit and shown only
-with --serial. Linux needs no driver (a udev rule or root for access); Windows needs the WinUSB
-driver for the device, installed once with Zadig.
+with --serial. Linux needs no driver, only access (host-setup below, or root); Windows needs the
+WinUSB driver for the device, installed once with Zadig.
 
 emergency-read reads the storage of that device through a programmer the person supplies:
 --programmer names the file, and nothing else is ever looked for or sent. Before the device is
@@ -97,7 +99,17 @@ known to work and known not to, then that it is made for the chip and key the de
 --reported gives what the device reported (chip=HEX, pk_hash=HEX), which must match too. It reads
 the file only and sends nothing anywhere. Exit status 0: a known file; 2: it fits but isn't known
 (sent only after the person confirms); 1: refused (known not to work, with why; another chip or
-key; or not a programmer).";
+key; or not a programmer).
+
+host-setup sets this computer up once to reach the devices' USB modes, from the descriptions'
+modes. On Linux, as root (sudo glassine-install host-setup), it writes the udev rules file
+/etc/udev/rules.d/70-glassine-installer.rules, reloads udev and re-triggers the USB devices
+already connected: the person logged in at the computer may open each mode's USB device without
+root (TAG uaccess), ModemManager leaves them alone, and the kernel's qcserial driver lets go of the
+emergency download mode (05c6:9008) when it binds, for that id only, since a browser can't take it
+from a kernel driver. With --print it writes the file to stdout and what to run to stderr, and
+changes nothing. On Windows it lists the USB ids that need the WinUSB driver and how to install
+it with Zadig; nothing else needs setting up.";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -111,6 +123,7 @@ fn main() -> ExitCode {
         Some("emergency-read") => emergency_read_cmd(&args[1..]),
         Some("emergency-try-program") => emergency_try_cmd(&args[1..]),
         Some("supplied-check") => supplied_check::cmd(&args[1..]),
+        Some("host-setup") => host_setup_cmd(&args[1..]),
         Some("schema") => {
             println!("{}", serde_json::to_string_pretty(&format1::json_schema()).unwrap());
             Ok(ExitCode::SUCCESS)
@@ -263,6 +276,12 @@ fn toml_files(dir: &Path) -> Result<Vec<PathBuf>, String> {
     Ok(v)
 }
 
+fn host_setup_cmd(args: &[String]) -> Result<ExitCode, String> {
+    let ds = descriptions(&opts(&[], &[], &[])?)?;
+    let refs: Vec<&Description> = ds.iter().collect();
+    host_setup::cmd(args, &refs)
+}
+
 /// The descriptions to recognise against: valid ones only; a newer format is
 /// refused by name and the rest go on (Scenario 2).
 fn descriptions(o: &Opts) -> Result<Vec<Description>, String> {
@@ -291,7 +310,13 @@ const DEVICE_FAILED: u8 = 5;
 /// Inspects the one connected fastboot device.
 fn live(ds: &[&Description], reboot: bool) -> Result<Inspected, String> {
     let info = usb::find().map_err(|e| e.to_string())?;
-    let (t, ids) = usb::open(&info).map_err(|e| e.to_string())?;
+    let (t, ids) = usb::open(&info).map_err(|e| match e {
+        usb::OpenError::Permission(_) => format!(
+            "{e}: on Linux set this computer up once with sudo glassine-install host-setup (or run this as root); \
+             on Windows the device needs the WinUSB driver (glassine-install host-setup says how)"
+        ),
+        e => e.to_string(),
+    })?;
     let host = Host {
         platform: std::env::consts::OS.to_string(),
         connections: vec!["usb-native".into()],

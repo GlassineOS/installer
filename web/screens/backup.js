@@ -13,6 +13,7 @@ import { useEffect, useState } from 'preact/hooks';
 import { html, Admonition, Actions, Page, Tick } from '../lib/parts.js';
 import { backupView, suppliedFor, suppliedState, escapeWords, shortValue } from '../lib/model.js';
 import { BOOT_SETTING, BROWSERS, human, cap, list } from '../lib/words.js';
+import { HostAccess } from '../lib/host.js';
 
 // One item per disk image, then the boot settings kept outside the disks, then the values unique
 // to the machine (captured whether or not the backup is on, FR-010).
@@ -224,8 +225,9 @@ export function LiveBackup({ s, run }) {
       <p><strong>Way out:</strong> ${leave} Check that the device connected is ${the}, then back up again.</p>
     </${Admonition}>` : null}
     ${r && r.state === 'not-started' ? html`<${Admonition} kind="warning" seal="G" label="Not started" title="The backup didn’t start" id="not-started">
-      <p>${r.error.kind === 'no-device' ? 'No device was chosen.' : r.error.message}</p>
-      ${['permission', 'busy'].includes(r.error.kind) ? html`<p id="host-access">${r.error.kind === 'busy' ? 'Another program on this computer holds the device; close it. ' : ''}On Linux the browser needs access to the emergency mode device (USB 05c6:9008): a udev rule for it, as for the fastboot route. On Windows the device needs the WinUSB driver (install it with Zadig).</p>` : null}
+      ${['permission', 'busy'].includes(r.error.kind) ? null : html`<p>${r.error.kind === 'no-device' ? 'No device was chosen.' : r.error.message}</p>`}
+      <${HostAccess} s=${s} kind=${r.error.kind} usb=${(u) => u.modes.includes(`${s.desc.id}:${need.step.mode}`)} />
+      ${['permission', 'busy'].includes(r.error.kind) ? html`<p class="ins-small ins-soft">${r.error.message}</p>` : null}
       <p><strong>Way out:</strong> nothing was sent. If ${the} is in its emergency mode, ${leave.charAt(0).toLowerCase() + leave.slice(1)} Or choose it again.</p>
     </${Admonition}>` : null}
     ${error ? html`<${Admonition} kind="warning" seal="G" label="Not started" title="That didn’t work" id="backup-error">

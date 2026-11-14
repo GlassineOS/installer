@@ -35,10 +35,10 @@ function answers(fixture) {
   return out;
 }
 const BROWSER = { platform: 'browser', connections: ['usb-web'] };
-// The pkg's exports: the three records, the descriptions' source and the inspect's Connection
-// (its facts, and reboot in its session), nothing that writes.
+// The pkg's exports: the three records, the descriptions' source, the host setup record and the
+// inspect's Connection (its facts, and reboot in its session), nothing that writes.
 // emergency_read reads a device in its emergency mode: list, read and restart only (004 FR-007).
-const EXPORTS = ['Connection', 'check', 'default', 'description', 'emergency_info', 'emergency_read', 'initSync', 'inspect', 'plan', 'supplied_check'];
+const EXPORTS = ['Connection', 'check', 'default', 'description', 'emergency_info', 'emergency_read', 'host_setup', 'initSync', 'inspect', 'plan', 'supplied_check'];
 // What the site may load: its own files. Never the repository's records or descriptions.
 const FORBIDDEN = /^(core|devices|fixtures|web|test)\//;
 
@@ -99,8 +99,9 @@ async function main() {
 
   // From Start to the check, the way a person goes: two clicks in the page (the chooser is
   // the fake's, and answers at once).
-  async function connect(page) {
-    await page.goto(base + '#/start', { waitUntil: 'load' });
+  // query: the page's own query (?host=linux sets the system the page says it runs on).
+  async function connect(page, query = '') {
+    await page.goto(base + query + '#/start', { waitUntil: 'load' });
     await rendered(page, 'start');
     await page.click('#go-device');
     await rendered(page, 'reach');
@@ -442,8 +443,8 @@ async function main() {
 
   // Check, then Supply with the programmer picked and its warning confirmed, then Back up with the
   // folder chosen: the moment before the person clicks to choose the device.
-  async function toBackup(page) {
-    await connect(page);
+  async function toBackup(page, query = '') {
+    await connect(page, query);
     await rendered(page, 'check');
     await go(page, `#/supply?${PLAN_Q}`, 'supply');
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'glassine-supplied-'));
@@ -672,6 +673,114 @@ async function main() {
     // The address can't make a backup that doesn't exist, or mark a file refused.
     await go(page, `#/backup?${PLAN_Q}&state=refused`, 'backup');
     assert.strictEqual(await page.$('#refused'), null);
+    assert.deepStrictEqual(problems, []);
+    await page.close();
+  });
+
+  // The host setup (core/src/host_setup.rs): the way out when the browser can't open or claim a
+  // device. The fakes refuse as Chromium does (blink's usb_device.cc).
+  const HOST_SETUP = json('web/fixtures/host-setup.json');
+  // The setup line is shown whole and Copy puts it on the clipboard (or, without one, selects it).
+  async function setupLine(page) {
+    assert.strictEqual(await page.$eval('#host-setup-line', (x) => x.textContent), HOST_SETUP.linux.command);
+    assert.strictEqual(await page.$eval('#host-setup-rules', (x) => x.textContent), HOST_SETUP.linux.rules);
+    await page.click('#copy-host-setup');
+    await page.waitForFunction(() => document.querySelector('#copy-host-setup').textContent !== 'Copy', { timeout: 5000 });
+    const got = await page.evaluate(async () => {
+      const label = document.querySelector('#copy-host-setup').textContent;
+      return { label, text: label === 'Copied' ? await navigator.clipboard.readText() : getSelection().toString() };
+    });
+    assert.ok(['Copied', 'Selected: copy it'].includes(got.label), got.label);
+    assert.strictEqual(got.text, HOST_SETUP.linux.command);
+  }
+  await browser.defaultBrowserContext().overridePermissions(base, ['clipboard-read', 'clipboard-write', 'clipboard-sanitized-write']);
+
+  await test('the page’s host setup record is the core’s (the fixture the screens’ tests read)', async () => {
+    const { page, problems } = await open({ vars: {} });
+    await page.goto(base + '#/start', { waitUntil: 'load' });
+    await rendered(page, 'start');
+    assert.deepStrictEqual(await records(page, 'hostSetup'), HOST_SETUP);
+    assert.deepStrictEqual(problems, []);
+    await page.close();
+  });
+
+  await test('Linux, the emergency mode held by a kernel driver: Back up names it and shows the setup line, nothing sent', async () => {
+    const { page, problems } = await open({ vars: answers('noteair-stock-fastboot') }, { edl: edlOpts({ held: true }), dir: {} });
+    await toBackup(page, '?host=linux');
+    await page.click('#start-backup');
+    await page.waitForSelector('#not-started #host-access', { timeout: 30000 });
+    assert.deepStrictEqual(await page.$eval('#host-access', (x) => [x.dataset.host, x.dataset.kind]), ['linux', 'busy']);
+    const t = await text(page);
+    assert.match(t, /most likely the system’s own serial driver/);
+    assert.match(t, /Unable to claim interface/);
+    assert.doesNotMatch(t, /Zadig/);
+    await setupLine(page);
+    const log = await edlLog(page);
+    assert.deepStrictEqual(log.outs, [], 'something was sent to a device the page couldn’t claim');
+    // Claimed again while the host may still be letting go, then given up.
+    assert.ok(log.calls.filter((c) => c === 'claimInterface').length >= 2, log.calls.join(' '));
+    assert.deepStrictEqual(files(await tree(page)), [], 'something was stored');
+    assert.deepStrictEqual(problems, []);
+    await page.close();
+  });
+
+  await test('Windows, the emergency mode not allowed to open: Back up names the WinUSB step with its USB id', async () => {
+    const { page, problems } = await open({ vars: answers('noteair-stock-fastboot') }, { edl: edlOpts({ denied: true }), dir: {} });
+    await toBackup(page, '?host=windows');
+    await page.click('#start-backup');
+    await page.waitForSelector('#not-started #host-access', { timeout: 30000 });
+    assert.deepStrictEqual(await page.$eval('#host-access', (x) => [x.dataset.host, x.dataset.kind]), ['windows', 'permission']);
+    const emergency = HOST_SETUP.usb.filter((u) => u.modes.includes('onyx-noteair:emergency'));
+    assert.strictEqual(emergency.length, 1);
+    const id = `${emergency[0].vendor_id} ${emergency[0].product_id}`.toUpperCase();
+    assert.match(await page.$eval('#winusb', (x) => x.textContent), new RegExp(`WinUSB.*Zadig.*USB ID is ${id},`));
+    assert.strictEqual(await page.$('#host-setup-line'), null, 'a Linux line on Windows');
+    const log = await edlLog(page);
+    assert.deepStrictEqual(log.outs, []);
+    // Not allowed is not retried.
+    assert.deepStrictEqual(log.calls.filter((c) => c === 'open').length, 1, log.calls.join(' '));
+    assert.ok(!log.calls.includes('claimInterface'));
+    assert.deepStrictEqual(problems, []);
+    await page.close();
+  });
+
+  await test('Linux, the boot loader’s USB mode not allowed to open: Reach shows the setup line', async () => {
+    const { page, problems } = await open({ vars: answers('noteair-stock-fastboot'), denied: true });
+    await connect(page, '?host=linux');
+    await page.waitForSelector('#inspect-failed #host-access', { timeout: 30000 });
+    assert.deepStrictEqual(await page.$eval('#host-access', (x) => [x.dataset.host, x.dataset.kind]), ['linux', 'permission']);
+    assert.match(await text(page), /Not allowed to open the device/);
+    assert.doesNotMatch(await text(page), /serial driver/, 'no driver is known to take this mode');
+    await setupLine(page);
+    const log = await usbLog(page);
+    assert.deepStrictEqual(log.outs, []);
+    assert.deepStrictEqual(log.calls.map((c) => c.name), ['requestDevice', 'open']);
+    assert.deepStrictEqual(problems, []);
+    await page.close();
+  });
+
+  await test('Linux, the boot loader’s USB mode held: Reach says what to close, no setup line (it unbinds nothing there)', async () => {
+    const { page, problems } = await open({ vars: answers('noteair-stock-fastboot'), held: true });
+    await connect(page, '?host=linux');
+    await page.waitForSelector('#inspect-failed #host-access', { timeout: 30000 });
+    assert.deepStrictEqual(await page.$eval('#host-access', (x) => [x.dataset.host, x.dataset.kind]), ['linux', 'busy']);
+    const t = await text(page);
+    assert.match(t, /The device is in use/);
+    assert.match(t, /Close any other program or browser tab that uses the device, unplug it/);
+    assert.doesNotMatch(t, /serial driver/, 'no driver is known to take this mode');
+    assert.strictEqual(await page.$('#host-setup-line'), null, 'a setup line that changes nothing for a held fastboot interface');
+    assert.deepStrictEqual((await usbLog(page)).outs, []);
+    assert.deepStrictEqual(problems, []);
+    await page.close();
+  });
+
+  await test('another system, the device held: Reach says what to close, no setup line', async () => {
+    const { page, problems } = await open({ vars: answers('noteair-stock-fastboot'), held: true });
+    await connect(page, '?host=other');
+    await page.waitForSelector('#inspect-failed #host-access', { timeout: 30000 });
+    assert.strictEqual(await page.$('#host-setup-line'), null);
+    assert.strictEqual(await page.$('#winusb'), null);
+    assert.match(await text(page), /unplug it, plug it in again/);
     assert.deepStrictEqual(problems, []);
     await page.close();
   });

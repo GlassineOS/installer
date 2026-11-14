@@ -40,7 +40,8 @@ pub enum OpenError {
     Several(usize),
     /// The host kept reporting the interface busy past the retries.
     Busy(String),
-    /// Not allowed to open it (a udev rule, a driver on Windows).
+    /// Not allowed to open it (Linux: the host setup's udev rule; Windows:
+    /// the WinUSB driver).
     Permission(String),
     Usb(String),
 }
@@ -64,7 +65,7 @@ impl fmt::Display for OpenError {
             OpenError::Several(n) => write!(f, "{n} devices in fastboot mode are connected; connect only the one to inspect"),
             OpenError::Busy(e) => write!(
                 f,
-                "the device's fastboot interface is busy ({e}); close other programs that use it (fastboot, a browser tab) and try again"
+                "the device's interface is busy ({e}); close other programs that use it (fastboot, a browser tab) and try again"
             ),
             OpenError::Permission(e) => write!(f, "not allowed to open the device ({e})"),
             OpenError::Usb(e) => write!(f, "usb: {e}"),
@@ -357,6 +358,7 @@ mod web {
     use std::task::Poll;
     use wasm_bindgen_futures::JsFuture;
     use wasm_bindgen_futures::wasm_bindgen::{JsCast, JsValue};
+    use web_sys::UsbDevice;
 
     /// A promise that resolves after `d` (setTimeout, in a page or a worker).
     fn sleep(d: Duration) -> JsFuture {
@@ -392,15 +394,15 @@ mod web {
         request_kind(Kind::Fastboot).await
     }
 
-    /// The same for a device with an interface of `kind`.
+    /// The same for a device with an interface of `kind`. The chooser and
+    /// the opening are the page's own WebUSB calls, so their failure keeps the
+    /// browser's reason (nusb logs it and answers only "WebUSB error"); the
+    /// device is then handed to nusb.
     pub async fn request_kind(kind: Kind) -> Result<(UsbTransport, UsbIds), OpenError> {
-        let info = nusb::request_device(&[kind_selector(kind)])
-            .await
-            .map_err(open_error)?
-            .ok_or(OpenError::NoDevice)?;
+        let device = choose(kind).await?;
         let mut waited = Duration::ZERO;
         loop {
-            match try_open(&info, kind).await {
+            match try_open(&device, kind).await {
                 Err(OpenError::Busy(_) | OpenError::Usb(_)) if waited < CLAIM_RETRY_FOR => {
                     sleep(CLAIM_RETRY_EVERY).await.ok();
                     waited += CLAIM_RETRY_EVERY;
@@ -410,11 +412,86 @@ mod web {
         }
     }
 
-    async fn try_open(info: &nusb::DeviceInfo, kind: Kind) -> Result<(UsbTransport, UsbIds), OpenError> {
-        let dev = info.open().await.map_err(open_error)?;
+    fn get(o: &JsValue, k: &str) -> JsValue {
+        js_sys::Reflect::get(o, &JsValue::from_str(k)).unwrap_or(JsValue::UNDEFINED)
+    }
+
+    fn set(o: &js_sys::Object, k: &str, v: u32) {
+        let _ = js_sys::Reflect::set(o, &JsValue::from_str(k), &JsValue::from(v));
+    }
+
+    /// The browser's chooser, listing only devices of `kind` (the filter nusb
+    /// would make: the interface's class, subclass and protocol, or the ids).
+    async fn choose(kind: Kind) -> Result<UsbDevice, OpenError> {
+        let usb = get(&get(&js_sys::global(), "navigator"), "usb");
+        if usb.is_undefined() {
+            return Err(OpenError::Usb("this browser has no WebUSB".into()));
+        }
+        let filter = js_sys::Object::new();
+        match kind.triple() {
+            Some((c, sc, p)) => {
+                set(&filter, "classCode", c.into());
+                set(&filter, "subclassCode", sc.into());
+                set(&filter, "protocolCode", p.into());
+            }
+            None => {
+                set(&filter, "vendorId", EDL_VENDOR_ID.into());
+                set(&filter, "productId", EDL_PRODUCT_ID.into());
+            }
+        }
+        let options = js_sys::Object::new();
+        let _ = js_sys::Reflect::set(&options, &JsValue::from_str("filters"), &js_sys::Array::of1(&filter));
+        let f = get(&usb, "requestDevice")
+            .dyn_into::<js_sys::Function>()
+            .map_err(|_| OpenError::Usb("this browser has no WebUSB".into()))?;
+        let p = f.call1(&usb, &options).map_err(|_| OpenError::NoDevice)?;
+        // Closed without a device (NotFoundError), or no device listed.
+        let d = JsFuture::from(js_sys::Promise::resolve(&p)).await.map_err(|_| OpenError::NoDevice)?;
+        Ok(d.unchecked_into())
+    }
+
+    /// The browser's reason (a DOMException's name and message) as an
+    /// [`OpenError`], by what Chromium rejects with (blink's usb_device.cc):
+    /// open() with SecurityError "Access denied." when the system doesn't let
+    /// it open the device (on Linux: no udev rule giving access);
+    /// claimInterface() with NetworkError "Unable to claim interface." when
+    /// the system refuses the claim: another program has it, or on Linux a
+    /// kernel driver is bound to it (both are EBUSY there, so the two can't be
+    /// told apart); NotFoundError once the device is gone.
+    pub fn browser_error(e: &JsValue) -> OpenError {
+        let name = get(e, "name").as_string().unwrap_or_default();
+        let message = get(e, "message").as_string().unwrap_or_else(|| format!("{e:?}"));
+        match name.as_str() {
+            "SecurityError" => OpenError::Permission(message),
+            "NetworkError" => OpenError::Busy(message),
+            "NotFoundError" => OpenError::NoDevice,
+            _ => OpenError::Usb(format!("{name}: {message}")),
+        }
+    }
+
+    async fn try_open(device: &UsbDevice, kind: Kind) -> Result<(UsbTransport, UsbIds), OpenError> {
+        // Resolves at once when it is open already (a retry).
+        JsFuture::from(device.open()).await.map_err(|e| browser_error(&e))?;
+        let dev = nusb::Device::from_js(device.clone()).await.map_err(open_error)?;
         let ids = usb_ids(&dev);
         let (n, o, i) = bulk_interface(&dev, kind).ok_or(OpenError::NoDevice)?;
-        let intf = dev.claim_interface(n).await.map_err(open_error)?;
+        let intf = match dev.claim_interface(n).await {
+            Ok(intf) => intf,
+            // The browser refused the claim; nusb kept only "WebUSB error".
+            // Asking again gives its reason (the same refusal), with `dev`
+            // still held so nothing closes the device meanwhile.
+            Err(e) if e.kind() == nusb::ErrorKind::Other => {
+                return Err(match JsFuture::from(device.claim_interface(n)).await {
+                    Err(e) => browser_error(&e),
+                    Ok(_) => {
+                        // Free by now: let go, and the caller tries again.
+                        let _ = JsFuture::from(device.release_interface(n)).await;
+                        OpenError::Busy("the interface was busy a moment ago".into())
+                    }
+                });
+            }
+            Err(e) => return Err(open_error(e)),
+        };
         Ok((endpoints(intf, o, i)?, ids))
     }
 
@@ -489,7 +566,7 @@ mod web {
 }
 
 #[cfg(target_arch = "wasm32")]
-pub use web::{request, request_kind};
+pub use web::{browser_error, request, request_kind};
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {

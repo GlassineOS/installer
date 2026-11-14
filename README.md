@@ -31,6 +31,29 @@ spec is [`specs/001-install-from-stock`](specs/001-install-from-stock/spec.md).
 For devices: on a computer connected to them, from Linux, Windows or a browser. For a PC:
 on the PC itself, started from removable media.
 
+### Setting up the computer once
+
+The installer talks to a device in its USB modes (its boot loader's, its emergency download
+mode). The computer has to let it, once:
+
+- **Linux:** `sudo glassine-install host-setup` installs the udev rules file
+  [`host/linux/70-glassine-installer.rules`](host/linux/70-glassine-installer.rules), reloads udev
+  and re-triggers the USB devices already connected. It lets the person logged in open each mode's
+  USB device without root (`uaccess`), keeps ModemManager away (`ID_MM_DEVICE_IGNORE`) and makes the
+  kernel's `qcserial` driver let go of the emergency download mode (05c6:9008) when it binds,
+  for that id only: a browser can't take an interface from a kernel driver. `glassine-install
+  host-setup --print` shows the file and what it runs, and changes nothing. In the browser, when
+  the device can't be opened or claimed, Reach and Back up show one line to paste into a terminal
+  that installs the same file; it carries the file in itself, so it needs no download and no
+  command line installed.
+- **Windows:** each USB mode needs the WinUSB driver, installed once with Zadig (Options > List
+  All Devices, the device's USB ID, WinUSB, Install Driver); `glassine-install host-setup` lists
+  the ids. No driver package is shipped: Windows installs only signed ones, and the devices don't
+  announce WinUSB themselves.
+
+The rules file is made from the device descriptions' `[[modes]] usb` (core `host_setup`); a
+test fails when the copy here differs (`make golden` rewrites it).
+
 ## The screens
 
 `web/` holds the installer's screens as static pages (decision 0015): Preact and htm as plain
