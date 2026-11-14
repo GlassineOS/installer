@@ -33,6 +33,6 @@ ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="18d1", ATTR{idProduct}=="4ee2", TAG
 
 # 05c6:9008: onyx-noteair:emergency
 ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="05c6", ATTR{idProduct}=="9008", TAG+="uaccess", ENV{ID_MM_DEVICE_IGNORE}="1"
-ENV{DEVTYPE}=="usb_interface", DRIVER=="qcserial", ATTRS{idVendor}=="05c6", ATTRS{idProduct}=="9008", RUN+="/bin/sh -c 'echo %k > /sys/bus/usb/drivers/qcserial/unbind'"
+ENV{DEVTYPE}=="usb_interface", DRIVER=="qcserial", ATTRS{idVendor}=="05c6", ATTRS{idProduct}=="9008", RUN+="/bin/sh -c 'test ! -e /sys/bus/usb/drivers/qcserial/%k || echo %k > /sys/bus/usb/drivers/qcserial/unbind'"
 
 LABEL="glassine_installer_end"
