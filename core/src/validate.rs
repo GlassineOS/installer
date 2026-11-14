@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //! Loading and checking descriptions: structure (FR-002, against the shape),
 //! then every rule of the format that needs more than the structure (FR-007a,
-//! FR-008, FR-009, FR-013, FR-014, FR-014a, FR-016a, FR-021, FR-022, FR-023,
-//! FR-023a, FR-025, FR-026 and what a description never holds).
+//! FR-008, FR-009, FR-013, FR-014, FR-014a, FR-016a, FR-018b, FR-021, FR-022,
+//! FR-023, FR-023a, FR-025, FR-026 and what a description never holds).
 
 use crate::format1::{self, Condition, Description, Scalar, Step, When};
 use crate::shape::{Problem, problem};
@@ -55,7 +55,8 @@ pub fn load(text: &str) -> Loaded {
         None if structural => {}
         None => out.push(problem("", format!("does not read as format {format}"))),
     }
-    out.extend(never_holds(text));
+    let allowed = d.as_ref().map(allowed_hashes).unwrap_or_default();
+    out.extend(never_holds_except(text, &allowed));
     match d {
         Some(d) if out.is_empty() => Loaded::Valid(Box::new(d)),
         _ => {
@@ -150,6 +151,14 @@ pub fn check(d: &Description) -> Vec<Problem> {
         let path = format!("modes[{i}]");
         if m.id == vocab::INSTALLER_MODE {
             ck.p(format!("{path}.id"), "`installer` is reserved for the installer's own records");
+        }
+        if let Some(n) = &m.needs {
+            if d.supplied_file(n).is_none() {
+                ck.p(format!("{path}.needs"), format!("no supplied file {n:?}"));
+            }
+            if vocab::supplied_matches(&m.kind).is_empty() {
+                ck.p(format!("{path}.needs"), format!("a mode of kind {:?} runs no supplied program", m.kind));
+            }
         }
         match vocab::mode_kind(&m.kind) {
             Some(k) if !k.backends.contains(&backend) => ck.p(
@@ -286,6 +295,7 @@ pub fn check(d: &Description) -> Vec<Problem> {
     }
     unique(&mut ck, d.device_files.iter().map(|u| u.id.as_str()), "device_files", "id");
     check_device_data(&mut ck);
+    check_supplied_files(&mut ck);
     unique(&mut ck, d.artifacts.iter().map(|a| a.role.as_str()), "artifacts", "role");
     for (i, c) in d.capabilities.iter().enumerate() {
         let path = format!("capabilities[{i}]");
@@ -414,12 +424,142 @@ pub fn check(d: &Description) -> Vec<Problem> {
     for (name, map, _) in &maps {
         texts.extend(map.iter().map(|(k, v)| (crate::shape::join(&format!("texts.{name}"), k), v.as_str())));
     }
+    for (k, st) in &d.texts.supplied_files {
+        let base = crate::shape::join("texts.supplied_files", k);
+        if !d.supplied_files.iter().any(|f| f.what == *k) {
+            ck.p(&base, format!("no supplied file's what is {k:?}"));
+        }
+        for (part, t) in [("what", &st.what), ("why", &st.why), ("recognise", &st.recognise)] {
+            let path = format!("{base}.{part}");
+            if t.trim().is_empty() {
+                ck.p(&path, "is empty");
+            }
+            if looks_like_link(t) {
+                ck.p(&path, "names no place to get the file: no links (FR-018b)");
+            }
+            texts.push((path, t.as_str()));
+        }
+    }
     for (path, t) in texts {
         if let Some(why) = markup(t) {
             ck.p(path, format!("plain text only, no markup ({why})"));
         }
     }
     ck.out
+}
+
+/// A string that looks like a link: a scheme or a `www.` host.
+pub fn looks_like_link(t: &str) -> bool {
+    let l = t.to_ascii_lowercase();
+    l.contains("://") || l.contains("www.")
+}
+
+/// The supplied files (FR-018b): each needed by a mode that runs a supplied
+/// program, its `matches` exactly the keys that mode's route checks, its
+/// texts there (FR-026), and nothing in it that looks like a link: a
+/// description never names a place to get a file.
+fn check_supplied_files(ck: &mut Ck) {
+    let d = ck.d;
+    unique(ck, d.supplied_files.iter().map(|f| f.id.as_str()), "supplied_files", "id");
+    for (i, f) in d.supplied_files.iter().enumerate() {
+        let path = format!("supplied_files[{i}]");
+        let mut strings: Vec<(String, &str)> = vec![
+            (format!("{path}.id"), f.id.as_str()),
+            (format!("{path}.what"), f.what.as_str()),
+            (format!("{path}.usual_name"), f.usual_name.as_str()),
+        ];
+        strings.extend(f.matches.iter().map(|(k, v)| (format!("{path}.matches.{k}"), v.as_str())));
+        for (j, k) in f.known.iter().enumerate() {
+            let kp = format!("{path}.known[{j}]");
+            strings.push((format!("{kp}.sha256"), k.sha256.as_str()));
+            if let Some(u) = &k.untried {
+                strings.push((format!("{kp}.untried"), u.as_str()));
+            }
+            if let Some(v) = &k.verified {
+                strings.push((format!("{kp}.verified.record"), v.record.as_str()));
+                strings.push((format!("{kp}.verified.boot_loader"), v.boot_loader.as_str()));
+            }
+        }
+        for (p, v) in strings {
+            if looks_like_link(v) {
+                ck.p(p, "names no place to get the file: no links (FR-018b)");
+            }
+        }
+        if f.usual_name.trim().is_empty() {
+            ck.p(format!("{path}.usual_name"), "is empty");
+        }
+        if !d.texts.supplied_files.contains_key(&f.what) {
+            ck.p(
+                format!("{path}.what"),
+                format!(
+                    "no texts.supplied_files.{} (what it is, why GlassineOS can't supply it, how to recognise it)",
+                    f.what
+                ),
+            );
+        }
+        unique(ck, f.known.iter().map(|k| k.sha256.as_str()), &format!("{path}.known"), "sha256");
+        for (j, k) in f.known.iter().enumerate() {
+            check_tried(ck, &k.verified, &format!("{path}.known[{j}]"));
+        }
+        let needing: Vec<&format1::Mode> = d.modes.iter().filter(|m| m.needs.as_deref() == Some(f.id.as_str())).collect();
+        if needing.is_empty() {
+            ck.p(format!("{path}.id"), "no mode needs it");
+        }
+        let kinds: BTreeSet<&str> = needing.iter().map(|m| m.kind.as_str()).collect();
+        for kind in kinds {
+            let route = vocab::supplied_matches(kind);
+            if route.is_empty() {
+                continue; // the mode's `needs` says so
+            }
+            for m in &route {
+                match f.matches.get(m.key) {
+                    None => ck.p(format!("{path}.matches.{}", m.key), format!("the {kind} route checks {} (missing)", m.key)),
+                    Some(v) if !regex_lite::Regex::new(m.pattern).is_ok_and(|r| r.is_match(v)) => {
+                        ck.p(format!("{path}.matches.{}", m.key), format!("{v:?} does not have the form {}", m.pattern))
+                    }
+                    Some(_) => {}
+                }
+            }
+            for k in f.matches.keys() {
+                if !route.iter().any(|m| m.key == k) {
+                    ck.p(format!("{path}.matches.{k}"), format!("the {kind} route doesn't check {k:?}"));
+                }
+            }
+            // The boot ROM's facts the identity names agree with the file's (FR-018b).
+            for (j, c) in d.identity.iter().enumerate() {
+                for m in route.iter().filter(|m| m.fact_key == c.key) {
+                    if let (Some(Scalar::Text(want)), Some(v)) = (&c.equals, f.matches.get(m.key))
+                        && want != v
+                    {
+                        ck.p(format!("{path}.matches.{}", m.key), format!("{v:?} is not identity[{j}]'s {want:?}"));
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The hashes a description may hold (format 3): a supplied file's known
+/// checksums and the values its route checks it against, and the boot ROM's
+/// key hash an identity signal or condition tests (FR-018b).
+fn allowed_hashes(d: &Description) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    if d.format < 3 {
+        return out;
+    }
+    for f in &d.supplied_files {
+        out.extend(f.known.iter().map(|k| k.sha256.to_ascii_lowercase()));
+        out.extend(f.matches.values().map(|v| v.to_ascii_lowercase()));
+    }
+    let keys: BTreeSet<&str> = vocab::SUPPLIED_MATCHES.iter().map(|m| m.fact_key).collect();
+    for c in &d.identity {
+        if keys.contains(c.key.as_str())
+            && let Some(Scalar::Text(v)) = &c.equals
+        {
+            out.insert(v.to_ascii_lowercase());
+        }
+    }
+    out
 }
 
 /// The device-data files (FR-018) as boot 006 FR-001..FR-005 reads them: each a
@@ -487,7 +627,7 @@ fn looks_unit_unique_name(n: &str) -> bool {
 /// The test fits the fact's type; the key is in the vocabulary and is no
 /// unit-unique value.
 fn check_test(ck: &mut Ck, c: &Condition, path: &str) {
-    let Some((fk, param)) = vocab::fact_key(&c.key) else {
+    let Some((fk, param)) = vocab::fact_key_in(&c.key, ck.d.format) else {
         ck.p(format!("{path}.key"), format!("unknown fact key {:?} (FR-025)", c.key));
         return;
     };
@@ -956,10 +1096,17 @@ pub fn markup(t: &str) -> Option<&'static str> {
 /// What a description never holds, as far as the text shows it: hashes or
 /// unit values written out (long runs of hex digits).
 pub fn never_holds(text: &str) -> Vec<Problem> {
+    never_holds_except(text, &BTreeSet::new())
+}
+
+/// [`never_holds`], but a run of hex digits that is one of `allowed` (lower
+/// case), as a whole, is not a problem: the checksums and key hashes format 3
+/// lets a supplied file hold (FR-018b, [`allowed_hashes`]).
+pub fn never_holds_except(text: &str, allowed: &BTreeSet<String>) -> Vec<Problem> {
     let hex = regex_lite::Regex::new(r"[0-9a-fA-F]{32,}").unwrap();
     let mut out = Vec::new();
     for (n, line) in text.lines().enumerate() {
-        if hex.is_match(line) {
+        if hex.find_iter(line).any(|m| !allowed.contains(&m.as_str().to_ascii_lowercase())) {
             out.push(problem(
                 &format!("line {}", n + 1),
                 "holds a long hex string: a description never holds hashes, keys or unit values",

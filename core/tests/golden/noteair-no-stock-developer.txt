@@ -57,10 +57,10 @@ Afterwards the device:
   lack keep-stock [untried]
 
 Steps:
-  1. back-up (back-up, in ram) [safe stop]
-     Back up the device's whole storage, every partition and the partition table, to this computer, and check the backup by reading it back.
-     if it fails: previous-system-starts via transition ram-to-android
-     if cut off after it: previous-system-starts via transition ram-to-android
+  1. back-up (back-up, in emergency) [safe stop]
+     Back up the device's whole storage, every partition and the partition table, to this computer, through its emergency mode and the programmer you supplied, and check the backup by reading it back.
+     if it fails: previous-system-starts via transition emergency-by-hand
+     if cut off after it: previous-system-starts via transition emergency-by-hand
   2. replace-boot-loader (write-boot-loader, in fastboot-stock) [untried, point of no return, safe stop]
      Replace the boot loader with GlassineOS's. From here there is no way back without the backup, and if this step fails only the emergency-mode cable helps.
      if it fails: special-hardware (emergency-cable) via transition cable-to-emergency

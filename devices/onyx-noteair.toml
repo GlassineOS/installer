@@ -7,7 +7,7 @@
 # ships a copy (devices/lock.toml). Only what a recorded run shows is
 # `verified`; everything else is `untried`, with what is known in its note.
 
-format = 2
+format = 3
 id = "onyx-noteair"
 name = "Onyx Boox Note Air"
 backend = "android-bootloader"
@@ -31,6 +31,21 @@ key = "fastboot.var.hw-revision"
 equals = "10000"
 required = false
 untried = "the stock boot loader answered getvar all with it in development (2026-03-17); not a recorded run"
+
+# What the boot ROM reports in the emergency mode, before anything is sent:
+# the chip (Snapdragon 636) and the hash of the maker's signing key, the same
+# on every unit. Supporting only: no other mode can see them.
+[[identity]]
+key = "emergency.chip"
+equals = "000cc0e1"
+required = false
+verified = { record = "GlassineOS/installer#18", state = "installed", boot_loader = "GlassineOS boot loader, abl tag glassine1" }
+
+[[identity]]
+key = "emergency.pk-hash"
+equals = "7be49b72f9e4337223ccb84d6eccca4e61ce16e3602ac2008cb18b75babe6d09"
+required = false
+verified = { record = "GlassineOS/installer#18", state = "installed", boot_loader = "GlassineOS boot loader, abl tag glassine1" }
 
 # ---- install states -----------------------------------------------------------
 # Fastboot can't tell prepared from installed (both have the GlassineOS boot
@@ -113,16 +128,16 @@ kind = "check-slot-flags"
 params = { operation = "boot-image", reason = "on the A/B layout, booting an image writes the partition table (GPT) only when the active slot isn't marked successful or is marked unbootable; it also marks the active slot's partitions active again, which writes only where those bits differ from the disk, and they can't be read beforehand" }
 untried = "from the boot loader's source (CmdBoot, FindBootableSlot, UpdatePartitionAttributes); not a recorded run"
 
-# A GlassineOS environment the stock boot loader starts from memory, for the
-# backup. On the single-slot stock layout booting an image doesn't touch slot
-# flags, so reaching it writes nothing.
+# A GlassineOS environment the boot loader starts from memory. Not a way to
+# this device's backup: its boot loaders never start a kernel sent with
+# fastboot boot, so the backup reads through the emergency mode instead.
 [[modes]]
 id = "ram"
 kind = "glassine-ram"
 usb = { vendor_id = "1d6b", product_id = "0104", interface = "ff-47-52" }
 can = ["identify", "read"]
 restarts_into = ["fastboot-stock", "android"]
-untried = "the RAM environment is built (GlassineOS/images, ramenv) and passes its QEMU test, but it hasn't run on the device"
+untried = "not reachable on this device: fastboot boot never starts a kernel here (development); the RAM environment passes its QEMU test only"
 
 [[modes]]
 id = "android"
@@ -132,18 +147,46 @@ can = ["identify"]
 restarts_into = ["fastboot-stock", "emergency"]
 untried = "the stock Android with USB debugging on; not used by the installer yet"
 
+# The SoC's emergency download mode: the backup reads the whole storage
+# through it, with a programmer the person supplies, before anything changes.
+# It is also the way out of a broken boot loader.
 [[modes]]
 id = "emergency"
 kind = "emergency-download"
 usb = { vendor_id = "05c6", product_id = "9008" }
 can = ["identify", "read", "write"]
-untried = "the SoC's emergency download mode; a plain installation never uses it, it is only the way out of a broken boot loader"
+restarts_into = ["android"]
+needs = "emergency-programmer"
+untried = "its boot ROM answered and ran a supplied programmer in development (GlassineOS/installer#18, 2026-11-13); the installer's reads through the programmer aren't built yet"
 
 [[modes]]
 id = "glassine"
 kind = "glassine-usb"
 can = []
 untried = "GlassineOS's own USB mode isn't built yet"
+
+[[transitions]]
+id = "android-to-emergency"
+from = "android"
+to = "emergency"
+by = "installer"
+needs = ["usb-debugging"]
+untried = "adb reboot edl from stock Android reached the boot ROM without root in development (GlassineOS/installer#18, 2026-11-14); not a recorded run"
+
+[[transitions]]
+id = "emergency-to-android"
+from = "emergency"
+to = "android"
+by = "installer"
+untried = "a reset through the programmer once the reads are done; the installer's programmer client isn't built yet"
+
+[[transitions]]
+id = "emergency-by-hand"
+from = "emergency"
+to = "android"
+by = "hand"
+needs = ["hands"]
+untried = "holding the power button left the mode and started Android every time in development (GlassineOS/installer#18, 2026-11-13); not a recorded run"
 
 [[transitions]]
 id = "android-to-fastboot-stock"
@@ -173,21 +216,21 @@ id = "fastboot-stock-to-ram"
 from = "fastboot-stock"
 to = "ram"
 by = "installer"
-untried = "boots the ram-environment artifact from the stock boot loader; needs the untried equal-length framing, and that boot leaves the single-slot layout's flags alone is read from the boot loader's source, not tried"
+untried = "boots the ram-environment artifact from the stock boot loader; fastboot boot never starts a kernel on this device (development), so this way isn't used"
 
 [[transitions]]
 id = "ram-to-fastboot-stock"
 from = "ram"
 to = "fastboot-stock"
 by = "installer"
-untried = "the RAM environment isn't built yet"
+untried = "not reachable on this device: fastboot boot never starts a kernel here"
 
 [[transitions]]
 id = "ram-to-android"
 from = "ram"
 to = "android"
 by = "installer"
-untried = "the RAM environment isn't built yet"
+untried = "not reachable on this device: fastboot boot never starts a kernel here"
 
 [[transitions]]
 id = "fastboot-stock-to-fastboot"
@@ -270,12 +313,13 @@ select = { name = "userdata" }
 class = "resize"
 destroys = true
 
-# The backup is the whole eMMC user area, read by the RAM environment: the
-# partition table and every partition as one image, about 9.2 GB (8.5 GiB) compressed.
+# The backup is the whole eMMC user area, read through the emergency mode with
+# the supplied programmer: the partition table and every partition as one
+# image, about 9.2 GB (8.5 GiB) compressed.
 [[partitions]]
 select = { role = "disk" }
 class = "never-write"
-back_up = { mode = "ram", means = "glassine-read", check = "read-back-compare", size = 9200000000 }
+back_up = { mode = "emergency", means = "emergency-read", check = "read-back-compare", size = 9200000000 }
 
 [[boot_settings]]
 id = "boot-loader"
@@ -382,6 +426,21 @@ partition = "persist"
 path = "/sensors/sns.reg"
 what = "sensor calibration"
 
+# ---- what the person supplies ---------------------------------------------------
+
+# The programmer the emergency mode runs for the backup: signed by the chip's
+# maker, so GlassineOS can't ship it (004). Its name starts with the chip's
+# hardware id and the key hash's first half.
+[[supplied_files]]
+id = "emergency-programmer"
+what = "emergency-programmer"
+usual_name = "000cc0e100000000_7be49b72f9e43372_"
+matches = { chip = "000cc0e1", pk_hash = "7be49b72f9e4337223ccb84d6eccca4e61ce16e3602ac2008cb18b75babe6d09" }
+
+[[supplied_files.known]]
+sha256 = "b3e409558677f9b280fed7851e8cc66f0079ad78ef0b07519a3a98d86c14d41b"
+untried = "the edl tool read and wrote the Note Air through it in development (2026-06-02); not a recorded installer run"
+
 # ---- what an installation does ------------------------------------------------
 
 [[artifacts]]
@@ -468,15 +527,15 @@ states = ["stock", "prepared"]
 id = "back-up"
 job = "install"
 kind = "back-up"
-mode = "ram"
+mode = "emergency"
 backs_up = ["role:disk"]
 boot_settings = ["boot-loader", "slot-flags"]
 done = [{ key = "installer.backup-verified", present = true, mode = "installer" }]
-escape.failure = { leaves = "previous-system-starts", way_out = { transition = "ram-to-android" } }
-escape.interruption = { leaves = "previous-system-starts", way_out = { transition = "ram-to-android" } }
+escape.failure = { leaves = "previous-system-starts", way_out = { transition = "emergency-by-hand" } }
+escape.interruption = { leaves = "previous-system-starts", way_out = { transition = "emergency-by-hand" } }
 point_of_no_return = false
 safe_stop = true
-untried = "the RAM environment that reads the partitions isn't built yet"
+untried = "the installer's reads through the supplied programmer aren't built yet; the edl tool read the whole storage through it in development"
 
 [[steps]]
 id = "replace-boot-loader"
@@ -601,13 +660,14 @@ name = "Onyx Boox Note Air"
 fastboot-stock = "No way by hand is known for the stock boot loader. Leave the device on with USB debugging on, and the installer restarts it into the boot loader."
 fastboot = "Close the cover, then press the power button and hold it for about 3 seconds while the cover stays closed."
 android = "Start the device normally. To let the installer in, turn on USB debugging in the developer settings."
-emergency = "Needs the emergency-mode cable: let the battery run empty, then connect the cable and start the device."
-ram = "The installer starts this itself from the boot loader; there is no way by hand."
+emergency = "The installer restarts the device into it from Android, with USB debugging on. Without a working system only the emergency-mode cable helps: let the battery run empty, then connect the cable and start the device."
+ram = "Not used on this device: its boot loader can't start a system sent over USB."
 glassine = "Start the device normally."
 
 [texts.transitions]
 fastboot-stock-by-hand = "There is no known way to reach the stock boot loader by hand on this device: it has no volume keys. Use USB debugging instead."
 fastboot-by-hand = "Close the cover, then press the power button and hold it for about 3 seconds while the cover stays closed."
+emergency-by-hand = "Hold the power button for about 10 seconds: the device leaves its emergency mode and starts Android."
 cable-to-emergency = "Let the battery run completely empty. Connect the emergency-mode cable to the computer and the device, then start the device."
 
 [texts.choices]
@@ -618,7 +678,7 @@ keep-stock = "Keep the stock Android system next to GlassineOS."
 "keep-stock.no" = "Don't keep Android. It is never started again, unless you go back to stock."
 
 [texts.steps]
-back-up = "Back up the device's whole storage, every partition and the partition table, to this computer, and check the backup by reading it back."
+back-up = "Back up the device's whole storage, every partition and the partition table, to this computer, through its emergency mode and the programmer you supplied, and check the backup by reading it back."
 replace-boot-loader = "Replace the boot loader with GlassineOS's. From here there is no way back without the backup, and if this step fails only the emergency-mode cable helps."
 partition-table = "Give the device a second slot for GlassineOS. The data partition is made smaller: everything on it is deleted."
 write-kernel = "Write the GlassineOS kernel to slot B."
@@ -626,3 +686,8 @@ write-base = "Write GlassineOS to slot B."
 write-recovery = "Write the GlassineOS recovery."
 set-slot = "Start GlassineOS by default."
 retire-stock = "Stop Android from starting."
+
+[texts.supplied_files.emergency-programmer]
+what = "A small program, signed by the chip's maker, that the Note Air runs in its emergency mode. Through it the installer reads the whole device for the backup, before anything changes. It isn't on the device, so the installer can't read it from there."
+why = "It belongs to the chip's maker, and GlassineOS may not pass it on. You find it yourself, for your own device. It stays on this computer, is used only for this backup, and is never uploaded."
+recognise = "Files for Qualcomm's emergency mode are named after the chip and its signing key. Search for a file whose name starts with the name shown; the end of the name varies. It must be a Firehose programmer for eMMC storage that works on the Snapdragon 636. The installer checks the file before it sends anything, and refuses one made for another chip or key."
