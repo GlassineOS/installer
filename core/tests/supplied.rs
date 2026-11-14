@@ -515,3 +515,49 @@ fn the_devices_report_comes_before_known_not_to_work() {
     let pk = d.supplied_files[0].matches["pk_hash"].clone();
     assert!(matches!(check(&d, b"x", Some(&device(CHIP, &pk))), Verdict::KnownBad { .. }));
 }
+
+// ---- the screens' records -------------------------------------------------------
+
+/// The web screens' test records (web/fixtures/supplied/): one synthetic file
+/// (as hex text) and the core's check record of it per verdict, made with the Note Air's
+/// own description (only its checksum lists point at the synthetic files
+/// where a verdict needs that). With fixtures, the Supply screen answers a
+/// picked file with the record of the same checksum; live, the core in the
+/// page checks the file itself (web/test/live.js compares the two where the
+/// shipped description gives the same answer).
+#[test]
+fn the_screens_records() {
+    let (known, _) = programmer(false, 5, HW_ID, "Root CA");
+    let (fits, _) = programmer(true, 5, HW_ID, "Another root");
+    let (wrong, _) = programmer(false, 5, "0014D0E100000000", "Root CA");
+    let (bad, _) = programmer(false, 5, HW_ID, "A root seen not working");
+    let garbage = b"hello, world\n".to_vec();
+    let sum = |b: &[u8]| hex(&Sha256::digest(b));
+    let shipped = valid(&noteair());
+    let with_known = valid(&mutate(&noteair(), DESC_KNOWN, &sum(&known)));
+    let with_bad = valid(&mutate(&noteair(), DESC_BAD, &sum(&bad)));
+    let other_device = device("0014d0e1", OTHER);
+    let cases: [(&str, &Description, &[u8], Option<&DeviceValues>); 5] = [
+        ("known", &with_known, &known, None),
+        ("fits-unknown", &shipped, &fits, None),
+        ("wrong-chip-or-key", &shipped, &wrong, Some(&other_device)),
+        ("known-bad", &with_bad, &bad, None),
+        ("not-a-programmer", &shipped, &garbage, None),
+    ];
+    for (name, d, bytes, dev) in cases {
+        let c = supplied::check(d, "emergency-programmer", bytes, dev).unwrap();
+        let v: serde_json::Value = serde_json::to_value(&c).unwrap();
+        assert_eq!(v["verdict"], name, "{name}");
+        golden(&format!("web/fixtures/supplied/{name}.hex"), &hex_lines(bytes));
+        golden(
+            &format!("web/fixtures/supplied/{name}.json"),
+            &(serde_json::to_string_pretty(&c).unwrap() + "\n"),
+        );
+    }
+}
+
+/// A file's bytes as text: hex, 64 digits a line (the web tests write the file back from it; a
+/// binary file isn't kept in the repository).
+fn hex_lines(b: &[u8]) -> String {
+    b.chunks(32).map(|c| hex(c) + "\n").collect()
+}
