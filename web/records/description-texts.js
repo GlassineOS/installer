@@ -4,7 +4,8 @@
 // `to` and `by` of each `[[modes]]` and `[[transitions]]` entry. The core in the browser hands over
 // the source of the copy it carries; with fixtures, it is the repository's file. It reads only that subset: inside
 // `[texts.*]` every line must be `key = "string"`, anything else there is an error, and every
-// other table is skipped.
+// other table is skipped. A supplied file's texts (format 3) are one table each,
+// `[texts.supplied_files.<key>]`, read into `texts.supplied_files[key]`.
 
 const KEY = String.raw`(?:[A-Za-z0-9_-]+|"(?:[^"\\]|\\.)*")`;
 const STRING = String.raw`"(?:[^"\\]|\\.)*"`;
@@ -14,7 +15,7 @@ const TABLE = /^\[([A-Za-z0-9_.-]+)\]\s*(?:#.*)?$/;
 const unquote = (s) => (s.startsWith('"') ? JSON.parse(s) : s);
 
 export function descriptionTexts(source, file = 'description') {
-  const out = { id: null, name: null, backend: null, modes: [], transitions: [], texts: { name: null, modes: {}, transitions: {}, choices: {}, options: {}, steps: {} } };
+  const out = { id: null, name: null, backend: null, modes: [], transitions: [], texts: { name: null, modes: {}, transitions: {}, choices: {}, options: {}, steps: {}, supplied_files: {} } };
   let table = ''; // '' = top level, null = inside an array of tables
   let entry = null; // the [[modes]] or [[transitions]] entry being read
   const lines = source.split('\n');
@@ -47,9 +48,12 @@ export function descriptionTexts(source, file = 'description') {
       if (key === 'id' || key === 'name' || key === 'backend') out[key] = value;
     } else if (table === 'texts') {
       if (key === 'name') out.texts.name = value;
+    } else if (table.startsWith('texts.supplied_files.')) {
+      const which = table.slice('texts.supplied_files.'.length);
+      (out.texts.supplied_files[which] ??= {})[key] = value;
     } else {
       const section = table.slice('texts.'.length);
-      if (!(section in out.texts) || section === 'name') throw new Error(`${file}:${i + 1}: unknown texts table [${table}]`);
+      if (!(section in out.texts) || section === 'name' || section === 'supplied_files') throw new Error(`${file}:${i + 1}: unknown texts table [${table}]`);
       out.texts[section][key] = value;
     }
   });

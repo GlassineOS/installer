@@ -5,7 +5,7 @@
 #
 # Nothing here has been tried on real hardware yet.
 
-format = 2
+format = 3
 id = "uefi-pc"
 name = "UEFI PC (x86-64)"
 backend = "uefi-pc"
