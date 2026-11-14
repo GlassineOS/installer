@@ -35,7 +35,7 @@ lint:
 descriptions:
 	$(CARGO) build -p glassine-install
 	$(BIN) validate --lock devices/lock.toml
-	$(BIN) schema | cmp - schema/device-description-2.schema.json
+	$(BIN) schema | cmp - schema/device-description-3.schema.json
 	@for f in $(FACTS); do \
 		{ $(BIN) check --facts $$f --json || [ $$? = 3 ]; } | cmp - web/fixtures/reports/$$(basename $$f) \
 			|| { echo "web/fixtures/reports/$$(basename $$f) is stale: make web-records" >&2; exit 1; }; \

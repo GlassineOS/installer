@@ -28,6 +28,8 @@ pub enum FactKind {
     Board,
     Glassine,
     Installer,
+    /// What a chip's boot ROM reports in its emergency mode (format 3).
+    BootRom,
 }
 
 impl FactKind {
@@ -42,6 +44,7 @@ impl FactKind {
             FactKind::Board => "board",
             FactKind::Glassine => "glassine",
             FactKind::Installer => "installer",
+            FactKind::BootRom => "boot-rom",
         }
     }
 }
@@ -58,6 +61,8 @@ pub struct FactKey {
     pub modes: &'static [&'static str],
     /// A value unique to one unit: never in a description, never in a report.
     pub unit_unique: bool,
+    /// The first format it is in.
+    pub since: i64,
     pub doc: &'static str,
 }
 
@@ -71,6 +76,7 @@ pub const FACT_KEYS: &[FactKey] = &[
         kind: FactKind::Usb,
         modes: ANY_DEVICE_USB,
         unit_unique: false,
+        since: 1,
         doc: "USB vendor id, four lower-case hex digits",
     },
     FactKey {
@@ -79,6 +85,7 @@ pub const FACT_KEYS: &[FactKey] = &[
         kind: FactKind::Usb,
         modes: ANY_DEVICE_USB,
         unit_unique: false,
+        since: 1,
         doc: "USB product id, four lower-case hex digits",
     },
     FactKey {
@@ -87,6 +94,7 @@ pub const FACT_KEYS: &[FactKey] = &[
         kind: FactKind::Usb,
         modes: ANY_DEVICE_USB,
         unit_unique: false,
+        since: 1,
         doc: "an interface with class-subclass-protocol <name> (hex, e.g. ff-42-03)",
     },
     FactKey {
@@ -95,6 +103,7 @@ pub const FACT_KEYS: &[FactKey] = &[
         kind: FactKind::Usb,
         modes: ANY_DEVICE_USB,
         unit_unique: true,
+        since: 1,
         doc: "the USB serial number (unit-unique; never in a description)",
     },
     FactKey {
@@ -103,6 +112,7 @@ pub const FACT_KEYS: &[FactKey] = &[
         kind: FactKind::BootLoader,
         modes: &["fastboot"],
         unit_unique: false,
+        since: 1,
         doc: "the boot loader's answer to getvar:<name>; absent when it answers FAIL",
     },
     FactKey {
@@ -111,6 +121,7 @@ pub const FACT_KEYS: &[FactKey] = &[
         kind: FactKind::System,
         modes: &["android-adb"],
         unit_unique: false,
+        since: 1,
         doc: "a system property of the running stock Android",
     },
     FactKey {
@@ -119,6 +130,7 @@ pub const FACT_KEYS: &[FactKey] = &[
         kind: FactKind::Storage,
         modes: STORAGE_MODES,
         unit_unique: false,
+        since: 1,
         doc: "a partition named <name> exists",
     },
     FactKey {
@@ -127,6 +139,7 @@ pub const FACT_KEYS: &[FactKey] = &[
         kind: FactKind::Storage,
         modes: STORAGE_MODES,
         unit_unique: false,
+        since: 1,
         doc: "the size of partition <name> in bytes",
     },
     FactKey {
@@ -135,6 +148,7 @@ pub const FACT_KEYS: &[FactKey] = &[
         kind: FactKind::Storage,
         modes: &["local"],
         unit_unique: false,
+        since: 1,
         doc: "the kind of the first disk: emmc, ufs, nvme, sata, usb, other",
     },
     FactKey {
@@ -143,6 +157,7 @@ pub const FACT_KEYS: &[FactKey] = &[
         kind: FactKind::Firmware,
         modes: &["local"],
         unit_unique: false,
+        since: 1,
         doc: "how the machine starts: uefi or bios",
     },
     FactKey {
@@ -151,6 +166,7 @@ pub const FACT_KEYS: &[FactKey] = &[
         kind: FactKind::Firmware,
         modes: &["local"],
         unit_unique: false,
+        since: 1,
         doc: "UEFI secure boot: on, off or setup",
     },
     FactKey {
@@ -159,6 +175,7 @@ pub const FACT_KEYS: &[FactKey] = &[
         kind: FactKind::Cpu,
         modes: &["local"],
         unit_unique: false,
+        since: 1,
         doc: "the processor architecture: x86-64 or arm64",
     },
     FactKey {
@@ -167,6 +184,7 @@ pub const FACT_KEYS: &[FactKey] = &[
         kind: FactKind::Cpu,
         modes: &["local"],
         unit_unique: false,
+        since: 1,
         doc: "the processor's maker as the processor reports it",
     },
     FactKey {
@@ -175,6 +193,7 @@ pub const FACT_KEYS: &[FactKey] = &[
         kind: FactKind::Board,
         modes: &["local"],
         unit_unique: false,
+        since: 1,
         doc: "the system's maker (SMBIOS)",
     },
     FactKey {
@@ -183,6 +202,7 @@ pub const FACT_KEYS: &[FactKey] = &[
         kind: FactKind::Board,
         modes: &["local"],
         unit_unique: false,
+        since: 1,
         doc: "the system's product name (SMBIOS)",
     },
     FactKey {
@@ -191,6 +211,7 @@ pub const FACT_KEYS: &[FactKey] = &[
         kind: FactKind::Board,
         modes: &["local"],
         unit_unique: true,
+        since: 1,
         doc: "the system's serial number (unit-unique; never in a description)",
     },
     FactKey {
@@ -199,6 +220,7 @@ pub const FACT_KEYS: &[FactKey] = &[
         kind: FactKind::Board,
         modes: &["local"],
         unit_unique: true,
+        since: 1,
         doc: "the system's UUID (unit-unique; never in a description)",
     },
     FactKey {
@@ -207,6 +229,7 @@ pub const FACT_KEYS: &[FactKey] = &[
         kind: FactKind::Glassine,
         modes: &["glassine-usb", "local"],
         unit_unique: false,
+        since: 1,
         doc: "a GlassineOS installation record on the machine",
     },
     FactKey {
@@ -215,6 +238,7 @@ pub const FACT_KEYS: &[FactKey] = &[
         kind: FactKind::Installer,
         modes: &["installer"],
         unit_unique: false,
+        since: 1,
         doc: "this job's backup is on the computer and verified",
     },
     FactKey {
@@ -223,7 +247,28 @@ pub const FACT_KEYS: &[FactKey] = &[
         kind: FactKind::Installer,
         modes: &["installer"],
         unit_unique: false,
+        since: 1,
         doc: "the installer's record says step <name> completed",
+    },
+    // From format 3 on: what the boot ROM of an emergency download mode
+    // reports in Sahara's command mode, before anything is sent.
+    FactKey {
+        pattern: "emergency.chip",
+        ty: FactType::Text,
+        kind: FactKind::BootRom,
+        modes: &["emergency-download"],
+        unit_unique: false,
+        since: 3,
+        doc: "the chip the boot ROM reports: the msm id, the upper 32 bits of its hardware id, eight lower-case hex digits (SDM636: 000cc0e1)",
+    },
+    FactKey {
+        pattern: "emergency.pk-hash",
+        ty: FactType::Text,
+        kind: FactKind::BootRom,
+        modes: &["emergency-download"],
+        unit_unique: false,
+        since: 3,
+        doc: "the hash of the maker's signing key the boot ROM reports (the OEM PK hash, the SHA-256 or SHA-384 of the root certificate), lower-case hex; the same on every unit of a model",
     },
 ];
 
@@ -249,7 +294,12 @@ pub const INSTALLER_MODE: &str = "installer";
 
 /// Finds the fact key a concrete key belongs to and the parameter it fills.
 pub fn fact_key(key: &str) -> Option<(&'static FactKey, Option<String>)> {
-    for fk in FACT_KEYS {
+    fact_key_in(key, crate::format1::FORMAT)
+}
+
+/// [`fact_key`] among the keys of one format.
+pub fn fact_key_in(key: &str, format: i64) -> Option<(&'static FactKey, Option<String>)> {
+    for fk in FACT_KEYS.iter().filter(|k| k.since <= format) {
         match fk.pattern.find("<name>") {
             None if fk.pattern == key => return Some((fk, None)),
             None => {}
@@ -531,6 +581,42 @@ pub const DEPARTURES: &[Kind] = &[
         ],
     },
 ];
+
+/// What a route checks a supplied file against (FR-018b): for each mode kind
+/// that runs a program the person supplies, the keys of a supplied file's
+/// `matches`, each with the fact key the mode's boot ROM reports it as. A mode
+/// kind with no entry here runs no supplied program. From format 3 on.
+#[derive(Debug)]
+pub struct SuppliedMatch {
+    pub mode_kind: &'static str,
+    pub key: &'static str,
+    pub fact_key: &'static str,
+    pub pattern: &'static str,
+    pub doc: &'static str,
+}
+
+pub const SUPPLIED_MATCHES: &[SuppliedMatch] = &[
+    SuppliedMatch {
+        mode_kind: "emergency-download",
+        key: "chip",
+        fact_key: "emergency.chip",
+        pattern: "^[0-9a-f]{8}$",
+        doc: "the chip the programmer is for: the msm id, eight lower-case hex digits",
+    },
+    SuppliedMatch {
+        mode_kind: "emergency-download",
+        key: "pk_hash",
+        fact_key: "emergency.pk-hash",
+        pattern: "^([0-9a-f]{64}|[0-9a-f]{96})$",
+        doc: "the hash of the signing key the programmer must be signed with: the whole OEM PK hash the boot ROM reports, lower-case hex",
+    },
+];
+
+/// The keys a supplied file's `matches` has when a mode of `kind` needs it;
+/// empty when that kind runs no supplied program.
+pub fn supplied_matches(kind: &str) -> Vec<&'static SuppliedMatch> {
+    SUPPLIED_MATCHES.iter().filter(|m| m.mode_kind == kind).collect()
+}
 
 pub const NEEDS: &[Entry] = &[
     e("hands", "the person does it by hand"),

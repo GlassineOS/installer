@@ -1,0 +1,628 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Onyx Boox Note Air (first generation): Snapdragon 636 (sdm660 family), eMMC,
+# stock Android 10, one power button and a magnetic cover, no volume keys.
+# Device facts: https://docs.glassine.org/devices/onyx-noteair/
+#
+# This description belongs to GlassineOS/bootstrap-onyx-noteair; the installer
+# ships a copy (devices/lock.toml). Only what a recorded run shows is
+# `verified`; everything else is `untried`, with what is known in its note.
+
+format = 2
+id = "onyx-noteair"
+name = "Onyx Boox Note Air"
+backend = "android-bootloader"
+
+# ---- who the device is --------------------------------------------------------
+
+[[identity]]
+key = "fastboot.var.variant"
+equals = "SDM EMMC"
+required = true
+untried = "the stock boot loader answered getvar all with it in development (2026-03-17); not a recorded run, and the GlassineOS boot loader's answer isn't recorded"
+
+[[identity]]
+key = "storage.partition.onyxconfig.size"
+equals = 33554432
+required = true
+untried = "the Onyx settings partition, 32 MiB, in every layout (device page, partition table); not yet read in a recorded run"
+
+[[identity]]
+key = "fastboot.var.hw-revision"
+equals = "10000"
+required = false
+untried = "the stock boot loader answered getvar all with it in development (2026-03-17); not a recorded run"
+
+# ---- install states -----------------------------------------------------------
+# Fastboot can't tell prepared from installed (both have the GlassineOS boot
+# loader); a running GlassineOS can.
+
+[[states]]
+id = "stock"
+[[states.conditions]]
+key = "fastboot.var.product"
+equals = "sdm660"
+mode = "fastboot-stock"
+untried = "the stock boot loader answered getvar all with it in development (2026-03-17); not a recorded run"
+
+[[states]]
+id = "prepared"
+[[states.conditions]]
+key = "fastboot.var.product"
+equals = "NoteAir"
+mode = "fastboot"
+verified = { record = "GlassineOS/installer#2", state = "installed", boot_loader = "GlassineOS boot loader, abl tag glassine1" }
+[[states.conditions]]
+key = "glassine.installation"
+absent = true
+mode = "glassine"
+
+[[states]]
+id = "installed"
+[[states.conditions]]
+key = "fastboot.var.product"
+equals = "NoteAir"
+mode = "fastboot"
+verified = { record = "GlassineOS/installer#2", state = "installed", boot_loader = "GlassineOS boot loader, abl tag glassine1" }
+[[states.conditions]]
+key = "glassine.installation"
+present = true
+mode = "glassine"
+
+# ---- how the installer reaches it ---------------------------------------------
+
+# The stock boot loader's fastboot.
+[[modes]]
+id = "fastboot-stock"
+kind = "fastboot"
+usb = { vendor_id = "18d1", product_id = "d00d", interface = "ff-42-03" }
+can = ["identify", "write"]
+restarts_into = ["android", "fastboot", "ram"]
+untried = "it answered getvar all in development (2026-03-17); flash and boot hang there with plain framing, and the equal-length framing that fixes them on the GlassineOS boot loader is not tried on it"
+
+[[modes.departures]]
+kind = "equal-length-transfers"
+params = { length = 65535, warm-up = "short-command-then-dummy" }
+told_by = { key = "fastboot.var.product", equals = "sdm660" }
+untried = "flash and boot hang with plain framing as on the GlassineOS boot loader; assumed to work the same way, not tried on the stock one"
+
+# The GlassineOS boot loader's fastboot.
+[[modes]]
+id = "fastboot"
+kind = "fastboot"
+usb = { vendor_id = "18d1", product_id = "d00d", interface = "ff-42-03" }
+can = ["identify", "write"]
+restarts_into = ["glassine", "android", "emergency"]
+verified = { record = "GlassineOS/installer#2", state = "installed", boot_loader = "GlassineOS boot loader, abl tag glassine1" }
+
+[[modes.departures]]
+kind = "equal-length-transfers"
+params = { length = 65535, warm-up = "short-command-then-dummy" }
+told_by = { key = "fastboot.var.product", equals = "NoteAir" }
+verified = { record = "GlassineOS/installer#2", state = "installed", boot_loader = "GlassineOS boot loader, abl tag glassine1" }
+
+[[modes.departures]]
+kind = "fresh-boot-only"
+verified = { record = "GlassineOS/abl#1", state = "installed", boot_loader = "GlassineOS boot loader, abl tag glassine1" }
+
+[[modes.departures]]
+kind = "single-variables-only"
+untried = "the device page says getvar works for single variables, not all; not a recorded run"
+
+[[modes.departures]]
+kind = "check-slot-flags"
+params = { operation = "boot-image", reason = "on the A/B layout, booting an image writes the partition table (GPT) only when the active slot isn't marked successful or is marked unbootable; it also marks the active slot's partitions active again, which writes only where those bits differ from the disk, and they can't be read beforehand" }
+untried = "from the boot loader's source (CmdBoot, FindBootableSlot, UpdatePartitionAttributes); not a recorded run"
+
+# A GlassineOS environment the stock boot loader starts from memory, for the
+# backup. On the single-slot stock layout booting an image doesn't touch slot
+# flags, so reaching it writes nothing.
+[[modes]]
+id = "ram"
+kind = "glassine-ram"
+usb = { vendor_id = "1d6b", product_id = "0104", interface = "ff-47-52" }
+can = ["identify", "read"]
+restarts_into = ["fastboot-stock", "android"]
+untried = "the RAM environment is built (GlassineOS/images, ramenv) and passes its QEMU test, but it hasn't run on the device"
+
+[[modes]]
+id = "android"
+kind = "android-adb"
+usb = { vendor_id = "18d1", product_id = "4ee2" }
+can = ["identify"]
+restarts_into = ["fastboot-stock", "emergency"]
+untried = "the stock Android with USB debugging on; not used by the installer yet"
+
+[[modes]]
+id = "emergency"
+kind = "emergency-download"
+usb = { vendor_id = "05c6", product_id = "9008" }
+can = ["identify", "read", "write"]
+untried = "the SoC's emergency download mode; a plain installation never uses it, it is only the way out of a broken boot loader"
+
+[[modes]]
+id = "glassine"
+kind = "glassine-usb"
+can = []
+untried = "GlassineOS's own USB mode isn't built yet"
+
+[[transitions]]
+id = "android-to-fastboot-stock"
+from = "android"
+to = "fastboot-stock"
+by = "installer"
+needs = ["usb-debugging"]
+untried = "restart into the boot loader over adb; not tried from the stock system"
+
+[[transitions]]
+id = "fastboot-stock-by-hand"
+from = "android"
+to = "fastboot-stock"
+by = "hand"
+needs = ["hands"]
+untried = "no way by hand is known for the stock boot loader"
+
+[[transitions]]
+id = "fastboot-stock-to-android"
+from = "fastboot-stock"
+to = "android"
+by = "installer"
+untried = "a fastboot reboot of the stock boot loader; not a recorded run"
+
+[[transitions]]
+id = "fastboot-stock-to-ram"
+from = "fastboot-stock"
+to = "ram"
+by = "installer"
+untried = "boots the ram-environment artifact from the stock boot loader; needs the untried equal-length framing, and that boot leaves the single-slot layout's flags alone is read from the boot loader's source, not tried"
+
+[[transitions]]
+id = "ram-to-fastboot-stock"
+from = "ram"
+to = "fastboot-stock"
+by = "installer"
+untried = "the RAM environment isn't built yet"
+
+[[transitions]]
+id = "ram-to-android"
+from = "ram"
+to = "android"
+by = "installer"
+untried = "the RAM environment isn't built yet"
+
+[[transitions]]
+id = "fastboot-stock-to-fastboot"
+from = "fastboot-stock"
+to = "fastboot"
+by = "installer"
+untried = "a fastboot reboot into the bootloader right after the boot loader was replaced"
+
+[[transitions]]
+id = "fastboot-to-glassine"
+from = "fastboot"
+to = "glassine"
+by = "installer"
+untried = "a fastboot reboot; GlassineOS's USB mode isn't built yet"
+
+[[transitions]]
+id = "fastboot-to-android"
+from = "fastboot"
+to = "android"
+by = "installer"
+untried = "a fastboot reboot with slot A active; not a recorded run"
+
+[[transitions]]
+id = "fastboot-by-hand"
+from = "glassine"
+to = "fastboot"
+by = "hand"
+needs = ["hands", "cover"]
+untried = "the device page has the cover route verified in development (2026-10-04); not a recorded run"
+
+[[transitions]]
+id = "fastboot-to-emergency"
+from = "fastboot"
+to = "emergency"
+by = "installer"
+untried = "the GlassineOS boot loader's reboot into emergency download; not a recorded run"
+
+[[transitions]]
+id = "cable-to-emergency"
+from = "fastboot"
+to = "emergency"
+by = "hand"
+needs = ["emergency-cable", "hands"]
+untried = "the only way in without a working boot loader; how reliably it works is not known"
+
+# ---- what it may write --------------------------------------------------------
+
+[[partitions]]
+select = { names = [
+  "xbl", "xblbak", "tz", "rpm", "hyp", "pmic", "keymaster", "cmnlib", "cmnlib64",
+  "mdtpsecapp", "mdtp", "modem", "dsp", "dip", "devinfo", "apdp", "msadp", "dpo",
+  "splash", "limits", "toolsfv", "logfs", "ddr", "sec", "bluetooth", "fsc", "ssd",
+  "modemst1", "modemst2", "fsg", "persist", "keystore", "devcfg", "frp", "logdump",
+  "sti", "storsec", "rawdump", "onyxconfig", "cache",
+] }
+class = "never-write"
+
+[[partitions]]
+select = { name = "abl" }
+class = "replace"
+
+[[partitions]]
+select = { role = "partition-table" }
+class = "replace"
+
+[[partitions]]
+select = { name = "recovery" }
+class = "replace"
+
+[[partitions]]
+select = { names = ["boot", "system", "vendor", "vbmeta", "misc", "boot_a", "system_a", "vendor_a"] }
+class = "never-write"
+
+[[partitions]]
+select = { names = ["boot_b", "system_b", "vendor_b"] }
+class = "create"
+
+[[partitions]]
+select = { name = "userdata" }
+class = "resize"
+destroys = true
+
+# The backup is the whole eMMC user area, read by the RAM environment: the
+# partition table and every partition as one image, about 9.2 GB (8.5 GiB) compressed.
+[[partitions]]
+select = { role = "disk" }
+class = "never-write"
+back_up = { mode = "ram", means = "glassine-read", check = "read-back-compare", size = 9200000000 }
+
+[[boot_settings]]
+id = "boot-loader"
+kind = "boot-loader"
+back_up = { with = "role:disk" }
+
+[[boot_settings]]
+id = "slot-flags"
+kind = "slot-flags"
+back_up = { with = "role:disk" }
+
+# ---- what it keeps -------------------------------------------------------------
+
+# The device's own files the installed system takes from its partitions (FR-018):
+# its device-data list (/usr/share/glassine/device-data.list) is derived from
+# these. Paths on the vfat partitions (modem, bluetooth) are lower case. The
+# modem's live file systems (modemst1, modemst2, fsc, fsg) are never device
+# data: the modem service copies them into memory at each boot.
+
+# the panel's waveform
+[[device_data]]
+name = "waveform.wbf"
+partition = "system_a"
+path = "/waveform/eink_waveform.wbf"
+check = "wbf"
+what = "display waveform"
+
+# the modem (with the WLAN firmware's DSP image) and the ADSP, by the names the
+# kernel's device tree requests
+[[device_data]]
+name = "firmware/qcom/sdm636/onyx/noteair/mba.mbn"
+partition = "modem"
+path = "/image/mba.mbn"
+what = "modem and audio processor firmware"
+
+[[device_data]]
+name = "firmware/qcom/sdm636/onyx/noteair/modem.*"
+partition = "modem"
+path = "/image/modem.*"
+what = "modem and audio processor firmware"
+
+[[device_data]]
+name = "firmware/qcom/sdm636/onyx/noteair/adsp.*"
+partition = "modem"
+path = "/image/adsp.*"
+what = "modem and audio processor firmware"
+
+[[device_data]]
+name = "firmware/qcom/sdm636/onyx/noteair/wlanmdsp.mbn"
+partition = "modem"
+path = "/image/wlanmdsp.mbn"
+what = "modem and audio processor firmware"
+
+# WiFi's board file (the device tree's board directory, onyx_noteair)
+[[device_data]]
+name = "firmware/ath10k/WCN3990/hw1.0/onyx_noteair/board.bin"
+partition = "modem"
+path = "/image/bdwlan.bin"
+what = "Wi-Fi board file"
+
+# Bluetooth's firmware and NV file
+[[device_data]]
+name = "firmware/qca/crbtfw21.tlv"
+partition = "bluetooth"
+path = "/image/crbtfw21.tlv"
+what = "Bluetooth firmware"
+
+[[device_data]]
+name = "firmware/qca/crnv21.bin"
+partition = "bluetooth"
+path = "/image/crnv21.bin"
+what = "Bluetooth firmware"
+
+# the GPU's zap shader
+[[device_data]]
+name = "firmware/qcom/sdm636/onyx/noteair/a512_zap.*"
+partition = "vendor_a"
+path = "/firmware/a512_zap.*"
+what = "graphics firmware"
+
+# the speaker amplifier's tuning files, by the name the device tree gives it
+[[device_data]]
+name = "firmware/qcom/sdm636/onyx/noteair/aw88194_spk_reg.bin"
+partition = "vendor_a"
+path = "/firmware/awinic/aw881xx_pid_xx_l_spk_reg.bin"
+what = "speaker tuning"
+
+[[device_data]]
+name = "firmware/qcom/sdm636/onyx/noteair/aw88194_spk_fw.bin"
+partition = "vendor_a"
+path = "/firmware/awinic/aw881xx_pid_03_l_spk_fw.bin"
+what = "speaker tuning"
+
+[[device_data]]
+name = "firmware/qcom/sdm636/onyx/noteair/aw88194_spk_cfg.bin"
+partition = "vendor_a"
+path = "/firmware/awinic/aw881xx_pid_03_l_spk_cfg.bin"
+what = "speaker tuning"
+
+# the ADSP's sensor registry (this unit's factory calibration)
+[[device_data]]
+name = "firmware/qcom/sensors/sns.reg"
+partition = "persist"
+path = "/sensors/sns.reg"
+what = "sensor calibration"
+
+# ---- what an installation does ------------------------------------------------
+
+[[artifacts]]
+role = "ram-environment"
+size = "unknown"
+
+[[artifacts]]
+role = "boot-loader"
+size = "unknown"
+
+[[artifacts]]
+role = "partition-layout"
+size = "unknown"
+
+[[artifacts]]
+role = "kernel"
+size = "unknown"
+
+[[artifacts]]
+role = "base"
+size = "unknown"
+
+[[artifacts]]
+role = "recovery"
+size = "unknown"
+
+[[capabilities]]
+id = "start-kernel"
+status = "have"
+untried = "the GlassineOS boot loader starts slot B's kernel in development; not from an installation"
+
+[[capabilities]]
+id = "fallback-boot"
+status = "have"
+untried = "slot fallback is described on the device page (2026-06-03, development); not a recorded run"
+
+[[capabilities]]
+id = "trial-boot"
+status = "lack"
+untried = "the one-shot test boot uses the recovery partition, which holds the recovery here"
+
+[[capabilities]]
+id = "recovery"
+status = "needs"
+with = "the GlassineOS recovery, which isn't built yet"
+untried = "not built"
+
+[[capabilities]]
+id = "keep-stock"
+status = "have"
+when = { choice = "keep-stock", equals = "yes" }
+untried = "stock Android on slot A next to GlassineOS on slot B runs in development; not from an installation"
+
+[[capabilities]]
+id = "keep-stock"
+status = "lack"
+when = { choice = "keep-stock", equals = "no" }
+untried = "not tried"
+
+[[capabilities]]
+id = "secondary-recovery"
+status = "lack"
+when = { choice = "keep-stock", equals = "yes" }
+untried = "the device has one recovery partition and the GlassineOS recovery takes it"
+
+[[capabilities]]
+id = "choose-at-start"
+status = "needs"
+with = "a way to pick a slot at start-up, which isn't decided"
+when = { choice = "keep-stock", equals = "yes" }
+untried = "not built"
+
+[[choices]]
+id = "keep-stock"
+source = "fixed"
+options = [{ id = "yes" }, { id = "no", replaces_system = true }]
+default = "yes"
+
+[[jobs]]
+id = "install"
+states = ["stock", "prepared"]
+
+[[steps]]
+id = "back-up"
+job = "install"
+kind = "back-up"
+mode = "ram"
+backs_up = ["role:disk"]
+boot_settings = ["boot-loader", "slot-flags"]
+done = [{ key = "installer.backup-verified", present = true, mode = "installer" }]
+escape.failure = { leaves = "previous-system-starts", way_out = { transition = "ram-to-android" } }
+escape.interruption = { leaves = "previous-system-starts", way_out = { transition = "ram-to-android" } }
+point_of_no_return = false
+safe_stop = true
+untried = "the RAM environment that reads the partitions isn't built yet"
+
+[[steps]]
+id = "replace-boot-loader"
+job = "install"
+kind = "write-boot-loader"
+mode = "fastboot-stock"
+after = ["back-up"]
+params = { artifact = "boot-loader", partition = "abl" }
+writes = ["abl"]
+boot_settings = ["boot-loader"]
+done = [{ key = "fastboot.var.product", equals = "NoteAir", mode = "fastboot" }]
+escape.failure = { leaves = "special-hardware", hardware = "emergency-cable", way_out = { transition = "cable-to-emergency" } }
+escape.interruption = { leaves = "previous-system-starts", way_out = { transition = "fastboot-to-android" } }
+point_of_no_return = true
+safe_stop = true
+untried = "never done from the stock boot loader; a boot loader that doesn't start leaves only the emergency-mode cable"
+
+[[steps]]
+id = "partition-table"
+job = "install"
+kind = "write-partition-table"
+mode = "fastboot"
+after = ["replace-boot-loader"]
+params.artifact = "partition-layout"
+params.renames = { boot = "boot_a", system = "system_a", vendor = "vendor_a" }
+# slot B's system partition is as big as slot A's: a release whose base needs
+# more is refused at the plan.
+params.partitions = [
+  { name = "system_b", size = "3GiB", at_least = "release:base", role = "system" },
+]
+writes = ["role:partition-table"]
+creates = ["boot_b", "system_b", "vendor_b"]
+resizes = ["userdata"]
+boot_settings = ["slot-flags"]
+done = [{ key = "storage.partition.boot_b", present = true, mode = "fastboot" }]
+escape.failure = { leaves = "special-hardware", hardware = "emergency-cable", way_out = { transition = "cable-to-emergency" } }
+escape.interruption = { leaves = "installer-can-finish", way_out = { step = "write-kernel" } }
+point_of_no_return = true
+safe_stop = true
+untried = "the A/B layout was made from a running system in development, never over fastboot"
+
+[[steps]]
+id = "write-kernel"
+job = "install"
+kind = "write-image"
+mode = "fastboot"
+after = ["partition-table"]
+params = { artifact = "kernel", partition = "boot_b" }
+writes = ["boot_b"]
+done = [{ key = "installer.step.write-kernel", present = true, mode = "installer" }]
+escape.failure = { leaves = "installer-can-finish", way_out = { step = "write-kernel" } }
+escape.interruption = { leaves = "installer-can-finish", way_out = { step = "write-base" } }
+point_of_no_return = false
+safe_stop = true
+untried = "a raw image write over fastboot is proven to the cache partition only"
+
+[[steps]]
+id = "write-base"
+job = "install"
+kind = "write-base"
+mode = "fastboot"
+after = ["partition-table"]
+params = { artifact = "base", partition = "system_b" }
+writes = ["system_b"]
+done = [{ key = "installer.step.write-base", present = true, mode = "installer" }]
+escape.failure = { leaves = "installer-can-finish", way_out = { step = "write-base" } }
+escape.interruption = { leaves = "installer-can-finish", way_out = { step = "write-recovery" } }
+point_of_no_return = false
+safe_stop = true
+untried = "not tried over fastboot"
+
+[[steps]]
+id = "write-recovery"
+job = "install"
+kind = "write-image"
+mode = "fastboot"
+after = ["partition-table"]
+params = { artifact = "recovery", partition = "recovery" }
+writes = ["recovery"]
+done = [{ key = "installer.step.write-recovery", present = true, mode = "installer" }]
+escape.failure = { leaves = "installer-can-finish", way_out = { step = "write-recovery" } }
+escape.interruption = { leaves = "installer-can-finish", way_out = { step = "set-slot" } }
+point_of_no_return = false
+safe_stop = true
+untried = "the GlassineOS recovery isn't built yet"
+
+[[steps]]
+id = "set-slot"
+job = "install"
+kind = "set-boot-slot"
+mode = "fastboot"
+after = ["write-kernel", "write-base", "write-recovery"]
+params = { slot = "b", pin = true }
+boot_settings = ["slot-flags"]
+done = [{ key = "fastboot.var.current-slot", equals = "b", mode = "fastboot" }]
+escape.failure = { leaves = "installer-can-finish", way_out = { step = "set-slot" } }
+escape.interruption = { leaves = "glassine-starts", way_out = { transition = "fastboot-to-glassine" } }
+point_of_no_return = false
+safe_stop = true
+untried = "slots are pinned from a running system in development, never over fastboot"
+
+[[steps]]
+id = "retire-stock"
+job = "install"
+kind = "set-boot-slot"
+mode = "fastboot"
+after = ["set-slot"]
+when = [{ choice = "keep-stock", equals = "no" }]
+params = { slot = "a", unbootable = true }
+boot_settings = ["slot-flags"]
+done = [{ key = "installer.step.retire-stock", present = true, mode = "installer" }]
+escape.failure = { leaves = "installer-can-finish", way_out = { step = "retire-stock" } }
+escape.interruption = { leaves = "glassine-starts", way_out = { transition = "fastboot-to-glassine" } }
+point_of_no_return = false
+safe_stop = true
+untried = "not tried"
+
+[texts]
+name = "Onyx Boox Note Air"
+
+[texts.modes]
+fastboot-stock = "No way by hand is known for the stock boot loader. Leave the device on with USB debugging on, and the installer restarts it into the boot loader."
+fastboot = "Close the cover, then press the power button and hold it for about 3 seconds while the cover stays closed."
+android = "Start the device normally. To let the installer in, turn on USB debugging in the developer settings."
+emergency = "Needs the emergency-mode cable: let the battery run empty, then connect the cable and start the device."
+ram = "The installer starts this itself from the boot loader; there is no way by hand."
+glassine = "Start the device normally."
+
+[texts.transitions]
+fastboot-stock-by-hand = "There is no known way to reach the stock boot loader by hand on this device: it has no volume keys. Use USB debugging instead."
+fastboot-by-hand = "Close the cover, then press the power button and hold it for about 3 seconds while the cover stays closed."
+cable-to-emergency = "Let the battery run completely empty. Connect the emergency-mode cable to the computer and the device, then start the device."
+
+[texts.choices]
+keep-stock = "Keep the stock Android system next to GlassineOS."
+
+[texts.options]
+"keep-stock.yes" = "Keep Android. It stays on the device and can still start. Its data partition is made smaller, so the data on it is deleted."
+"keep-stock.no" = "Don't keep Android. It is never started again, unless you go back to stock."
+
+[texts.steps]
+back-up = "Back up the device's whole storage, every partition and the partition table, to this computer, and check the backup by reading it back."
+replace-boot-loader = "Replace the boot loader with GlassineOS's. From here there is no way back without the backup, and if this step fails only the emergency-mode cable helps."
+partition-table = "Give the device a second slot for GlassineOS. The data partition is made smaller: everything on it is deleted."
+write-kernel = "Write the GlassineOS kernel to slot B."
+write-base = "Write GlassineOS to slot B."
+write-recovery = "Write the GlassineOS recovery."
+set-slot = "Start GlassineOS by default."
+retire-stock = "Stop Android from starting."
