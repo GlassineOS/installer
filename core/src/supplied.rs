@@ -10,7 +10,7 @@
 //! recognition is behind [`recognise`]; the first is Qualcomm's emergency
 //! download mode ([`qualcomm`]).
 
-use crate::format1::{Description, SuppliedFile};
+use crate::format1::{Description, Scalar, SuppliedFile};
 use crate::vocab;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -171,6 +171,106 @@ fn verdict(route: &str, f: &SuppliedFile, bytes: &[u8], sha256: &str, device: Op
             reported: device.cloned(),
             differs,
         }
+    }
+}
+
+/// Why a file isn't sent once the device in the mode has reported its values
+/// ([`before_sending`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Unsendable {
+    /// The device reports other values than the description names (the
+    /// supplied file's `matches`, and the identity's facts for those keys):
+    /// it isn't the described device. `expected` is what the description
+    /// names (`a | b` for a choice), `differs` the keys that differ.
+    OtherDevice {
+        reported: BTreeMap<String, String>,
+        expected: BTreeMap<String, String>,
+        differs: Vec<String>,
+    },
+    /// The device is the described one, but the file isn't one to send to
+    /// it (known not to work, not a programmer, made for another chip or key
+    /// where the boot ROM enforces it): why, in plain words.
+    File(String),
+}
+
+impl std::fmt::Display for Unsendable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Unsendable::OtherDevice { reported, expected, differs } => {
+                let show = |m: &BTreeMap<String, String>| {
+                    m.iter()
+                        .map(|(k, v)| format!("{k} {}", if v.is_empty() { "(none)" } else { v }))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                };
+                write!(
+                    f,
+                    "the device reports {}, the description expects {} ({} differs): it isn't the described device; nothing was sent",
+                    show(reported),
+                    show(expected),
+                    differs.join(" and ")
+                )
+            }
+            Unsendable::File(w) => write!(f, "{w}; nothing was sent"),
+        }
+    }
+}
+
+/// The check once the device is in the mode, before the file is sent (004
+/// FR-004 and its edge case "the device reports a chip or key the
+/// description doesn't name"): the device's report against the supplied
+/// file's `matches` and the description's identity facts for the same keys
+/// (`emergency.chip`, `emergency.pk-hash`), then the file as [`check`] judges
+/// it with that report. On a boot ROM that accepts test keys the chip and
+/// key the file itself names are no refusal; the device's report always
+/// must match. A file the person confirmed ([`Verdict::FitsUnknown`]) goes
+/// on.
+pub fn before_sending(d: &Description, file_id: &str, bytes: &[u8], device: &DeviceValues) -> Result<(), Unsendable> {
+    let c = check(d, file_id, bytes, Some(device)).map_err(Unsendable::File)?;
+    let f = d
+        .supplied_file(file_id)
+        .ok_or_else(|| Unsendable::File(format!("{} has no supplied file {file_id:?}", d.id)))?;
+    let mut reported = BTreeMap::new();
+    let mut expected = BTreeMap::new();
+    let mut differs = Vec::new();
+    for m in vocab::supplied_matches(&c.route) {
+        let got = device.get(m.key).map(|v| v.to_ascii_lowercase()).unwrap_or_default();
+        let mut want: Vec<String> = f.matches.get(m.key).map(|v| v.to_ascii_lowercase()).into_iter().collect();
+        let mut fits = want.iter().all(|w| *w == got);
+        for cond in d.identity.iter().filter(|c| c.key == m.fact_key) {
+            let text = |s: &Scalar| match s {
+                Scalar::Text(t) => t.to_ascii_lowercase(),
+                Scalar::Int(i) => i.to_string(),
+            };
+            if let Some(e) = &cond.equals {
+                fits &= text(e) == got;
+                want.push(text(e));
+            }
+            if let Some(one) = &cond.one_of {
+                let one: Vec<String> = one.iter().map(text).collect();
+                fits &= one.contains(&got);
+                want.push(one.join(" | "));
+            }
+        }
+        want.dedup();
+        reported.insert(m.key.to_string(), got);
+        expected.insert(m.key.to_string(), want.join(" and "));
+        if !fits {
+            differs.push(m.key.to_string());
+        }
+    }
+    if !differs.is_empty() {
+        return Err(Unsendable::OtherDevice { reported, expected, differs });
+    }
+    match c.verdict {
+        Verdict::Known { .. } | Verdict::FitsUnknown { .. } => Ok(()),
+        Verdict::WrongChipOrKey { made_for, differs, .. } => Err(Unsendable::File(format!(
+            "the file is made for {} and this device's boot ROM enforces the signing key ({} differs)",
+            made_for.iter().map(|(k, v)| format!("{k} {v}")).collect::<Vec<_>>().join(", "),
+            differs.join(" and ")
+        ))),
+        Verdict::KnownBad { reason, .. } => Err(Unsendable::File(format!("the file is known not to work on this device: {reason}"))),
+        Verdict::NotAProgrammer { why } => Err(Unsendable::File(format!("the file isn't a program for this route: {why}"))),
     }
 }
 

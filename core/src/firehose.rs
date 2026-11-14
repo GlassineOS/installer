@@ -851,6 +851,13 @@ impl<T: Transport> Firehose<T> {
         }
     }
 
+    /// Bounds the waits of the transfers that follow
+    /// ([`Transport::set_short_wait`]); `None` restores the transport's own
+    /// bound. A request that isn't answered in time fails with a timeout.
+    pub fn set_short_wait(&mut self, wait: Option<std::time::Duration>) {
+        self.t.set_short_wait(wait);
+    }
+
     pub fn into_transport(self) -> T {
         self.t
     }
