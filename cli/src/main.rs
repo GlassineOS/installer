@@ -18,6 +18,7 @@ mod backup;
 mod emergency;
 mod emergency_read;
 mod emergency_try;
+mod supplied_check;
 
 include!(concat!(env!("OUT_DIR"), "/embedded.rs"));
 
@@ -33,6 +34,7 @@ const USAGE: &str = "usage:
   glassine-install backup --ram IMAGE --out DIR [--accept-slot-flags] [--devices DIR]
   glassine-install emergency-info [--json] [--serial]
   glassine-install emergency-read --programmer FILE (--only-gpt | --out DIR [--partition NAME]...)
+  glassine-install supplied-check [--device ID] [--file ID] [--reported KEY=VALUE]... [--json] [--devices DIR] FILE
   glassine-install schema
   glassine-install lock-unpinned LOCKFILE
 
@@ -72,7 +74,15 @@ or without --partition the whole user area of the eMMC, each read twice range by
 stored as a gzip file, read back and checked; manifest.json lists them. At the end the device is
 restarted. On a device not read this way before, take it in steps: --only-gpt first, then one
 small partition (--partition devinfo --out DIR), then the whole disk. GLASSINE_USB_TRACE=1 logs
-every USB transfer.";
+every USB transfer.
+
+supplied-check checks FILE as a file the device's description needs from the person (a programmer
+for its emergency mode), as the installer does before sending one: its checksum against the files
+known to work and known not to, then that it is made for the chip and key the description names;
+--reported gives what the device reported (chip=HEX, pk_hash=HEX), which must match too. It reads
+the file only and sends nothing anywhere. Exit status 0: a known file; 2: it fits but isn't known
+(sent only after the person confirms); 1: refused (known not to work, with why; another chip or
+key; or not a programmer).";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -85,6 +95,7 @@ fn main() -> ExitCode {
         Some("emergency-info") => emergency_cmd(&args[1..]),
         Some("emergency-read") => emergency_read_cmd(&args[1..]),
         Some("emergency-try-program") => emergency_try_cmd(&args[1..]),
+        Some("supplied-check") => supplied_check::cmd(&args[1..]),
         Some("schema") => {
             println!("{}", serde_json::to_string_pretty(&format1::json_schema()).unwrap());
             Ok(ExitCode::SUCCESS)

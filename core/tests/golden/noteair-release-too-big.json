@@ -174,8 +174,8 @@
         "stored": "compressed; only the used blocks where the file system tells them, every block elsewhere",
         "estimate": "about",
         "estimate_bytes": 9200000000,
-        "mode": "ram",
-        "means": "glassine-read",
+        "mode": "emergency",
+        "means": "emergency-read",
         "check": "read-back-compare",
         "step": "back-up"
       }
@@ -273,7 +273,7 @@
     {
       "id": "back-up",
       "kind": "back-up",
-      "mode": "ram",
+      "mode": "emergency",
       "done": "false",
       "writes": false,
       "tried": false,
@@ -282,12 +282,12 @@
       "on_failure": {
         "leaves": "previous-system-starts",
         "hardware": null,
-        "way_out": "transition ram-to-android"
+        "way_out": "transition emergency-by-hand"
       },
       "on_interruption": {
         "leaves": "previous-system-starts",
         "hardware": null,
-        "way_out": "transition ram-to-android"
+        "way_out": "transition emergency-by-hand"
       }
     },
     {

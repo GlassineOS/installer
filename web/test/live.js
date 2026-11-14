@@ -33,7 +33,7 @@ function answers(fixture) {
 const BROWSER = { platform: 'browser', connections: ['usb-web'] };
 // The pkg's exports: the three records, the descriptions' source and the inspect's Connection
 // (its facts, and reboot in its session), nothing that writes.
-const EXPORTS = ['Connection', 'check', 'default', 'description', 'emergency_info', 'initSync', 'inspect', 'plan'];
+const EXPORTS = ['Connection', 'check', 'default', 'description', 'emergency_info', 'initSync', 'inspect', 'plan', 'supplied_check'];
 // What the site may load: its own files. Never the repository's records or descriptions.
 const FORBIDDEN = /^(core|devices|fixtures|web|test)\//;
 

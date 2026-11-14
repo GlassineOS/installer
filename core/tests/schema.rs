@@ -24,6 +24,16 @@ fn the_format_1_schema_accepts_format_1_descriptions_only() {
     assert!(!v.is_valid(&as_json(&noteair())));
 }
 
+/// FR-003, FR-004: the format-2 schema reads format 2 and none of format 3's keys.
+#[test]
+fn the_format_2_schema_accepts_format_2_descriptions_only() {
+    let v = jsonschema::validator_for(&json_schema_for(2)).unwrap();
+    assert!(v.is_valid(&as_json(&text("core/tests/fixtures/descriptions/onyx-noteair-format2.toml"))));
+    assert!(!v.is_valid(&as_json(&noteair())));
+    let s = serde_json::to_string(&json_schema_for(2)).unwrap();
+    assert!(!s.contains("emergency.chip") && !s.contains("supplied_files"));
+}
+
 #[test]
 fn every_vocabulary_entry_is_in_the_schema() {
     let s = serde_json::to_string(&glassine_installer::format1::json_schema()).unwrap();
@@ -57,7 +67,7 @@ fn the_schema_rejects_what_the_structure_rejects() {
     let cases = [
         ("backend = \"android-bootloader\"", "backend = \"android-bootloader\"\ncolour = \"red\""),
         ("name = \"Onyx Boox Note Air\"\nbackend", "backend"),
-        ("format = 2", "format = 3"),
+        ("format = 3", "format = 4"),
         ("kind = \"write-base\"", "kind = \"dance\""),
         (
             "params = { artifact = \"kernel\", partition = \"boot_b\" }",
