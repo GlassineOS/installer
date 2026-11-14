@@ -105,6 +105,8 @@ async function openSession(route, q) {
   s.chooseBackupFolder = records.chooseBackupFolder;
   s.startBackup = records.startBackup;
   s.stopBackup = records.stopBackup;
+  // The way out when the browser couldn't open or claim a device (lib/host.js).
+  s.hostSetup = records.hostSetup;
   s.param = (k, d) => (q.get(k) === null ? d : q.get(k));
   s.num = (k, d) => (q.get(k) === null || !/^\d+$/.test(q.get(k)) ? d : Number(q.get(k)));
   s.live = q.get('live') === '1';

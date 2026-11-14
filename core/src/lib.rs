@@ -19,6 +19,7 @@ pub mod firehose;
 pub mod format1;
 pub mod fsprobe;
 pub mod glassine_read;
+pub mod host_setup;
 pub mod inspect;
 pub mod lock;
 pub mod pcfacts;

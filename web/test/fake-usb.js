@@ -15,13 +15,16 @@
 //           (seen: the command the simulated device decoded from it, under its length bug)
 //   calls:  every other call on the device or navigator.usb, by name, with its arguments
 //   unplug(): the device goes away: a disconnect event, and every later call on it fails
+// held: something holds the interface (another program, or a kernel driver): every
+// claimInterface is refused as Chromium refuses it (NetworkError "Unable to claim interface.").
+// denied: the system doesn't let the browser open it (SecurityError "Access denied.").
 // A device that answered `reboot` goes away the same way shortly after (with silentReboot it
 // goes without answering, as a boot loader may). A transfer still waiting fails when it goes. Every OUT transfer is
 // also appended, as it is made, to sessionStorage['fakeUsb.outs'], which outlives a reload of
 // the page (the pagehide test reads it there).
 'use strict';
 
-function installFakeUsb({ vars, warm = false, cancel = false, silentReboot = false, serial = 'SECRET-UNIT-1234' }) {
+function installFakeUsb({ vars, warm = false, cancel = false, silentReboot = false, held = false, denied = false, serial = 'SECRET-UNIT-1234' }) {
   const log = { outs: [], calls: [], requested: 0, gone: false };
   window.__fakeUsb = log;
   const keep = (o) => {
@@ -85,9 +88,17 @@ function installFakeUsb({ vars, warm = false, cancel = false, silentReboot = fal
     usbVersionMajor: 2, usbVersionMinor: 0, usbVersionSubminor: 0,
     manufacturerName: 'Google', productName: 'Android', serialNumber: serial,
     opened: false, configuration: config, configurations: [config],
-    async open() { called('open', []); this.opened = true; },
+    async open() {
+      called('open', []);
+      if (denied) throw new DOMException('Access denied.', 'SecurityError');
+      this.opened = true;
+    },
     async close() { called('close', []); this.opened = false; },
-    async claimInterface(n) { called('claimInterface', [n]); iface.claimed = true; },
+    async claimInterface(n) {
+      called('claimInterface', [n]);
+      if (held) throw new DOMException('Unable to claim interface.', 'NetworkError');
+      iface.claimed = true;
+    },
     async releaseInterface(n) { called('releaseInterface', [n]); if (log.gone) return gone(); iface.claimed = false; },
     async selectConfiguration(v) { called('selectConfiguration', [v]); },
     async selectAlternateInterface(n, a) { called('selectAlternateInterface', [n, a]); },
