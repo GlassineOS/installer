@@ -168,6 +168,9 @@ struct Open {
 pub struct UsbTransport {
     open: Option<Open>,
     timeout: Duration,
+    /// [`Transport::set_short_wait`]'s bound, while set (native only).
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    short: Option<Duration>,
 }
 
 fn endpoints(intf: Interface, o: u8, i: u8) -> Result<UsbTransport, OpenError> {
@@ -176,6 +179,7 @@ fn endpoints(intf: Interface, o: u8, i: u8) -> Result<UsbTransport, OpenError> {
     Ok(UsbTransport {
         open: Some(Open { out, inp, _intf: intf }),
         timeout: TRANSFER_TIMEOUT,
+        short: None,
     })
 }
 
@@ -302,7 +306,7 @@ mod native {
 
     impl Transport for UsbTransport {
         async fn send(&mut self, data: &[u8]) -> Result<(), FbError> {
-            let timeout = self.timeout;
+            let timeout = self.short.unwrap_or(self.timeout);
             let o = self.open.as_mut().ok_or_else(UsbTransport::dead)?;
             // transfer_blocking cancels the transfer when the wait runs out.
             let c = o.out.transfer_blocking(data.to_vec().into(), timeout);
@@ -315,8 +319,12 @@ mod native {
             self.recv_max(REPLY_MAX).await
         }
 
+        fn set_short_wait(&mut self, wait: Option<Duration>) {
+            self.short = wait;
+        }
+
         async fn recv_max(&mut self, max: usize) -> Result<Vec<u8>, FbError> {
-            let timeout = self.timeout;
+            let timeout = self.short.unwrap_or(self.timeout);
             let o = self.open.as_mut().ok_or_else(UsbTransport::dead)?;
             let mps = o.inp.max_packet_size().max(1);
             let buf = o.inp.allocate(max.max(1).div_ceil(mps) * mps);
