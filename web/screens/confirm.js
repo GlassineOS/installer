@@ -9,7 +9,7 @@
 
 import { useState } from 'preact/hooks';
 import { html, Admonition, Actions, Page, Steps } from '../lib/parts.js';
-import { list } from '../lib/words.js';
+import { cap, list } from '../lib/words.js';
 import { stepViews, erase, fate, keptSystems, goneSystems, backupView, targetOptions, suppliedState } from '../lib/model.js';
 import { EraseNote } from './check.js';
 import { NoRecord } from './plan.js';
@@ -30,7 +30,7 @@ export function Confirm({ s, state }) {
   const typedOk = !word || typed.trim().toLowerCase() === word.toLowerCase();
   const noRoom = state === 'noroom';
   const ready = p.status === 'ready';
-  const { need, got, ok: fileOk } = suppliedState(s);
+  const { need, got, byDevice, ok: fileOk } = suppliedState(s);
   const ok = ready && (!needAck || ack) && typedOk && !noRoom && fileOk;
   const pc = s.m.kind === 'pc';
   const b = backupView(s);
@@ -75,6 +75,7 @@ export function Confirm({ s, state }) {
         <span class="il-label">${need.title}</span>
         ${got ? html`<span class="ins-card__title" style="overflow-wrap: anywhere">${got.name}</span>` : html`<span class="ins-card__title">Not chosen yet</span>`}
         <p class="ins-small">${!got ? 'The backup reads the device through it. Choose it first: the installer checks it before it sends anything.'
+          : byDevice ? `${cap(s.m.the)} didn’t accept it, or it didn’t answer, when the backup started: it isn’t sent again. Choose another file.`
           : got.check.verdict === 'known' ? `A known file: it has worked on ${s.m.the} before. It is sent when the backup starts.`
           : fileOk ? 'Not a known file: you confirmed its warning. It is sent when the backup starts.'
           : got.check.verdict === 'fits-unknown' ? 'Not a known file, and its warning isn’t confirmed: it isn’t sent.'

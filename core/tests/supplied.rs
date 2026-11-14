@@ -531,23 +531,33 @@ fn the_screens_records() {
     let (fits, _) = programmer(true, 5, HW_ID, "Another root");
     let (wrong, _) = programmer(false, 5, "0014D0E100000000", "Root CA");
     let (bad, _) = programmer(false, 5, HW_ID, "A root seen not working");
+    // Signed with another key, for a boot ROM that enforces the key.
+    let (other_key, _) = programmer(false, 5, HW_ID, "Another root");
     let garbage = b"hello, world\n".to_vec();
     let sum = |b: &[u8]| hex(&Sha256::digest(b));
     let shipped = valid(&noteair());
     let with_known = valid(&mutate(&noteair(), DESC_KNOWN, &sum(&known)));
     let with_bad = valid(&mutate(&noteair(), DESC_BAD, &sum(&bad)));
+    let key_enforced = valid(&mutate(&noteair(), "boot_rom = \"test-keys-accepted\"", "boot_rom = \"enforced\""));
     let other_device = device("0014d0e1", OTHER);
-    let cases: [(&str, &Description, &[u8], Option<&DeviceValues>); 5] = [
-        ("known", &with_known, &known, None),
-        ("fits-unknown", &shipped, &fits, None),
-        ("wrong-chip-or-key", &shipped, &wrong, Some(&other_device)),
-        ("known-bad", &with_bad, &bad, None),
-        ("not-a-programmer", &shipped, &garbage, None),
+    // (record, verdict, description, file, device report)
+    type Case<'a> = (&'a str, &'a str, &'a Description, &'a [u8], Option<&'a DeviceValues>);
+    let cases: [Case; 6] = [
+        ("known", "known", &with_known, &known, None),
+        ("fits-unknown", "fits-unknown", &shipped, &fits, None),
+        ("wrong-chip-or-key", "wrong-chip-or-key", &shipped, &wrong, Some(&other_device)),
+        // 004 FR-004: the file's own key decides where the boot ROM enforces it; no device report
+        ("wrong-key-enforced", "wrong-chip-or-key", &key_enforced, &other_key, None),
+        ("known-bad", "known-bad", &with_bad, &bad, None),
+        ("not-a-programmer", "not-a-programmer", &shipped, &garbage, None),
     ];
-    for (name, d, bytes, dev) in cases {
+    let mut sums = std::collections::BTreeSet::new();
+    for (name, verdict, d, bytes, dev) in cases {
+        // the screens find a record by its file's checksum
+        assert!(sums.insert(sum(bytes)), "{name}: the same file as another record");
         let c = supplied::check(d, "emergency-programmer", bytes, dev).unwrap();
         let v: serde_json::Value = serde_json::to_value(&c).unwrap();
-        assert_eq!(v["verdict"], name, "{name}");
+        assert_eq!(v["verdict"], verdict, "{name}");
         golden(&format!("web/fixtures/supplied/{name}.hex"), &hex_lines(bytes));
         golden(
             &format!("web/fixtures/supplied/{name}.json"),

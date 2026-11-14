@@ -95,6 +95,8 @@ async function openSession(route, q) {
   s.supplied = records.supplied;
   s.keepSupplied = records.keepSupplied;
   s.forgetSupplied = records.forgetSupplied;
+  s.refuseSupplied = records.refuseSupplied;
+  s.deviceRefused = records.deviceRefused;
   s.param = (k, d) => (q.get(k) === null ? d : q.get(k));
   s.num = (k, d) => (q.get(k) === null || !/^\d+$/.test(q.get(k)) ? d : Number(q.get(k)));
   s.live = q.get('live') === '1';
