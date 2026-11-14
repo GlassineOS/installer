@@ -1,0 +1,10 @@
+{
+  "supplied_check_format": 1,
+  "device": "onyx-noteair",
+  "file": "emergency-programmer",
+  "route": "emergency-download",
+  "size": 5888,
+  "sha256": "dbbeb416b8b1a0c7a7b9c2199f3c4c1eeb8eabf670f70549ee5e4ee4d4cb2cec",
+  "verdict": "known",
+  "verified": false
+}
