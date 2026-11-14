@@ -356,6 +356,45 @@ fn a_known_file_is_a_sha256_tried_or_not() {
     );
 }
 
+const BAD: &str = "4c2c494e92551b1d7f06f7beece875c0ef2b9b7b2ffab347f76a3dda8fa3d20c";
+
+#[test]
+fn a_file_known_not_to_work_is_a_sha256_a_reason_tried_or_not() {
+    let t = valid(&noteair());
+    assert_eq!(t.supplied_files[0].known_bad[0].sha256, BAD);
+    na(&format!("sha256 = \"{BAD}\""), "sha256 = \"4c2c494e\"", "supplied_files[0].known_bad[0].sha256");
+    na(
+        "untried = \"edl tool, development, 2026-06-02; not a recorded installer run\"\n",
+        "",
+        "supplied_files[0].known_bad[0]",
+    );
+    na(
+        "reason = \"It starts, then hangs while reading the partition table and never answers.\"",
+        "reason = \" \"",
+        "supplied_files[0].known_bad[0].reason",
+    );
+    na(
+        "reason = \"It starts, then hangs while reading the partition table and never answers.\"",
+        "reason = \"It hangs; see https://example.org\"",
+        "supplied_files[0].known_bad[0].reason",
+    );
+    na(
+        "reason = \"It starts, then hangs while reading the partition table and never answers.\"",
+        "reason = \"It **hangs**.\"",
+        "supplied_files[0].known_bad[0].reason",
+    );
+}
+
+/// A checksum is known to work or known not to, never both.
+#[test]
+fn a_checksum_is_never_both_known_and_known_bad() {
+    na(
+        &format!("sha256 = \"{BAD}\""),
+        &format!("sha256 = \"{KNOWN}\""),
+        "supplied_files[0].known_bad[0].sha256",
+    );
+}
+
 /// Format 3 holds a supplied file's checksums and key hash, and no other hash.
 #[test]
 fn only_a_supplied_files_hashes_are_held() {

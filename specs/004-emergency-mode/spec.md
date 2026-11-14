@@ -58,7 +58,8 @@ search for it themselves. It names no site and opens no page.
 
 **Given** a picked file,
 **When** the installer checks it,
-**Then** it says one of: a known good file for this device; a programmer that isn't known
+**Then** it says one of: a known good file for this device; a file known not to work on
+this device (refused, with what goes wrong with it); a programmer that isn't known
 (with a warning, and sent only if the person confirms); a file for another chip or key,
 where the device's boot ROM enforces the signing key, or not a programmer at all
 (refused). Once the device is in its emergency mode, the installer compares the chip and
@@ -104,7 +105,9 @@ person is told how to restart the device into the system it had.
   and uses it for that session. GlassineOS doesn't ship, download, host or link any
   programmer, and the installer doesn't upload the file anywhere.
 - **FR-004**: The installer checks a picked file before sending it: its checksum against
-  the known ones, then that the route recognises it as a programmer. The description
+  the known ones, then that the route recognises it as a programmer. A checksum the
+  description lists as not working on the device is never sent, and the person is told
+  what goes wrong with that file. The description
   states whether the device's boot ROM enforces the signing key. Where it does, the
   file must be made for the chip and key the description names, and a file for another
   chip or key is never sent. Where it doesn't (the boot ROM runs programs signed with

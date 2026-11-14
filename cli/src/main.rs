@@ -65,10 +65,11 @@ driver for the device, installed once with Zadig.
 
 supplied-check checks FILE as a file the device's description needs from the person (a programmer
 for its emergency mode), as the installer does before sending one: its checksum against the files
-known to work, then that it is made for the chip and key the description names; --reported gives
-what the device reported (chip=HEX, pk_hash=HEX), which must match too. It reads the file only and
-sends nothing anywhere. Exit status 0: a known file; 2: it fits but isn't known (sent only after
-the person confirms); 1: refused (another chip or key, or not a programmer).";
+known to work and known not to, then that it is made for the chip and key the description names;
+--reported gives what the device reported (chip=HEX, pk_hash=HEX), which must match too. It reads
+the file only and sends nothing anywhere. Exit status 0: a known file; 2: it fits but isn't known
+(sent only after the person confirms); 1: refused (known not to work, with why; another chip or
+key; or not a programmer).";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
