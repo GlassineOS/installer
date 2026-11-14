@@ -201,7 +201,8 @@ pub mod qualcomm {
         pub version: u32,
         /// `HW_ID` from the attestation certificate, 16 lower-case hex digits.
         pub hw_id: String,
-        /// Its first 8 digits: the msm id.
+        /// Its first 8 digits, the msm id; or `soc-hw-version:XXXX` when the
+        /// certificate says the HW_ID names the SoC's hardware family.
         pub chip: String,
         pub root_sha256: String,
         pub root_sha384: String,
@@ -258,6 +259,10 @@ pub mod qualcomm {
         let mut out = Vec::new();
         for i in 0..num as usize {
             let at = i.checked_mul(want).and_then(|x| x.checked_add(phoff)).ok_or("offset overflows")?;
+            // The whole header is in the file, so the reads below stay in it.
+            if at.checked_add(want).is_none_or(|end| end > b.len()) {
+                return Err("cut short: the program headers end beyond the file".into());
+            }
             let p = if wide {
                 Phdr {
                     flags: u32le(b, at + 4)?,
@@ -379,10 +384,12 @@ pub mod qualcomm {
         Ok((field(2)?, field(4)?))
     }
 
-    /// The `HW_ID` an attestation certificate's subject names in an
-    /// organisational unit: `OU=02 <16 hex digits> HW_ID`.
-    fn hw_id(subject: &[u8]) -> Result<Option<String>, String> {
+    /// The attestation certificate's organisational units of the form
+    /// `NN VALUE NAME` (`02 <16 hex digits> HW_ID`, `13 0001
+    /// IN_USE_SOC_HW_VERSION`, ...), by NAME.
+    fn ou_fields(subject: &[u8]) -> Result<std::collections::BTreeMap<String, String>, String> {
         const OU: &[u8] = &[0x06, 0x03, 0x55, 0x04, 0x0b];
+        let mut out = std::collections::BTreeMap::new();
         let (_, s, e) = tlv(subject, 0)?;
         for (_, _, ss, se) in children(subject, s, e)? {
             for (_, _, as_, ae) in children(subject, ss, se)? {
@@ -393,15 +400,12 @@ pub mod qualcomm {
                 }
                 let Ok(text) = std::str::from_utf8(&subject[vs..ve]) else { continue };
                 let words: Vec<&str> = text.split_whitespace().collect();
-                if let [_, id, "HW_ID"] = words[..]
-                    && id.len() == 16
-                    && id.bytes().all(|c| c.is_ascii_hexdigit())
-                {
-                    return Ok(Some(id.to_ascii_lowercase()));
+                if let [_, value, name] = words[..] {
+                    out.insert(name.to_string(), value.to_string());
                 }
             }
         }
-        Ok(None)
+        Ok(out)
     }
 
     /// Reads what a signed image says about itself, or why it isn't one.
@@ -425,10 +429,24 @@ pub mod qualcomm {
             return Err("the certificate chain doesn't end in a root certificate".into());
         }
         let (_, attest_subject) = issuer_subject(certs[0])?;
-        let hw = hw_id(attest_subject)?.ok_or("no HW_ID in the attestation certificate")?;
+        let ou = ou_fields(attest_subject)?;
+        let hw = ou
+            .get("HW_ID")
+            .filter(|id| id.len() == 16 && id.bytes().all(|c| c.is_ascii_hexdigit()))
+            .map(|id| id.to_ascii_lowercase())
+            .ok_or("no HW_ID in the attestation certificate")?;
+        // With IN_USE_SOC_HW_VERSION set, the HW_ID's first half is the SoC's
+        // hardware family, not an msm id: the chip is named as that, so it
+        // never passes for an msm id.
+        let soc_version = ou.get("IN_USE_SOC_HW_VERSION").is_some_and(|v| v.trim_start_matches('0') == "1");
+        let chip = if soc_version {
+            format!("soc-hw-version:{}", &hw[..4])
+        } else {
+            hw[..8].to_string()
+        };
         Ok(Signed {
             version,
-            chip: hw[..8].to_string(),
+            chip,
             hw_id: hw,
             root_sha256: hex(&Sha256::digest(root)),
             root_sha384: hex(&Sha384::digest(root)),
