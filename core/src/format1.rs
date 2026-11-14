@@ -316,6 +316,8 @@ pub struct SuppliedFile {
     pub signature: Signature,
     #[serde(default)]
     pub known: Vec<KnownFile>,
+    #[serde(default)]
+    pub known_bad: Vec<KnownBadFile>,
 }
 
 /// What the device's boot ROM does with a program's signature (FR-018b).
@@ -341,6 +343,19 @@ impl Signature {
 #[serde(deny_unknown_fields)]
 pub struct KnownFile {
     pub sha256: String,
+    #[serde(default)]
+    pub verified: Option<Verified>,
+    #[serde(default)]
+    pub untried: Option<String>,
+}
+
+/// A file seen not working on this device, by its checksum, with what goes
+/// wrong with it in plain words for the person (004 FR-004).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct KnownBadFile {
+    pub sha256: String,
+    pub reason: String,
     #[serde(default)]
     pub verified: Option<Verified>,
     #[serde(default)]
@@ -1021,6 +1036,22 @@ pub fn shape_for(format: i64) -> Table {
                         .one_of(&["verified", "untried"]),
                     ),
                     "the files known to work on this device, by checksum (FR-023a)",
+                ),
+            ),
+            opt(
+                "known_bad",
+                arr(
+                    table(
+                        Table::new(
+                            "a file seen not working on this device; it is never sent (004 FR-004)",
+                            tried(vec![
+                                f("sha256", sp(SHA256_PATTERN, "its SHA-256, lower-case hex")),
+                                f("reason", s("what goes wrong with it, in plain words shown to the person")),
+                            ]),
+                        )
+                        .one_of(&["verified", "untried"]),
+                    ),
+                    "the files known not to work on this device, by checksum (FR-023a)",
                 ),
             ),
         ],

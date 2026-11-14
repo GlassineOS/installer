@@ -473,3 +473,45 @@ fn test_keys_accepted_makes_the_files_claims_no_evidence() {
     let d = noteair_for(&root, &hex(&Sha256::digest(&other_chip)));
     assert_eq!(check(&d, &other_chip, None), Verdict::Known { verified: false });
 }
+
+// ---- files known not to work ---------------------------------------------------
+
+/// The Note Air's checksum of a file seen not working on it.
+const DESC_BAD: &str = "4c2c494e92551b1d7f06f7beece875c0ef2b9b7b2ffab347f76a3dda8fa3d20c";
+
+/// A file known not to work is refused with its reason, whatever it is: a
+/// programmer that would otherwise fit, or not a programmer at all.
+#[test]
+fn a_file_known_not_to_work_is_refused_with_why() {
+    let (b, root) = programmer(false, 5, HW_ID, "Root CA");
+    let t = noteair()
+        .replace(DESC_PK, &hex(&Sha256::digest(&root)))
+        .replace(DESC_BAD, &hex(&Sha256::digest(&b)));
+    let enforced = mutate(&t, "boot_rom = \"test-keys-accepted\"", "boot_rom = \"enforced\"");
+    for d in [valid(&t), valid(&enforced)] {
+        match check(&d, &b, None) {
+            Verdict::KnownBad { reason, verified } => {
+                assert!(reason.contains("partition table"), "{reason}");
+                assert!(!verified);
+            }
+            v => panic!("{v:?}"),
+        }
+        assert_eq!(check(&d, &b, None).sendable(), None);
+    }
+    let d = valid(&noteair().replace(DESC_BAD, &hex(&Sha256::digest(b"x"))));
+    let c = supplied::check(&d, "emergency-programmer", b"x", None).unwrap();
+    let v: serde_json::Value = serde_json::to_value(&c).unwrap();
+    assert_eq!(v["verdict"], "known-bad");
+    assert!(v["reason"].as_str().unwrap().contains("never answers"));
+    assert_eq!(v["verified"], false);
+}
+
+/// The device's own report still decides first: a device the description
+/// doesn't name gets "wrong chip or key", not the description's reason.
+#[test]
+fn the_devices_report_comes_before_known_not_to_work() {
+    let d = valid(&noteair().replace(DESC_BAD, &hex(&Sha256::digest(b"x"))));
+    assert!(matches!(check(&d, b"x", Some(&device("0014d0e1", OTHER))), Verdict::WrongChipOrKey { .. }));
+    let pk = d.supplied_files[0].matches["pk_hash"].clone();
+    assert!(matches!(check(&d, b"x", Some(&device(CHIP, &pk))), Verdict::KnownBad { .. }));
+}

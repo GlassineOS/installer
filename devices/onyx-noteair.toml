@@ -446,6 +446,11 @@ signature = { boot_rom = "test-keys-accepted", verified = { record = "GlassineOS
 sha256 = "b3e409558677f9b280fed7851e8cc66f0079ad78ef0b07519a3a98d86c14d41b"
 untried = "the edl tool read and wrote the Note Air through it in development (2026-06-02); not a recorded installer run"
 
+[[supplied_files.known_bad]]
+sha256 = "4c2c494e92551b1d7f06f7beece875c0ef2b9b7b2ffab347f76a3dda8fa3d20c"
+reason = "It starts, then hangs while reading the partition table and never answers."
+untried = "edl tool, development, 2026-06-02; not a recorded installer run"
+
 # ---- what an installation does ------------------------------------------------
 
 [[artifacts]]
@@ -695,4 +700,4 @@ retire-stock = "Stop Android from starting."
 [texts.supplied_files.emergency-programmer]
 what = "A small program, signed by the chip's maker, that the Note Air runs in its emergency mode. Through it the installer reads the whole device for the backup, before anything changes. It isn't on the device, so the installer can't read it from there."
 why = "It belongs to the chip's maker, and GlassineOS may not pass it on. You find it yourself, for your own device. It stays on this computer, is used only for this backup, and is never uploaded."
-recognise = "Files for Qualcomm's emergency mode are named after the chip and its signing key. Search for a file whose name starts with the name shown; the end of the name varies. It must be a Firehose programmer for eMMC storage that works on the Snapdragon 636. The installer checks the file before it sends anything: a file it doesn't know is sent only after you confirm."
+recognise = "Files for Qualcomm's emergency mode are named after the chip and its signing key. Search for a file whose name starts with the name shown; the end of the name varies. It must be a Firehose programmer for eMMC storage that works on the Snapdragon 636. The installer checks the file before it sends anything: a file it doesn't know is sent only after you confirm, and a file known not to work on this device is never sent."
