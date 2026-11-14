@@ -325,6 +325,27 @@ fn a_supplied_file_names_no_place_to_get_it() {
     );
 }
 
+/// FR-018b: a supplied file says whether the boot ROM enforces the signing key.
+#[test]
+fn a_supplied_file_says_whether_the_key_is_enforced() {
+    na(
+        "boot_rom = \"test-keys-accepted\"",
+        "boot_rom = \"sometimes\"",
+        "supplied_files[0].signature.boot_rom",
+    );
+    na(
+        "signature = { boot_rom = \"test-keys-accepted\", verified = { record = \"GlassineOS/installer#18\", state = \"installed\", boot_loader = \"GlassineOS boot loader, abl tag glassine1\" } }\n",
+        "",
+        "supplied_files[0].signature",
+    );
+    na(
+        "signature = { boot_rom = \"test-keys-accepted\", verified = { record = \"GlassineOS/installer#18\", state = \"installed\", boot_loader = \"GlassineOS boot loader, abl tag glassine1\" } }",
+        "signature = { boot_rom = \"enforced\" }",
+        "supplied_files[0].signature",
+    );
+    valid(&mutate(&noteair(), "boot_rom = \"test-keys-accepted\"", "boot_rom = \"enforced\""));
+}
+
 #[test]
 fn a_known_file_is_a_sha256_tried_or_not() {
     na(&format!("sha256 = \"{KNOWN}\""), "sha256 = \"b3e40955\"", "supplied_files[0].known[0].sha256");

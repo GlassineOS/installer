@@ -312,8 +312,28 @@ pub struct SuppliedFile {
     pub usual_name: String,
     /// What the route checks it against (vocab::SUPPLIED_MATCHES).
     pub matches: BTreeMap<String, String>,
+    /// Whether the boot ROM enforces the signing key (vocab::SIGNATURE_RULES).
+    pub signature: Signature,
     #[serde(default)]
     pub known: Vec<KnownFile>,
+}
+
+/// What the device's boot ROM does with a program's signature (FR-018b).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Signature {
+    pub boot_rom: String,
+    #[serde(default)]
+    pub verified: Option<Verified>,
+    #[serde(default)]
+    pub untried: Option<String>,
+}
+
+impl Signature {
+    /// The boot ROM runs programs signed with test keys.
+    pub fn test_keys_accepted(&self) -> bool {
+        self.boot_rom == "test-keys-accepted"
+    }
 }
 
 /// A file seen working on this device, by its checksum.
@@ -977,6 +997,19 @@ pub fn shape_for(format: i64) -> Table {
                     doc: "what the route of the mode that needs it checks it against; the keys are the route's (supplied_file_matches)".into(),
                 },
             ),
+            f(
+                "signature",
+                table(
+                    Table::new(
+                        "whether the device's boot ROM enforces the signing key (004 FR-004)",
+                        tried(vec![f(
+                            "boot_rom",
+                            se(&vocab::ids_in(vocab::SIGNATURE_RULES, format), "enforced, or test-keys-accepted"),
+                        )]),
+                    )
+                    .one_of(&["verified", "untried"]),
+                ),
+            ),
             opt(
                 "known",
                 arr(
@@ -1243,6 +1276,7 @@ pub fn vocabularies_json(format: i64) -> serde_json::Value {
                 .map(|m| json!({ "mode_kind": m.mode_kind, "key": m.key, "fact_key": m.fact_key, "pattern": m.pattern, "doc": m.doc }))
                 .collect::<Vec<_>>()
         );
+        v["signature_rules"] = json!(entries(vocab::SIGNATURE_RULES));
     }
     v
 }

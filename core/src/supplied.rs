@@ -39,9 +39,11 @@ pub enum Verdict {
         /// Whether that was in a recorded run (FR-023a), not only in development.
         verified: bool,
     },
-    /// Made for this chip and key, but not a known file: sent only after the
-    /// person confirms a warning.
-    FitsUnknown { values: BTreeMap<String, String> },
+    /// A programmer that isn't a known file: sent only after the person
+    /// confirms a warning. `values` is what the file names; `differs` the
+    /// keys where that isn't the description's, which only happens on a
+    /// device whose boot ROM accepts test keys (004 FR-004).
+    FitsUnknown { values: BTreeMap<String, String>, differs: Vec<String> },
     /// Made for another chip or key, or the device reports other values than
     /// the description names: never sent. `made_for` is what the file is
     /// made for (empty when that couldn't be read; for a known file, the
@@ -142,8 +144,11 @@ fn verdict(route: &str, f: &SuppliedFile, bytes: &[u8], sha256: &str, device: Op
         Err(why) => return Verdict::NotAProgrammer { why },
     };
     let differs: Vec<String> = keys.iter().filter(|k| values.get(**k) != want.get(**k)).map(|k| k.to_string()).collect();
-    if differs.is_empty() && !keys.is_empty() {
-        Verdict::FitsUnknown { values }
+    // A boot ROM that runs test-signed programs makes the file's own chip and
+    // key no evidence either way (004 FR-004): a programmer is sent after the
+    // person confirms, the warning showing what the file names.
+    if (differs.is_empty() || f.signature.test_keys_accepted()) && !keys.is_empty() {
+        Verdict::FitsUnknown { values, differs }
     } else {
         Verdict::WrongChipOrKey {
             made_for: values,

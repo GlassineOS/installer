@@ -436,6 +436,11 @@ id = "emergency-programmer"
 what = "emergency-programmer"
 usual_name = "000cc0e100000000_7be49b72f9e43372_"
 matches = { chip = "000cc0e1", pk_hash = "7be49b72f9e4337223ccb84d6eccca4e61ce16e3602ac2008cb18b75babe6d09" }
+# The boot ROM isn't fused: it ran images test-signed for another key in the
+# upload tests of 2026-11-13 (GlassineOS/installer#18), and the programmer
+# known to work names another chip and key itself. So a file's own chip and
+# key prove nothing here.
+signature = { boot_rom = "test-keys-accepted", verified = { record = "GlassineOS/installer#18", state = "installed", boot_loader = "GlassineOS boot loader, abl tag glassine1" } }
 
 [[supplied_files.known]]
 sha256 = "b3e409558677f9b280fed7851e8cc66f0079ad78ef0b07519a3a98d86c14d41b"
@@ -690,4 +695,4 @@ retire-stock = "Stop Android from starting."
 [texts.supplied_files.emergency-programmer]
 what = "A small program, signed by the chip's maker, that the Note Air runs in its emergency mode. Through it the installer reads the whole device for the backup, before anything changes. It isn't on the device, so the installer can't read it from there."
 why = "It belongs to the chip's maker, and GlassineOS may not pass it on. You find it yourself, for your own device. It stays on this computer, is used only for this backup, and is never uploaded."
-recognise = "Files for Qualcomm's emergency mode are named after the chip and its signing key. Search for a file whose name starts with the name shown; the end of the name varies. It must be a Firehose programmer for eMMC storage that works on the Snapdragon 636. The installer checks the file before it sends anything, and refuses one made for another chip or key."
+recognise = "Files for Qualcomm's emergency mode are named after the chip and its signing key. Search for a file whose name starts with the name shown; the end of the name varies. It must be a Firehose programmer for eMMC storage that works on the Snapdragon 636. The installer checks the file before it sends anything: a file it doesn't know is sent only after you confirm."

@@ -480,6 +480,9 @@ fn check_supplied_files(ck: &mut Ck) {
                 strings.push((format!("{kp}.verified.boot_loader"), v.boot_loader.as_str()));
             }
         }
+        if let Some(u) = &f.signature.untried {
+            strings.push((format!("{path}.signature.untried"), u.as_str()));
+        }
         for (p, v) in strings {
             if looks_like_link(v) {
                 ck.p(p, "names no place to get the file: no links (FR-018b)");
@@ -501,6 +504,8 @@ fn check_supplied_files(ck: &mut Ck) {
         for (j, k) in f.known.iter().enumerate() {
             check_tried(ck, &k.verified, &format!("{path}.known[{j}]"));
         }
+        check_tried(ck, &f.signature.verified, &format!("{path}.signature"));
+
         let needing: Vec<&format1::Mode> = d.modes.iter().filter(|m| m.needs.as_deref() == Some(f.id.as_str())).collect();
         if needing.is_empty() {
             ck.p(format!("{path}.id"), "no mode needs it");
