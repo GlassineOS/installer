@@ -16,6 +16,7 @@ use std::process::ExitCode;
 
 mod backup;
 mod emergency;
+mod emergency_read;
 mod emergency_try;
 
 include!(concat!(env!("OUT_DIR"), "/embedded.rs"));
@@ -31,6 +32,7 @@ const USAGE: &str = "usage:
                         [--json] [--devices DIR]
   glassine-install backup --ram IMAGE --out DIR [--accept-slot-flags] [--devices DIR]
   glassine-install emergency-info [--json] [--serial]
+  glassine-install emergency-read --programmer FILE (--only-gpt | --out DIR [--partition NAME]...)
   glassine-install schema
   glassine-install lock-unpinned LOCKFILE
 
@@ -59,7 +61,18 @@ mode (Qualcomm, USB 05c6:9008) reports, in Sahara's command mode: the Sahara ver
 version. It sends queries only, never a program, and leaves the device waiting in that mode:
 hold its power key ~10 s to restart it. The serial number is unique to the unit and shown only
 with --serial. Linux needs no driver (a udev rule or root for access); Windows needs the WinUSB
-driver for the device, installed once with Zadig.";
+driver for the device, installed once with Zadig.
+
+emergency-read reads the storage of that device through a programmer the person supplies:
+--programmer names the file, and nothing else is ever looked for or sent. It reads the boot ROM's
+facts (a chip this installer doesn't know gets nothing), sends the file, waits for the programmer's
+first answer (none: the file isn't working on this device), then only lists, reads and restarts:
+the partition table (GPT), then with --out DIR (new or empty) the partitions named by --partition,
+or without --partition the whole user area of the eMMC, each read twice range by range, compared,
+stored as a gzip file, read back and checked; manifest.json lists them. At the end the device is
+restarted. On a device not read this way before, take it in steps: --only-gpt first, then one
+small partition (--partition devinfo --out DIR), then the whole disk. GLASSINE_USB_TRACE=1 logs
+every USB transfer.";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -70,6 +83,7 @@ fn main() -> ExitCode {
         Some("plan") => plan_cmd(&args[1..]),
         Some("backup") => backup_cmd(&args[1..]),
         Some("emergency-info") => emergency_cmd(&args[1..]),
+        Some("emergency-read") => emergency_read_cmd(&args[1..]),
         Some("emergency-try-program") => emergency_try_cmd(&args[1..]),
         Some("schema") => {
             println!("{}", serde_json::to_string_pretty(&format1::json_schema()).unwrap());
@@ -548,6 +562,29 @@ fn emergency_cmd(args: &[String]) -> Result<ExitCode, String> {
         Ok(out) => {
             print!("{out}");
             eprintln!("{}", emergency::LEAVE);
+            Ok(ExitCode::SUCCESS)
+        }
+        Err(e) => {
+            eprintln!("{e}");
+            Ok(ExitCode::from(DEVICE_FAILED))
+        }
+    }
+}
+
+fn emergency_read_cmd(args: &[String]) -> Result<ExitCode, String> {
+    let o = opts(args, &["--only-gpt"], &["--programmer", "--out", "--partition"])?;
+    if !o.rest.is_empty() {
+        return Err(USAGE.into());
+    }
+    let Some(programmer) = o.one("--programmer") else {
+        return Err(format!(
+            "emergency-read needs --programmer FILE: the person's own programmer for the device\n\n{USAGE}"
+        ));
+    };
+    let scope = emergency_read::scope(o.has("--only-gpt"), o.all("--partition"), o.one("--out").map(String::as_str))?;
+    match emergency_read::run(Path::new(programmer), o.one("--out").map(Path::new), &scope) {
+        Ok(out) => {
+            print!("{out}");
             Ok(ExitCode::SUCCESS)
         }
         Err(e) => {
