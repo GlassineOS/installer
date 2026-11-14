@@ -368,28 +368,54 @@ pub struct Firehose<T: Transport> {
     rx: Vec<u8>,
     configured: Option<Configured>,
     broken: bool,
+    /// What [`Firehose::listen`] read.
+    early_logs: Vec<String>,
 }
 
 impl<T: Transport> Firehose<T> {
-    /// Sends `configure` and waits for the programmer's first answer (004
-    /// FR-006): until it has answered, it doesn't count as working and
-    /// nothing is read. `configure` is sent once and not again on a timeout
-    /// (a second one could leave two answers queued, and a browser's
-    /// transport is closed after its first timeout); the transport's
-    /// timeout is the wait. Logs the programmer sent on its own before are
-    /// read as part of the answer.
-    ///
-    /// When the programmer answers NAK and names the payload size it takes
-    /// (`MaxPayloadSizeToTargetInBytesSupported`, else
-    /// `MaxPayloadSizeToTargetInBytes`), `configure` is sent once more with
-    /// that size, and only an ACK goes on.
+    /// A session over the transport of a programmer the boot ROM has just
+    /// started. Nothing is sent until [`Firehose::configure`].
     pub fn new(t: T) -> Self {
         Firehose {
             t,
             rx: Vec::new(),
             configured: None,
             broken: false,
+            early_logs: Vec::new(),
         }
+    }
+
+    /// Reads what the programmer sends on its own once it starts (log
+    /// lines), until the transport's first timeout, and sends nothing. Some
+    /// programmers take requests only after these lines (`qdl` reads them
+    /// before its first `configure`, `edl` drains them too), so a
+    /// `configure` sent at once could go unanswered. A timeout ends the
+    /// listening and isn't an error; on a transport that closes after its
+    /// first timeout (the browser's) this must not be called. The lines go
+    /// into [`Configured::logs`] as [`shown_logs`] lets them be shown.
+    pub async fn listen(&mut self) -> Result<usize, FirehoseError> {
+        if self.configured.is_some() || self.broken {
+            return Err(FirehoseError::Refused("listening is before configure".into()));
+        }
+        for _ in 0..DOCS_MAX {
+            let elements = match self.document().await {
+                Ok(e) => e,
+                Err(FirehoseError::Transport(FbError::Timeout(_))) if self.rx.is_empty() => return Ok(self.early_logs.len()),
+                Err(e) => return Err(e),
+            };
+            for e in elements {
+                match e.name.as_str() {
+                    "log" => self.early_logs.push(e.attr("value").unwrap_or_default().to_string()),
+                    "response" => {
+                        self.broken = true;
+                        return Err(FirehoseError::Unexpected("a response before any request".into()));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        self.broken = true;
+        Err(FirehoseError::Unexpected(format!("{DOCS_MAX} documents and no pause")))
     }
 
     /// Sends `configure` and waits for the programmer's first answer (004
@@ -428,10 +454,11 @@ impl<T: Transport> Firehose<T> {
             version: None,
             logs: vec![],
         };
-        let mut logs = a.logs.clone();
+        let mut logs = std::mem::take(&mut self.early_logs);
+        logs.extend(a.logs.iter().cloned());
         if !a.ack() {
-            if needs_auth(&a.logs) {
-                return Err(FirehoseError::NeedsAuth { logs: shown_logs(&a.logs) });
+            if needs_auth(&logs) {
+                return Err(FirehoseError::NeedsAuth { logs: shown_logs(&logs) });
             }
             let size = ["MaxPayloadSizeToTargetInBytesSupported", "MaxPayloadSizeToTargetInBytes"]
                 .iter()

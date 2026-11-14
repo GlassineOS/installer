@@ -64,19 +64,25 @@ pub enum Scope {
     WholeDisk,
 }
 
-/// Sizes of the reads; the defaults are [`firehose::READ_CHUNK`] and
-/// [`RANGE`]. Tests use small ones.
+/// How the route reads. The defaults: reads of [`firehose::READ_CHUNK`],
+/// checked in ranges of [`RANGE`], no listening before `configure`. Tests use
+/// small opts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Sizes {
+pub struct Options {
     pub chunk: u64,
     pub range: u64,
+    /// Read the programmer's own log lines until the transport's first
+    /// timeout before `configure` ([`Firehose::listen`]). Only for a
+    /// transport that survives a timeout (native USB, not the browser's).
+    pub listen_first: bool,
 }
 
-impl Default for Sizes {
+impl Default for Options {
     fn default() -> Self {
-        Sizes {
+        Options {
             chunk: firehose::READ_CHUNK,
             range: RANGE,
+            listen_first: false,
         }
     }
 }
@@ -295,21 +301,21 @@ pub fn manifest(chip: Option<&str>, programmer: &[u8], images: &[(DiskRecord, u6
 /// Reads `img` into the edge: range by range, each range read twice (the
 /// first pass stored and hashed, the second hashed and compared), then the
 /// stored copy read back and compared.
-pub async fn read_image<T: Transport, E: ImageEdge>(fh: &mut Firehose<T>, img: &Image, sizes: Sizes, edge: &mut E) -> Result<DiskRecord, EmergencyError> {
+pub async fn read_image<T: Transport, E: ImageEdge>(fh: &mut Firehose<T>, img: &Image, opts: Options, edge: &mut E) -> Result<DiskRecord, EmergencyError> {
     let d = &img.disk;
     let s = d.sector as u64;
-    if sizes.range == 0 || !sizes.range.is_multiple_of(s) || !d.size.is_multiple_of(s) || d.size == 0 {
-        return Err(EmergencyError::Storage(format!("{}: {} bytes in ranges of {}", d.name, d.size, sizes.range)));
+    if opts.range == 0 || !opts.range.is_multiple_of(s) || !d.size.is_multiple_of(s) || d.size == 0 {
+        return Err(EmergencyError::Storage(format!("{}: {} bytes in ranges of {}", d.name, d.size, opts.range)));
     }
     let mut whole = Sha256::new();
     let mut ranges = Vec::new();
     let mut off = 0u64;
     while off < d.size {
-        let len = sizes.range.min(d.size - off);
+        let len = opts.range.min(d.size - off);
         let start = img.start_sector + off / s;
         let mut first = Sha256::new();
         let mut err = None;
-        fh.read(d.index, d.sector, start, len / s, sizes.chunk, &mut |b| {
+        fh.read(d.index, d.sector, start, len / s, opts.chunk, &mut |b| {
             first.update(b);
             whole.update(b);
             edge.write(b).inspect_err(|e| err = Some(e.clone()))
@@ -320,7 +326,7 @@ pub async fn read_image<T: Transport, E: ImageEdge>(fh: &mut Firehose<T>, img: &
             None => e.into(),
         })?;
         let mut second = Sha256::new();
-        fh.read(d.index, d.sector, start, len / s, sizes.chunk, &mut |b| {
+        fh.read(d.index, d.sector, start, len / s, opts.chunk, &mut |b| {
             second.update(b);
             Ok(())
         })
@@ -339,7 +345,7 @@ pub async fn read_image<T: Transport, E: ImageEdge>(fh: &mut Firehose<T>, img: &
     Ok(DiskRecord {
         disk: d.clone(),
         sha256: whole.finalize().into(),
-        range: sizes.range,
+        range: opts.range,
         ranges,
     })
 }
@@ -349,13 +355,13 @@ pub async fn read_image<T: Transport, E: ImageEdge>(fh: &mut Firehose<T>, img: &
 async fn store_image<T: Transport, E: ImageEdge>(
     fh: &mut Firehose<T>,
     img: &Image,
-    sizes: Sizes,
+    opts: Options,
     edge: &mut E,
     incomplete: &mut Vec<(String, String, String)>,
 ) -> Result<(DiskRecord, String), EmergencyError> {
     edge.begin(&img.disk).map_err(EmergencyError::Edge)?;
     let r = async {
-        let rec = read_image(fh, img, sizes, edge).await?;
+        let rec = read_image(fh, img, opts, edge).await?;
         let file = edge.end(&img.disk).map_err(EmergencyError::Edge)?;
         edge.reopen(&img.disk).map_err(EmergencyError::Edge)?;
         glassine_read::check_copy(&rec, |b| edge.fill(b)).map_err(|e| match e {
@@ -374,7 +380,7 @@ async fn store_image<T: Transport, E: ImageEdge>(
 
 /// The run against a device at its boot ROM's first HELLO. `programmer` is
 /// the person's file; `scope` what to read after the GPT.
-pub async fn run<T: Transport, E: ImageEdge>(t: T, programmer: &[u8], scope: &Scope, sizes: Sizes, edge: &mut E) -> Result<Done, Failure> {
+pub async fn run<T: Transport, E: ImageEdge>(t: T, programmer: &[u8], scope: &Scope, opts: Options, edge: &mut E) -> Result<Done, Failure> {
     let fail = |error, restart| Failure {
         error,
         restart,
@@ -409,6 +415,12 @@ pub async fn run<T: Transport, E: ImageEdge>(t: T, programmer: &[u8], scope: &Sc
         return Err(fail(EmergencyError::Refused(why), restart));
     }
     let mut fh = Firehose::new(s.into_transport());
+    if opts.listen_first {
+        match fh.listen().await {
+            Ok(n) => edge.note(&format!("the programmer started and logged {n} line(s)")),
+            Err(e) => return Err(fail(EmergencyError::NotWorking(e.to_string()), Restart::NotPossible)),
+        }
+    }
     let c = match fh.configure().await {
         Ok(c) => c.clone(),
         Err(FirehoseError::NoAnswer) => {
@@ -438,7 +450,7 @@ pub async fn run<T: Transport, E: ImageEdge>(t: T, programmer: &[u8], scope: &Sc
     ));
     let mut incomplete = Vec::new();
     let mut images = Vec::new();
-    let body = read_all(&mut fh, scope, sizes, edge, &mut images, &mut incomplete).await;
+    let body = read_all(&mut fh, scope, opts, edge, &mut images, &mut incomplete).await;
     let restart = match fh.reset().await {
         Ok(()) => Restart::Done,
         Err(e) => Restart::Failed(e.to_string()),
@@ -480,7 +492,7 @@ type Read = (Option<StorageInfo>, u32, u64, Table);
 async fn read_all<T: Transport, E: ImageEdge>(
     fh: &mut Firehose<T>,
     scope: &Scope,
-    sizes: Sizes,
+    opts: Options,
     edge: &mut E,
     images: &mut Vec<(DiskRecord, u64, String)>,
     incomplete: &mut Vec<(String, String, String)>,
@@ -606,7 +618,7 @@ async fn read_all<T: Transport, E: ImageEdge>(
             "reading {} ({} bytes from sector {}), every range twice",
             img.disk.name, img.disk.size, img.start_sector
         ));
-        let (rec, file) = store_image(fh, img, sizes, edge, incomplete).await?;
+        let (rec, file) = store_image(fh, img, opts, edge, incomplete).await?;
         edge.note(&format!("{}: {} bytes, sha256 {}, checked", img.disk.name, img.disk.size, rec.sha256_hex()));
         images.push((rec, img.start_sector, file));
     }
