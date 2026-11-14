@@ -10,14 +10,15 @@
 //! `GLASSINE_USB_TRACE=1` logs every bulk transfer (the USB edge does it).
 
 use crate::backup::FileEdge;
-use glassine_installer::emergency_read::{self, Failure, ImageEdge, Restart, Scope, Sizes};
+use glassine_installer::emergency_read::{self, Failure, ImageEdge, Options, Restart, Scope};
 use glassine_installer::glassine_read::Disk;
 use std::path::Path;
 use std::time::Duration;
 
-/// The bound on one transfer: the programmer's first answer, and each piece
-/// of a read (at most 1 MiB).
-pub const TIMEOUT: Duration = Duration::from_secs(30);
+/// The bound on one transfer: the pause that ends the listening for the
+/// programmer's own log lines after it started, the wait for its first
+/// answer, and each piece of a read (at most 1 MiB).
+pub const TIMEOUT: Duration = Duration::from_secs(10);
 
 const RESTART_BY_HAND: &str = "restart the device by hand: hold the power key ~10 s";
 
@@ -85,11 +86,15 @@ pub fn run(programmer: &Path, out: Option<&Path>, scope: &Scope) -> Result<Strin
         (_, Some(dir)) => Some(FileEdge::new(dir)?),
         (_, None) => return Err("no --out DIR".into()),
     };
+    let opts = Options {
+        listen_first: true,
+        ..Options::default()
+    };
     let (mut t, _ids) = crate::emergency::open()?;
     t.set_timeout(TIMEOUT);
     let r = match files.as_mut() {
-        Some(f) => pollster::block_on(emergency_read::run(t, &bytes, scope, Sizes::default(), f)),
-        None => pollster::block_on(emergency_read::run(t, &bytes, scope, Sizes::default(), &mut NoStore)),
+        Some(f) => pollster::block_on(emergency_read::run(t, &bytes, scope, opts, f)),
+        None => pollster::block_on(emergency_read::run(t, &bytes, scope, opts, &mut NoStore)),
     };
     match r {
         Ok(done) => {

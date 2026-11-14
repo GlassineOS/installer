@@ -8,7 +8,7 @@
 //! command is configure, getstorageinfo, read or power reset (004 FR-007).
 //! No serial, key, programmer or disk of a real unit is in here.
 
-use glassine_installer::emergency_read::{self, Done, EmergencyError, Failure, ImageEdge, Restart, Scope, Sizes};
+use glassine_installer::emergency_read::{self, Done, EmergencyError, Failure, ImageEdge, Options, Restart, Scope};
 use glassine_installer::fastboot::{FbError, Transport};
 use glassine_installer::glassine_read::Disk;
 use glassine_installer::sahara::{self, cmd};
@@ -21,10 +21,12 @@ const SECTOR: usize = 512;
 const SECTORS: u64 = 16384; // an 8 MiB eMMC
 const ID: u32 = 0x0d;
 
-/// Small reads, so a partition spans several requests and ranges.
-const SIZES: Sizes = Sizes {
+/// Small reads, so a partition spans several requests and ranges; listening
+/// first, as the command line does.
+const OPTS: Options = Options {
     chunk: 64 << 10,
     range: 256 << 10,
+    listen_first: true,
 };
 
 /// The partitions of the synthetic disk: name, first and last LBA.
@@ -123,6 +125,10 @@ struct Faults {
     zlp: bool,
     /// The most bytes of data per transfer (0: all in one).
     split: usize,
+    /// The most bytes of any transfer (0: as asked): documents split too.
+    cap: usize,
+    /// Drops every request until its start-up logs were read.
+    deaf_until_logged: bool,
 }
 
 struct Device {
@@ -135,6 +141,8 @@ struct Device {
     done_at: Option<usize>,
     reads_covering: BTreeMap<u64, u32>,
     stuck: bool,
+    /// Transfers still to be read before it listens ([`Faults::deaf_until_logged`]).
+    deaf_pops: usize,
 }
 
 fn doc(body: &str) -> Vec<u8> {
@@ -181,6 +189,7 @@ impl Device {
             done_at: None,
             reads_covering: BTreeMap::new(),
             stuck: false,
+            deaf_pops: 0,
         }
     }
 
@@ -201,7 +210,7 @@ impl Device {
             .map(|c| (c[1].to_string(), c[2].to_string()))
             .collect();
         let num = |k: &str| attrs.get(k).and_then(|v| v.parse::<u64>().ok()).unwrap_or_else(|| panic!("{k} in {text}"));
-        if self.f.silent || self.stuck && name != "power" {
+        if self.f.silent || self.deaf_pops > 0 || self.stuck && name != "power" {
             return;
         }
         match name.as_str() {
@@ -303,6 +312,10 @@ impl Transport for Device {
                 self.out.push_back(log("INFO: Binary build date: synthetic"));
                 self.out.push_back(log("INFO: Chip serial num: 305419896 (0x12345678)"));
             }
+            if self.f.deaf_until_logged {
+                // DONE_RESP and the logs.
+                self.deaf_pops = self.out.len();
+            }
         }
         Ok(())
     }
@@ -313,9 +326,12 @@ impl Transport for Device {
 
     async fn recv_max(&mut self, max: usize) -> Result<Vec<u8>, FbError> {
         let mut t = self.out.pop_front().ok_or(FbError::Timeout("waiting for an answer".into()))?;
+        let max = if self.f.cap > 0 { max.min(self.f.cap) } else { max };
         if t.len() > max {
             let rest = t.split_off(max);
             self.out.push_front(rest);
+        } else if self.done_at.is_some() {
+            self.deaf_pops = self.deaf_pops.saturating_sub(1);
         }
         Ok(t)
     }
@@ -390,9 +406,13 @@ struct Run {
 }
 
 fn go_with(f: Faults, scope: Scope, mem: Mem) -> Run {
+    go_opts(f, scope, mem, OPTS)
+}
+
+fn go_opts(f: Faults, scope: Scope, mem: Mem, opts: Options) -> Run {
     let mut dev = Device::new(f);
     let mut mem = mem;
-    let r = block_on(emergency_read::run(&mut dev, &programmer(), &scope, SIZES, &mut mem));
+    let r = block_on(emergency_read::run(&mut dev, &programmer(), &scope, opts, &mut mem));
     let run = Run { r, dev, mem };
     whitelist(&run.dev);
     run
@@ -542,6 +562,41 @@ fn gpt_only_stores_nothing() {
 }
 
 #[test]
+fn a_programmer_that_listens_only_after_its_logs() {
+    let f = Faults {
+        deaf_until_logged: true,
+        ..lively()
+    };
+    let run = go(f.clone(), Scope::GptOnly);
+    let done = run.r.unwrap();
+    assert_eq!(done.restart, Restart::Done);
+    // Its start-up lines are kept, the serial left out.
+    assert_eq!(done.configured.logs[0], "INFO: Binary build date: synthetic");
+    assert!(done.configured.logs.iter().all(|l| !l.contains("serial")));
+    assert!(run.mem.notes.iter().any(|n| n == "the programmer started and logged 2 line(s)"));
+    // Without listening first, configure goes unanswered: what a browser,
+    // which can't listen, would meet with such a programmer.
+    let run = go_opts(f, Scope::GptOnly, Mem::default(), Options { listen_first: false, ..OPTS });
+    let e = run.r.unwrap_err();
+    assert!(matches!(e.error, EmergencyError::NotWorking(_)), "{:?}", e.error);
+    assert_eq!(commands(&run.dev), ["configure"]);
+}
+
+#[test]
+fn small_transfers_split_documents_and_data() {
+    for coalesce in [false, true] {
+        let f = Faults {
+            cap: 700,
+            coalesce,
+            ..lively()
+        };
+        let run = go(f, Scope::Partitions(vec!["devinfo".into()]));
+        run.r.unwrap();
+        assert_eq!(run.mem.files["devinfo.img"], slice(64, 191));
+    }
+}
+
+#[test]
 fn a_silent_programmer_is_not_working() {
     let run = go(
         Faults {
@@ -673,7 +728,7 @@ fn no_gpt_reads_nothing_more() {
     let mut dev = Device::new(lively());
     dev.disk[..SECTOR * 34].fill(0);
     let mut mem = Mem::default();
-    let r = block_on(emergency_read::run(&mut dev, &programmer(), &Scope::WholeDisk, SIZES, &mut mem));
+    let r = block_on(emergency_read::run(&mut dev, &programmer(), &Scope::WholeDisk, OPTS, &mut mem));
     whitelist(&dev);
     let f = r.unwrap_err();
     assert!(f.error.to_string().contains("no GPT header at LBA 1"), "{}", f.error);
