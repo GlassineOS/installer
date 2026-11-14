@@ -253,9 +253,14 @@ pinned to,
   [004](../004-emergency-mode/spec.md)). Each has an `id`, what it is (a text key, FR-026),
   the name it is usually found under (shown for the person to copy), the values the mode's
   backend checks it against (for an emergency mode: the chip and signing key its boot ROM
-  reports, which are also fact keys of that mode kind, FR-006), and `known`: the SHA-256 of
-  each file seen working on this device, with whether that was verified (FR-023a). It
-  names no place to get a file. The file stays on the person's computer for the session
+  reports, which are also fact keys of that mode kind, FR-006), whether the device's boot
+  ROM enforces the signing key (`signature`: `enforced`, or `test-keys-accepted` when it
+  runs programs signed with test keys, so a file's own chip and key prove nothing,
+  004 FR-004; verified or not, FR-023a), `known`: the SHA-256 of
+  each file seen working on this device, with whether that was verified (FR-023a), and
+  `known_bad`: the SHA-256 of each file seen not working on it, with a short plain reason
+  shown to the person (what goes wrong with it) and whether that was verified. A
+  checksum is never both. It names no place to get a file. The file stays on the person's computer for the session
   only and is never uploaded.
 
 ### What an installation does
@@ -341,7 +346,7 @@ pinned to,
 - Commands, scripts or code of any kind. The device's runtime code (services, bring-up of
   its radios and sound) is in its package.
 - Vendor files, or excerpts of them, or hashes of them other than a supplied file's
-  `known` checksums (FR-018b); links or searches for any vendor file; values unique to one unit (serial numbers,
+  `known` and `known_bad` checksums (FR-018b); links or searches for any vendor file; values unique to one unit (serial numbers,
   addresses, calibration); anything learned from one person's device.
 - Markup in texts.
 

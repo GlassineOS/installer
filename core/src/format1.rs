@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-//! The device description (spec 002), formats 1 and 2: its structure as a
+//! The device description (spec 002), formats 1 to 3: its structure as a
 //! shape for each format (for the walker and the schema) and as typed records
-//! (for everything after; format 2 only adds to format 1, so one set of
-//! records reads both).
+//! (for everything after; each format only adds to the one before, so one set
+//! of records reads them all).
 
 use crate::shape::*;
 use crate::vocab::{self, ParamType};
@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 /// The latest format; a reader reads it and every earlier one (FR-003).
-pub const FORMAT: i64 = 2;
+pub const FORMAT: i64 = 3;
 /// The earliest format a reader reads.
 pub const FIRST_FORMAT: i64 = 1;
 
@@ -31,6 +31,8 @@ pub const DATA_NAME_PATTERN: &str = "^[A-Za-z0-9_.+*-]+(/[A-Za-z0-9_.+*-]+)*$";
 pub const DATA_PATH_PATTERN: &str = "^(/[A-Za-z0-9_.+*-]+)+$";
 pub const USB_ID_PATTERN: &str = "^[0-9a-f]{4}$";
 pub const USB_IF_PATTERN: &str = "^[0-9a-f]{2}-[0-9a-f]{2}-[0-9a-f]{2}$";
+/// A SHA-256 checksum, lower-case hex.
+pub const SHA256_PATTERN: &str = "^[0-9a-f]{64}$";
 
 // ---- typed records ------------------------------------------------------
 
@@ -163,6 +165,9 @@ pub struct Mode {
     pub restarts_into: Vec<String>,
     #[serde(default)]
     pub departures: Vec<Departure>,
+    /// The supplied file whose program the mode runs (FR-010, FR-018b; format 3).
+    #[serde(default)]
+    pub needs: Option<String>,
     #[serde(default)]
     pub verified: Option<Verified>,
     #[serde(default)]
@@ -293,6 +298,77 @@ impl DeviceDatum {
             DeviceDatum::File(f) => &f.what,
         }
     }
+}
+
+/// A file a mode needs that the person supplies and GlassineOS can't (FR-018b,
+/// format 3), such as a programmer for an emergency mode (004).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SuppliedFile {
+    pub id: String,
+    /// The key of its texts in `[texts.supplied_files]`.
+    pub what: String,
+    /// The name it is usually found under, shown for the person to copy.
+    pub usual_name: String,
+    /// What the route checks it against (vocab::SUPPLIED_MATCHES).
+    pub matches: BTreeMap<String, String>,
+    /// Whether the boot ROM enforces the signing key (vocab::SIGNATURE_RULES).
+    pub signature: Signature,
+    #[serde(default)]
+    pub known: Vec<KnownFile>,
+    #[serde(default)]
+    pub known_bad: Vec<KnownBadFile>,
+}
+
+/// What the device's boot ROM does with a program's signature (FR-018b).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Signature {
+    pub boot_rom: String,
+    #[serde(default)]
+    pub verified: Option<Verified>,
+    #[serde(default)]
+    pub untried: Option<String>,
+}
+
+impl Signature {
+    /// The boot ROM runs programs signed with test keys.
+    pub fn test_keys_accepted(&self) -> bool {
+        self.boot_rom == "test-keys-accepted"
+    }
+}
+
+/// A file seen working on this device, by its checksum.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct KnownFile {
+    pub sha256: String,
+    #[serde(default)]
+    pub verified: Option<Verified>,
+    #[serde(default)]
+    pub untried: Option<String>,
+}
+
+/// A file seen not working on this device, by its checksum, with what goes
+/// wrong with it in plain words for the person (004 FR-004).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct KnownBadFile {
+    pub sha256: String,
+    pub reason: String,
+    #[serde(default)]
+    pub verified: Option<Verified>,
+    #[serde(default)]
+    pub untried: Option<String>,
+}
+
+/// The texts of a supplied file (FR-026).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SuppliedTexts {
+    pub what: String,
+    pub why: String,
+    pub recognise: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -444,6 +520,8 @@ pub struct Texts {
     pub states: BTreeMap<String, String>,
     #[serde(default)]
     pub steps: BTreeMap<String, String>,
+    #[serde(default)]
+    pub supplied_files: BTreeMap<String, SuppliedTexts>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -472,6 +550,8 @@ pub struct Description {
     #[serde(default)]
     pub device_files: Vec<DeviceFile>,
     #[serde(default)]
+    pub supplied_files: Vec<SuppliedFile>,
+    #[serde(default)]
     pub artifacts: Vec<Artifact>,
     #[serde(default)]
     pub capabilities: Vec<CapabilityEntry>,
@@ -494,6 +574,9 @@ impl Description {
     }
     pub fn transition(&self, id: &str) -> Option<&Transition> {
         self.transitions.iter().find(|t| t.id == id)
+    }
+    pub fn supplied_file(&self, id: &str) -> Option<&SuppliedFile> {
+        self.supplied_files.iter().find(|f| f.id == id)
     }
 }
 
@@ -781,24 +864,34 @@ pub fn shape_for(format: i64) -> Table {
     let mode = table(
         Table::new(
             "a way the installer talks to the device (FR-010)",
-            tried(vec![
-                f("id", sp(ID_PATTERN, "")),
-                f("kind", se(&mode_kinds, "the mode kind")),
-                opt(
-                    "usb",
-                    table(Table::new(
-                        "how it shows on USB",
-                        vec![
-                            f("vendor_id", sp(USB_ID_PATTERN, "")),
-                            f("product_id", sp(USB_ID_PATTERN, "")),
-                            opt("interface", sp(USB_IF_PATTERN, "class-subclass-protocol, hex")),
-                        ],
-                    )),
-                ),
-                f("can", arr(se(&ids(vocab::MODE_CAN), ""), "what it can do; empty while unknown")),
-                opt("restarts_into", arr(sp(ID_PATTERN, ""), "modes it can restart the device into")),
-                opt("departures", arr(departure, "")),
-            ]),
+            tried(
+                vec![
+                    f("id", sp(ID_PATTERN, "")),
+                    f("kind", se(&mode_kinds, "the mode kind")),
+                    opt(
+                        "usb",
+                        table(Table::new(
+                            "how it shows on USB",
+                            vec![
+                                f("vendor_id", sp(USB_ID_PATTERN, "")),
+                                f("product_id", sp(USB_ID_PATTERN, "")),
+                                opt("interface", sp(USB_IF_PATTERN, "class-subclass-protocol, hex")),
+                            ],
+                        )),
+                    ),
+                    f("can", arr(se(&ids(vocab::MODE_CAN), ""), "what it can do; empty while unknown")),
+                    opt("restarts_into", arr(sp(ID_PATTERN, ""), "modes it can restart the device into")),
+                    opt("departures", arr(departure, "")),
+                ]
+                .into_iter()
+                .chain((format >= 3).then(|| {
+                    opt(
+                        "needs",
+                        sp(ID_PATTERN, "the supplied file whose program it runs (an id of supplied_files, FR-018b)"),
+                    )
+                }))
+                .collect(),
+            ),
         )
         .one_of(&["verified", "untried"]),
     );
@@ -904,6 +997,65 @@ pub fn shape_for(format: i64) -> Table {
     } else {
         arr(sp("^[A-Za-z0-9_./-]+$", ""), "the device-data files the installed system needs (boot 006)")
     };
+    let supplied_file = table(Table::new(
+        "a file a mode needs that the person supplies and GlassineOS can't (FR-018b); never a place to get it",
+        vec![
+            f("id", sp(ID_PATTERN, "")),
+            f("what", sp(ID_PATTERN, "the key of its texts in texts.supplied_files (FR-026)")),
+            f("usual_name", s("the name it is usually found under, shown for the person to copy")),
+            f(
+                "matches",
+                Shape::Map {
+                    key_pattern: Some("^[a-z_]+$"),
+                    keys: None,
+                    value: Box::new(s("")),
+                    doc: "what the route of the mode that needs it checks it against; the keys are the route's (supplied_file_matches)".into(),
+                },
+            ),
+            f(
+                "signature",
+                table(
+                    Table::new(
+                        "whether the device's boot ROM enforces the signing key (004 FR-004)",
+                        tried(vec![f(
+                            "boot_rom",
+                            se(&vocab::ids_in(vocab::SIGNATURE_RULES, format), "enforced, or test-keys-accepted"),
+                        )]),
+                    )
+                    .one_of(&["verified", "untried"]),
+                ),
+            ),
+            opt(
+                "known",
+                arr(
+                    table(
+                        Table::new(
+                            "a file seen working on this device",
+                            tried(vec![f("sha256", sp(SHA256_PATTERN, "its SHA-256, lower-case hex"))]),
+                        )
+                        .one_of(&["verified", "untried"]),
+                    ),
+                    "the files known to work on this device, by checksum (FR-023a)",
+                ),
+            ),
+            opt(
+                "known_bad",
+                arr(
+                    table(
+                        Table::new(
+                            "a file seen not working on this device; it is never sent (004 FR-004)",
+                            tried(vec![
+                                f("sha256", sp(SHA256_PATTERN, "its SHA-256, lower-case hex")),
+                                f("reason", s("what goes wrong with it, in plain words shown to the person")),
+                            ]),
+                        )
+                        .one_of(&["verified", "untried"]),
+                    ),
+                    "the files known not to work on this device, by checksum (FR-023a)",
+                ),
+            ),
+        ],
+    ));
     let artifact = table(Table::new(
         "something the installation writes that doesn't come from the device (FR-019)",
         vec![
@@ -1014,7 +1166,27 @@ pub fn shape_for(format: i64) -> Table {
             ),
             opt("states", text_map("each state in words, by state id", ID_PATTERN)),
             opt("steps", text_map("each step in words, by step id", ID_PATTERN)),
-        ],
+        ]
+        .into_iter()
+        .chain((format >= 3).then(|| {
+            opt(
+                "supplied_files",
+                Shape::Map {
+                    key_pattern: Some(ID_PATTERN),
+                    keys: None,
+                    value: Box::new(table(Table::new(
+                        "the texts of a supplied file",
+                        vec![
+                            f("what", s("what it is, plain text")),
+                            f("why", s("why GlassineOS can't supply it, plain text")),
+                            f("recognise", s("how to recognise it, plain text")),
+                        ],
+                    ))),
+                    doc: "the texts of each supplied file, by the key its `what` names".into(),
+                },
+            )
+        }))
+        .collect(),
     ));
 
     Table::new(
@@ -1044,13 +1216,18 @@ pub fn shape_for(format: i64) -> Table {
             opt("boot_settings", arr(boot_setting, "")),
             opt("unit_values", arr(unit_value, "")),
             opt("device_files", arr(device_file, "")),
+        ]
+        .into_iter()
+        .chain((format >= 3).then(|| opt("supplied_files", arr(supplied_file, ""))))
+        .chain([
             opt("artifacts", arr(artifact, "")),
             opt("capabilities", arr(capability, "")),
             opt("choices", arr(choice, "")),
             f("jobs", arr1(job, "")),
             f("steps", arr1(step, "")),
             f("texts", texts),
-        ],
+        ])
+        .collect(),
     )
 }
 
@@ -1103,7 +1280,7 @@ pub fn vocabularies_json(format: i64) -> serde_json::Value {
             .collect::<Vec<_>>()
     };
     let mut v = json!({
-        "fact_keys": vocab::FACT_KEYS.iter().map(|k| json!({ "key": k.pattern, "type": format!("{:?}", k.ty), "kind": k.kind.name(), "modes": k.modes, "unit_unique": k.unit_unique, "doc": k.doc })).collect::<Vec<_>>(),
+        "fact_keys": vocab::FACT_KEYS.iter().filter(|k| k.since <= format).map(|k| json!({ "key": k.pattern, "type": format!("{:?}", k.ty), "kind": k.kind.name(), "modes": k.modes, "unit_unique": k.unit_unique, "doc": k.doc })).collect::<Vec<_>>(),
         "mode_kinds": vocab::MODE_KINDS.iter().map(|m| json!({ "id": m.id, "doc": m.doc, "backends": m.backends, "operations": m.operations })).collect::<Vec<_>>(),
         "departures": kinds(vocab::departures(format)),
         "step_kinds": kinds(vocab::STEP_KINDS),
@@ -1122,6 +1299,15 @@ pub fn vocabularies_json(format: i64) -> serde_json::Value {
     // Vocabularies a format added; an earlier format's schema doesn't list them.
     if format >= 2 {
         v["device_data_checks"] = json!(entries(vocab::DEVICE_DATA_CHECKS));
+    }
+    if format >= 3 {
+        v["supplied_file_matches"] = json!(
+            vocab::SUPPLIED_MATCHES
+                .iter()
+                .map(|m| json!({ "mode_kind": m.mode_kind, "key": m.key, "fact_key": m.fact_key, "pattern": m.pattern, "doc": m.doc }))
+                .collect::<Vec<_>>()
+        );
+        v["signature_rules"] = json!(entries(vocab::SIGNATURE_RULES));
     }
     v
 }
