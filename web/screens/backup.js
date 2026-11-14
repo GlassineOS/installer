@@ -11,8 +11,8 @@
 
 import { useEffect, useState } from 'preact/hooks';
 import { html, Admonition, Actions, Page, Tick } from '../lib/parts.js';
-import { backupView, suppliedFor, suppliedState, escapeWords } from '../lib/model.js';
-import { BOOT_SETTING, BROWSERS, human, cap } from '../lib/words.js';
+import { backupView, suppliedFor, suppliedState, escapeWords, shortValue } from '../lib/model.js';
+import { BOOT_SETTING, BROWSERS, human, cap, list } from '../lib/words.js';
 
 // One item per disk image, then the boot settings kept outside the disks, then the values unique
 // to the machine (captured whether or not the backup is on, FR-010).
@@ -137,7 +137,7 @@ export function LiveBackup({ s, run }) {
   const cur = r && r.images.length ? r.images[r.images.length - 1] : null;
   const st = rs === 'running' ? (cur && cur.phase === 'checking' ? 'verifying' : 'saving')
     : rs === 'done' ? 'verified'
-    : ['refused', 'failed', 'nothing-sent'].includes(rs) ? rs
+    : ['refused', 'failed', 'nothing-sent', 'other-device'].includes(rs) ? rs
     : 'ready';
   const rec = r && r.record;
   const restarted = rec && rec.restart === 'done';
@@ -157,6 +157,7 @@ export function LiveBackup({ s, run }) {
     verified: ['Back up · done', 'The backup is complete', `It reads back the same as ${the}.`],
     failed: ['Back up · stopped, nothing was written', 'The backup stopped', 'The installation didn’t start.'],
     refused: ['Back up · stopped, nothing was read', `The ${need.short} didn’t work`, 'The installation didn’t start.'],
+    'other-device': ['Back up · stopped, nothing was sent', `This isn’t ${the} as described`, 'The installation didn’t start.'],
     'nothing-sent': ['Back up · stopped, nothing was sent', `${cap(the)} wasn’t read`, 'The installation didn’t start.'],
   }[st];
   if (!s.canStoreBackup()) {
@@ -187,6 +188,17 @@ export function LiveBackup({ s, run }) {
       <p>${rec.message}.</p>
       <p>Images that read back the same are kept; any other is marked incomplete (its name ends in .incomplete) and is never used as a backup.</p>
       <p><strong>Way out:</strong> ${restartWords} Nothing on ${the} was written. Back up again, or go back to the plan.</p>
+    </${Admonition}>` : null}
+    ${st === 'other-device' ? html`<${Admonition} kind="warning" seal="G" label="Nothing was sent" title=${`The device connected isn’t ${the} as described`} id="other-device">
+      <p>Its boot ROM reports another ${list(need.matches.map((m) => m.name.toLowerCase())) || 'chip or key'} than ${the}’s description names, so the ${need.short} wasn’t sent and nothing was read.</p>
+      <div class="il-table-wrap"><table class="il-table ins-small">
+        <thead><tr><th></th><th>The device reports</th><th>${cap(the)} has</th><th></th></tr></thead>
+        <tbody>${need.matches.map((m) => html`<tr data-key=${m.key}><td>${m.name}</td>
+          <td style="font-family: var(--font-mono); font-size: 13.5px; overflow-wrap: anywhere">${shortValue(rec.other_device.reported[m.key] || '') || 'Not reported'}</td>
+          <td style="font-family: var(--font-mono); font-size: 13.5px; overflow-wrap: anywhere">${shortValue(rec.other_device.expected[m.key] || '')}</td>
+          <td>${rec.other_device.differs.includes(m.key) ? 'Differs' : 'The same'}</td></tr>`)}</tbody>
+      </table></div>
+      <p><strong>Way out:</strong> ${leave} Check that the device connected is ${the}, then back up again.</p>
     </${Admonition}>` : null}
     ${st === 'nothing-sent' ? html`<${Admonition} kind="warning" seal="G" label="Nothing was sent" title=${`${cap(the)} didn’t answer as described`} id="nothing-sent">
       <p>${rec.message}.</p>

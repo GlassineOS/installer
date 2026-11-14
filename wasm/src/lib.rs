@@ -20,6 +20,7 @@ use glassine_installer::facts::Snapshot;
 use glassine_installer::format1::Description;
 use glassine_installer::plan::{self, Input};
 use glassine_installer::release::Release;
+use glassine_installer::supplied::Unsendable;
 use glassine_installer::validate::{self, Loaded};
 use glassine_installer::{recognize, report};
 use serde_json::{Value, json};
@@ -138,18 +139,19 @@ pub fn supplied_record(device: &str, file: &str, bytes: &[u8], reported: &str) -
 /// here as the command line does before it opens a device (004 FR-004): a
 /// known file goes on; one that fits but isn't known only with
 /// `accept_unknown` (the person ticked the warning); any other never does.
-/// The page's own check isn't trusted. A refusal is an error record
+/// The page's own check isn't trusted. Gives the description, for the
+/// comparison with what the device reports before the upload
+/// ([`emergency_read::run_checked`]). A refusal is an error record
 /// (`not-sendable`, or `input` for a question the description can't answer).
-pub fn emergency_programmer(device: &str, file: &str, bytes: &[u8], accept_unknown: bool) -> Result<(), String> {
-    let ds = descriptions();
-    let d = ds
-        .iter()
+pub fn emergency_programmer(device: &str, file: &str, bytes: &[u8], accept_unknown: bool) -> Result<Description, String> {
+    let d = descriptions()
+        .into_iter()
         .find(|d| d.id == device)
         .ok_or_else(|| error("input", format!("no description {device:?}")))?;
-    let c = glassine_installer::supplied::check(d, file, bytes, None).map_err(|e| error("input", e))?;
+    let c = glassine_installer::supplied::check(&d, file, bytes, None).map_err(|e| error("input", e))?;
     match c.verdict.sendable() {
-        Some(false) => Ok(()),
-        Some(true) if accept_unknown => Ok(()),
+        Some(false) => Ok(d),
+        Some(true) if accept_unknown => Ok(d),
         Some(true) => Err(error(
             "not-sendable",
             "the file isn't a known one and its warning wasn't confirmed; nothing was sent",
@@ -160,7 +162,8 @@ pub fn emergency_programmer(device: &str, file: &str, bytes: &[u8], accept_unkno
 
 /// What an emergency read reads after the GPT: `whole-disk` (the plan's
 /// backup, 001 FR-009), `boot-areas`, or `partitions:NAME,NAME`. Something is
-/// always stored: the browser route has no table-only run.
+/// always stored: the browser route has no table-only run, and no size search
+/// on its own (`Scope::BootAreaSizes`, a diagnosis for the command line).
 pub fn emergency_scope(scope: &str) -> Result<Scope, String> {
     match scope {
         "whole-disk" => Ok(Scope::WholeDisk),
@@ -186,8 +189,11 @@ fn restart_record(r: &Restart) -> (&'static str, Option<String>) {
 /// The record of an emergency read (`emergency_read_format` 1). `outcome`:
 /// `done`; `refused` (the boot ROM didn't take the file, or it didn't answer
 /// its first request: it doesn't work on this device, 004 FR-006, and
-/// nothing was read); `nothing-sent` (the boot ROM didn't answer, or reports
-/// a chip this installer doesn't know); `failed` (anything after the
+/// nothing was read); `other-device` (the boot ROM reports another chip or
+/// key than the description names: nothing was sent; `other_device` holds
+/// `reported`, `expected` and `differs`); `nothing-sent` (the boot ROM didn't
+/// answer, reports a chip this installer doesn't know, or the file isn't one
+/// to send to it); `failed` (anything after the
 /// programmer answered: the images that are complete and those that aren't
 /// are in `manifest`). `restart`: `done`, `failed` (sent, not confirmed;
 /// `restart_why`) or `by-hand` (nothing answers that could restart it).
@@ -217,7 +223,17 @@ pub fn emergency_record(r: &Result<Done, Failure>) -> String {
         }
         Err(f) => {
             let (restart, why) = restart_record(&f.restart);
+            // Not the described device (004 FR-004): what it reported and what the description names.
+            let other = match &f.error {
+                EmergencyError::NotSent(Unsendable::OtherDevice { reported, expected, differs }) => {
+                    json!({ "reported": reported, "expected": expected, "differs": differs })
+                }
+                _ => Value::Null,
+            };
             let (outcome, kind) = match &f.error {
+                EmergencyError::NotSent(Unsendable::OtherDevice { .. }) => ("other-device", "other-device"),
+                EmergencyError::NotSent(Unsendable::File(_)) => ("nothing-sent", "file"),
+                EmergencyError::ProbeHangs { .. } => ("failed", "probe-hangs"),
                 EmergencyError::Refused(_) => ("refused", "refused"),
                 EmergencyError::NotWorking(_) => ("refused", "not-working"),
                 EmergencyError::BootRom(_) => ("nothing-sent", "boot-rom"),
@@ -233,6 +249,7 @@ pub fn emergency_record(r: &Result<Done, Failure>) -> String {
                 "outcome": outcome,
                 "error": kind,
                 "message": f.error.to_string(),
+                "other_device": other,
                 "manifest": manifest(&f.manifest),
                 "restart": restart,
                 "restart_why": why,
@@ -429,9 +446,13 @@ mod web {
             let _ = JsFuture::from(self.store.ready()).await;
             self.t()?.recv_max(max).await
         }
+        /// The core's short wait (the size search's [`emergency_read::PROBE_WAIT`])
+        /// as the bound on the next transfers. A browser transport is closed
+        /// after its first timeout, so a probe that runs out ends the run as
+        /// `ProbeHangs`, as on the command line, only without the restart.
         fn set_short_wait(&mut self, wait: Option<std::time::Duration>) {
             if let Some(t) = self.t.as_mut() {
-                t.set_short_wait(wait);
+                t.set_timeout(wait.unwrap_or(EMERGENCY_TIMEOUT));
             }
         }
     }
@@ -449,7 +470,8 @@ mod web {
     /// `accept_unknown` the person's confirmation of the warning), `scope`
     /// one of [`super::emergency_scope`]'s. Then asks the browser for the
     /// device (USB 05c6:9008; call it from a click) and runs the core's
-    /// route ([`emergency_read::run`]): the boot ROM's facts, the upload,
+    /// route ([`emergency_read::run_checked`]): the boot ROM's facts, compared
+    /// with the description before anything is sent (004 FR-004), the upload,
     /// Firehose, the reads (each range twice), the stored copy read back,
     /// the restart. Only list, read and restart reach the device (FR-007).
     /// Resolves with the run's record ([`super::emergency_record`]), a
@@ -465,7 +487,7 @@ mod web {
         store: ImageStore,
     ) -> Result<String, JsValue> {
         let scope = super::emergency_scope(&scope).map_err(|e| JsValue::from_str(&e))?;
-        super::emergency_programmer(&device, &file, &programmer, accept_unknown).map_err(|e| JsValue::from_str(&e))?;
+        let d = super::emergency_programmer(&device, &file, &programmer, accept_unknown).map_err(|e| JsValue::from_str(&e))?;
         let (mut t, _ids) = usb::request_kind(usb::Kind::Emergency)
             .await
             .map_err(|e| JsValue::from_str(&error(e.kind(), &e)))?;
@@ -478,7 +500,8 @@ mod web {
             back: back.clone(),
         };
         let mut edge = WebEdge(store);
-        let r = emergency_read::run(paced, &programmer, &scope, emergency_read::Options::default(), &mut edge).await;
+        let expected = emergency_read::Expected { description: &d, file: &file };
+        let r = emergency_read::run_checked(paced, &programmer, expected, &scope, emergency_read::Options::default(), &mut edge).await;
         let left = back.borrow_mut().take();
         if let Some(t) = left {
             t.close().await;
@@ -622,8 +645,8 @@ mod tests {
     #[test]
     fn the_emergency_read_checks_the_file_again() {
         let fits = supplied("fits-unknown");
-        assert_eq!(emergency_programmer("onyx-noteair", "emergency-programmer", &fits, true), Ok(()));
-        let kind = |r: Result<(), String>| serde_json::from_str::<Value>(&r.unwrap_err()).unwrap()["error"].clone();
+        assert!(emergency_programmer("onyx-noteair", "emergency-programmer", &fits, true).is_ok());
+        let kind = |r: Result<Description, String>| serde_json::from_str::<Value>(&r.map(|_| ()).unwrap_err()).unwrap()["error"].clone();
         assert_eq!(kind(emergency_programmer("onyx-noteair", "emergency-programmer", &fits, false)), "not-sendable");
         let junk = supplied("not-a-programmer");
         assert_eq!(kind(emergency_programmer("onyx-noteair", "emergency-programmer", &junk, true)), "not-sendable");
@@ -639,7 +662,7 @@ mod tests {
             emergency_scope("partitions:devinfo,boot_a"),
             Ok(Scope::Partitions(vec!["devinfo".into(), "boot_a".into()]))
         );
-        for bad in ["", "gpt-only", "partitions:", "partitions:a,,b", "whole"] {
+        for bad in ["", "gpt-only", "boot-area-sizes", "partitions:", "partitions:a,,b", "whole"] {
             let e: Value = serde_json::from_str(&emergency_scope(bad).unwrap_err()).unwrap();
             assert_eq!(e["error"], "input", "{bad}");
         }
@@ -677,6 +700,16 @@ mod tests {
                 "mismatch",
             ),
             (EmergencyError::Edge("disk full".into()), "failed", "store"),
+            (EmergencyError::NotSent(Unsendable::File("x".into())), "nothing-sent", "file"),
+            (
+                EmergencyError::ProbeHangs {
+                    image: "emmc-boot1".into(),
+                    physical: 1,
+                    lba: 8,
+                },
+                "failed",
+                "probe-hangs",
+            ),
         ] {
             let r: Value = serde_json::from_str(&emergency_record(&Err(fail(e)))).unwrap();
             assert_eq!(r["emergency_read_format"], 1);
@@ -684,6 +717,18 @@ mod tests {
             assert_eq!(r["restart"], "by-hand");
             assert!(r["manifest"].is_null());
         }
+        // Another device: nothing sent, what it reported beside what the description names.
+        let m = |k: &str, v: &str| std::collections::BTreeMap::from([("chip".to_string(), "000cc0e1".to_string()), (k.to_string(), v.to_string())]);
+        let r: Value = serde_json::from_str(&emergency_record(&Err(fail(EmergencyError::NotSent(Unsendable::OtherDevice {
+            reported: m("pk_hash", "aa"),
+            expected: m("pk_hash", "bb"),
+            differs: vec!["pk_hash".into()],
+        })))))
+        .unwrap();
+        assert_eq!((r["outcome"].as_str(), r["error"].as_str()), (Some("other-device"), Some("other-device")));
+        assert_eq!(r["other_device"]["reported"]["pk_hash"], "aa");
+        assert_eq!(r["other_device"]["expected"]["pk_hash"], "bb");
+        assert_eq!(r["other_device"]["differs"], json!(["pk_hash"]));
         let r: Value = serde_json::from_str(&emergency_record(&Err(Failure {
             error: EmergencyError::Edge("disk full".into()),
             restart: Restart::Failed("no answer".into()),

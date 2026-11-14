@@ -565,6 +565,30 @@ async function main() {
     await page.close();
   });
 
+  await test('a device that reports another key than described: nothing sent, the reports side by side', async () => {
+    const other = 'ab'.repeat(32);
+    const { page, problems } = await open({ vars: answers('noteair-stock-fastboot') }, { edl: edlOpts({ pkHash: other }), dir: {} });
+    await toBackup(page);
+    await page.click('#start-backup');
+    await page.waitForSelector('#other-device', { timeout: 30000 });
+    const log = await edlLog(page);
+    assert.strictEqual(log.uploaded, null, 'the programmer was sent to another device');
+    assert.ok(!log.outs.some((o) => o.sahara === 'data'), 'programmer bytes went out');
+    assert.deepStrictEqual(readsOnly(log), []);
+    assert.deepStrictEqual(files(await tree(page)), [], 'something was stored');
+    const run = await records(page, 'backupRun', 'live-1');
+    assert.strictEqual(run.record.outcome, 'other-device');
+    assert.strictEqual(run.record.other_device.reported.pk_hash, other);
+    assert.strictEqual(run.record.other_device.expected.pk_hash, PK);
+    assert.deepStrictEqual(run.record.other_device.differs, ['pk_hash']);
+    const rows = await page.$$eval('#other-device tr[data-key]', (xs) => xs.map((x) => [x.dataset.key, x.lastElementChild.textContent]));
+    assert.deepStrictEqual(Object.fromEntries(rows).pk_hash, 'Differs');
+    // Not the file's fault: it isn't marked refused.
+    assert.ok(!(await records(page, 'deviceRefused', 'live-1', 'emergency-programmer', sha(PROGRAMMER))));
+    assert.deepStrictEqual(problems, []);
+    await page.close();
+  });
+
   await test('a browser without the folder picker: Back up names the browsers and the command line', async () => {
     const { page, problems } = await open({ vars: answers('noteair-stock-fastboot') }, { noPicker: true });
     await connect(page);

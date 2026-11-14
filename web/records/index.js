@@ -334,7 +334,8 @@ export const refuseSupplied = (machine, file, sha256) => {
 // ---- the backup through the emergency mode (spec 004 FR-010) ----------------------------------
 
 // The run of this page (one at a time), for the machine it was started for:
-//   state   idle (a folder is chosen) | running | done | refused | nothing-sent | failed |
+//   state   idle (a folder is chosen) | running | done | refused | other-device | nothing-sent |
+//           failed |
 //           not-started (nothing was sent: the chooser was closed, the device's interface busy,
 //           the file not sendable; error says why)
 //   folder  the name of the folder the person picked, then of the new folder in it
@@ -392,6 +393,10 @@ export async function startBackup(machine, device, file, scope = 'whole-disk') {
   if (run.state === 'running') return backupRun(machine);
   const got = supplied(machine, file);
   if (!got || !got.bytes) throw new Error('The file for the backup isn’t chosen, or it may not be sent.');
+  // Only a known file, or one whose warning the person confirmed on Supply (004 FR-004); the core
+  // checks it again.
+  const v = got.check.verdict;
+  if (!(v === 'known' || (v === 'fits-unknown' && got.trusted))) throw new Error('The file for the backup isn’t a known one, and its warning isn’t confirmed: go back to the file.');
   const m = await wasm();
   const r = run, parent = r.parent, name = folderName(device);
   Object.assign(r, { state: 'running', sha: got.check.sha256, folder: parent.name, images: [], record: null, error: null, notes: [] });
