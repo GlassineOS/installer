@@ -108,6 +108,10 @@ pub fn render(c: &Check, path: &str) -> String {
             }
             s
         }
+        Verdict::KnownBad { reason, verified } => format!(
+            "refused: the same as a file known not to work on this device{}.\n  {reason}\n",
+            if *verified { "" } else { " (seen in development, not yet in a recorded run)" }
+        ),
         Verdict::NotAProgrammer { why } => format!("refused: not a program for this route ({why})\n"),
     };
     o + "Nothing was sent anywhere.\n"

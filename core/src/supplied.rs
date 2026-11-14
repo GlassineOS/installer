@@ -56,6 +56,14 @@ pub enum Verdict {
         reported: Option<BTreeMap<String, String>>,
         differs: Vec<String>,
     },
+    /// The same, byte for byte, as a file the description lists as not
+    /// working on this device: never sent. `reason` says what goes wrong with
+    /// it, in plain words for the person (004 FR-004).
+    KnownBad {
+        reason: String,
+        /// Whether that was in a recorded run (FR-023a), not only in development.
+        verified: bool,
+    },
     /// Not something the route recognises as a program for it: never sent.
     NotAProgrammer { why: String },
 }
@@ -133,6 +141,13 @@ fn verdict(route: &str, f: &SuppliedFile, bytes: &[u8], sha256: &str, device: Op
                 differs,
             };
         }
+    }
+    // A file seen not working is refused before anything else is said of it.
+    if let Some(b) = f.known_bad.iter().find(|k| k.sha256.eq_ignore_ascii_case(sha256)) {
+        return Verdict::KnownBad {
+            reason: b.reason.clone(),
+            verified: b.verified.is_some(),
+        };
     }
     if let Some(k) = known {
         return Verdict::Known {
