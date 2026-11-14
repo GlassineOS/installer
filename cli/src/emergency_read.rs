@@ -98,11 +98,10 @@ pub fn load(programmer: &Path, d: &Description, file: &str, accept_unknown: bool
     match c.verdict.sendable() {
         Some(false) => Ok(bytes),
         Some(true) if accept_unknown => {
-            eprintln!(
-                "{}: not a known file (sha256 {}); sent because of --accept-unknown",
-                programmer.display(),
-                c.sha256
-            );
+            // The warning, with what the file names, before it is sent.
+            let warning = shown.strip_suffix("Nothing was sent anywhere.\n").unwrap_or(&shown);
+            eprint!("{warning}");
+            eprintln!("Sent because of --accept-unknown.");
             Ok(bytes)
         }
         Some(true) => Err(format!("{shown}Not sent: if you trust where it comes from, add --accept-unknown.")),
