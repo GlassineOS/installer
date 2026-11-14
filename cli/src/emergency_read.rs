@@ -44,7 +44,10 @@ impl ImageEdge for NoStore {
     fn write(&mut self, _: &[u8]) -> Result<(), String> {
         Err("nothing is stored with --only-gpt".into())
     }
-    fn end(&mut self, _: &Disk) -> Result<String, String> {
+    fn end(&mut self, _: &Disk) -> Result<(), String> {
+        Err("nothing is stored with --only-gpt".into())
+    }
+    fn keep(&mut self, _: &Disk) -> Result<String, String> {
         Err("nothing is stored with --only-gpt".into())
     }
     fn reopen(&mut self, _: &Disk) -> Result<(), String> {

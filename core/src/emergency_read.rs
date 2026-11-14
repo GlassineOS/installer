@@ -12,11 +12,19 @@
 //! 3. Firehose: `configure`, and the programmer's first answer (FR-006);
 //!    until it answered nothing is read.
 //! 4. `getstorageinfo` (when the programmer has it), the sector size, the
-//!    GPT, read twice.
+//!    GPT, read twice. A damaged primary GPT is replaced by the backup at the
+//!    disk's last sector; only when both are bad does the run stop.
 //! 5. The images [`Scope`] asks for, each read twice range by range and
 //!    compared, then the stored copy read back (FR-008); a mismatch makes the
-//!    image incomplete.
+//!    image incomplete. The whole disk (001 FR-009) is the user area and,
+//!    when the device has them, the eMMC's two boot areas; never RPMB.
 //! 6. `power` reset, also after a failure, whenever the programmer answered.
+//!
+//! An image is stored under a temporary name and gets its final one only
+//! after both reads matched and the stored copy was read back and checked;
+//! the manifest is stored last, whole or not at all. A run killed at any
+//! point therefore leaves no image under a final name that isn't checked
+//! (004 Scenario 5).
 //!
 //! Only list, read and restart reach the device (FR-007): the Firehose
 //! client has no other request ([`crate::firehose`]).
@@ -37,12 +45,24 @@ use sha2::{Digest, Sha256};
 use std::fmt;
 
 /// The physical partition of the eMMC's user area, where the GPT and every
-/// partition the installation writes are. The boot areas (1, 2) and RPMB are
-/// never read here.
+/// partition the installation writes are.
 pub const USER_AREA: u32 = 0;
 
 /// The name the user area's whole image is stored under.
 pub const USER_AREA_NAME: &str = "emmc-user";
+
+/// The eMMC's boot areas (physical partitions 1 and 2) and the names their
+/// images are stored under; read in a whole-disk run when the device has
+/// them. RPMB (3) is never read: [`firehose::READABLE_PHYSICAL`] refuses it.
+pub const BOOT_AREAS: [(u32, &str); 2] = [(1, "emmc-boot1"), (2, "emmc-boot2")];
+
+/// The largest eMMC boot area: 255 × 128 KiB (JEDEC's `BOOT_SIZE_MULT` is
+/// one byte).
+pub const BOOT_AREA_MAX: u64 = 255 * (128 << 10);
+
+/// The most sectors the end of the user area is searched up to when nothing
+/// reports its size (2^40 sectors: far more than any eMMC).
+const PROBE_MAX: u64 = 1 << 40;
 
 /// The sectors read for the GPT: the protective MBR, the header and 128
 /// entries of 128 bytes. A table with more entries is read further.
@@ -93,21 +113,31 @@ impl Default for Options {
 }
 
 /// Where the images go: the RAM backup's storing steps without its USB wait.
+///
+/// A copy is written under a temporary name (`begin` to `end`), read back
+/// under it, and only then given its final name (`keep`): whatever a killed
+/// process leaves behind is never under a final name.
 pub trait ImageEdge {
-    /// Starts the stored copy of `disk`. It must not exist yet.
+    /// Starts the stored copy of `disk` under a temporary name. Neither that
+    /// nor its final name may exist yet.
     fn begin(&mut self, disk: &Disk) -> Result<(), String>;
     /// The next bytes of the copy begun last.
     fn write(&mut self, data: &[u8]) -> Result<(), String>;
-    /// Ends the copy begun last, durably; returns the name it is stored under.
-    fn end(&mut self, disk: &Disk) -> Result<String, String>;
+    /// Ends the copy begun last, durably, still under its temporary name.
+    fn end(&mut self, disk: &Disk) -> Result<(), String>;
     /// Opens the stored copy of `disk` to read it back from the start.
     fn reopen(&mut self, disk: &Disk) -> Result<(), String>;
     /// Fills `buf` from the copy reopened last; 0 at its end.
     fn fill(&mut self, buf: &mut [u8]) -> Result<usize, String>;
+    /// Gives the checked copy of `disk` its final name, durably; returns
+    /// that name. Called only after both reads matched and the stored copy
+    /// was read back and checked.
+    fn keep(&mut self, disk: &Disk) -> Result<String, String>;
     /// Marks the copy of `disk` incomplete (ending it first if it was being
     /// written), so it is never taken for a backup; returns its new name.
     fn incomplete(&mut self, disk: &Disk) -> Result<String, String>;
-    /// Stores the manifest (JSON).
+    /// Stores the manifest (JSON) so that it is either there whole or not
+    /// at all (a temporary name, then a rename).
     fn manifest(&mut self, text: &str) -> Result<(), String>;
     /// Bytes of `disk` read so far (first pass).
     fn progress(&mut self, disk: &Disk, done: u64);
@@ -277,7 +307,15 @@ pub fn render_table(t: &Table, sector: u32) -> String {
 
 /// The manifest of the images read: the RAM backup's shape, for this route.
 /// Never a serial or another unit-unique value.
-pub fn manifest(chip: Option<&str>, programmer: &[u8], images: &[(DiskRecord, u64, String)], incomplete: &[(String, String, String)]) -> String {
+/// `skipped` lists what a whole-disk run didn't read and why (a boot area
+/// the device doesn't have).
+pub fn manifest(
+    chip: Option<&str>,
+    programmer: &[u8],
+    images: &[(DiskRecord, u64, String)],
+    incomplete: &[(String, String, String)],
+    skipped: &[Skipped],
+) -> String {
     let v = serde_json::json!({
         "manifest_format": 1,
         "kind": "glassine-emergency-backup",
@@ -299,8 +337,21 @@ pub fn manifest(chip: Option<&str>, programmer: &[u8], images: &[(DiskRecord, u6
             "file": file,
             "why": why,
         })).collect::<Vec<_>>(),
+        "not_read": skipped.iter().map(|k| serde_json::json!({
+            "name": k.name,
+            "physical_partition": k.physical,
+            "why": k.why,
+        })).collect::<Vec<_>>(),
     });
     serde_json::to_string_pretty(&v).unwrap() + "\n"
+}
+
+/// A part of the whole disk that wasn't read, and why.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Skipped {
+    pub name: String,
+    pub physical: u32,
+    pub why: String,
 }
 
 /// Reads `img` into the edge: range by range, each range read twice (the
@@ -367,12 +418,14 @@ async fn store_image<T: Transport, E: ImageEdge>(
     edge.begin(&img.disk).map_err(EmergencyError::Edge)?;
     let r = async {
         let rec = read_image(fh, img, opts, edge).await?;
-        let file = edge.end(&img.disk).map_err(EmergencyError::Edge)?;
+        edge.end(&img.disk).map_err(EmergencyError::Edge)?;
         edge.reopen(&img.disk).map_err(EmergencyError::Edge)?;
         glassine_read::check_copy(&rec, |b| edge.fill(b)).map_err(|e| match e {
             glassine_read::ReadError::CopyDiffers { disk, offset } => EmergencyError::Mismatch { image: disk, offset },
             e => EmergencyError::Edge(e.to_string()),
         })?;
+        // Both reads matched and the stored copy checked: only now its final name.
+        let file = edge.keep(&img.disk).map_err(EmergencyError::Edge)?;
         Ok::<_, EmergencyError>((rec, file))
     }
     .await;
@@ -455,7 +508,8 @@ pub async fn run<T: Transport, E: ImageEdge>(t: T, programmer: &[u8], scope: &Sc
     ));
     let mut incomplete = Vec::new();
     let mut images = Vec::new();
-    let body = read_all(&mut fh, scope, opts, edge, &mut images, &mut incomplete).await;
+    let mut skipped = Vec::new();
+    let body = read_all(&mut fh, scope, opts, edge, &mut images, &mut incomplete, &mut skipped).await;
     let restart = match fh.reset().await {
         Ok(()) => Restart::Done,
         Err(e) => Restart::Failed(e.to_string()),
@@ -463,7 +517,7 @@ pub async fn run<T: Transport, E: ImageEdge>(t: T, programmer: &[u8], scope: &Sc
     let manifest = if images.is_empty() && incomplete.is_empty() {
         None
     } else {
-        let m = manifest(chip.as_deref(), programmer, &images, &incomplete);
+        let m = manifest(chip.as_deref(), programmer, &images, &incomplete, &skipped);
         match edge.manifest(&m) {
             Ok(()) => Some(m),
             Err(e) => {
@@ -494,6 +548,213 @@ pub async fn run<T: Transport, E: ImageEdge>(t: T, programmer: &[u8], scope: &Sc
 
 type Read = (Option<StorageInfo>, u32, u64, Table);
 
+/// One sector of a physical partition, read once: `None` when the
+/// programmer refuses the read (past the end, or an area the device doesn't
+/// have). A refusal leaves the session in step; any other failure ends it.
+async fn sector_at<T: Transport>(fh: &mut Firehose<T>, physical: u32, sector: u32, lba: u64) -> Result<Option<Vec<u8>>, EmergencyError> {
+    match fh.read_vec(physical, sector, lba, 1).await {
+        Ok(v) => Ok(Some(v)),
+        Err(FirehoseError::Nak { .. }) => Ok(None),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// `sectors` sectors from `start`, read twice and compared; `what` names
+/// them in a mismatch.
+async fn read_twice<T: Transport>(fh: &mut Firehose<T>, physical: u32, sector: u32, start: u64, sectors: u64, what: &str) -> Result<Vec<u8>, EmergencyError> {
+    let a = fh.read_vec(physical, sector, start, sectors).await?;
+    if fh.read_vec(physical, sector, start, sectors).await? != a {
+        return Err(EmergencyError::Mismatch {
+            image: what.into(),
+            offset: start * sector as u64,
+        });
+    }
+    Ok(a)
+}
+
+/// How many sectors of `physical` can be read, found by reading single
+/// sectors (the programmer refuses those past the end): doubling, then
+/// halving. Sector 0 must be readable; at most `max`.
+async fn probe_end<T: Transport>(fh: &mut Firehose<T>, physical: u32, sector: u32, max: u64) -> Result<u64, EmergencyError> {
+    let (mut lo, mut hi) = (0u64, 1u64);
+    loop {
+        if hi >= max {
+            hi = max;
+            break;
+        }
+        if sector_at(fh, physical, sector, hi).await?.is_none() {
+            break;
+        }
+        lo = hi;
+        hi = hi.saturating_mul(2);
+    }
+    // lo reads; hi doesn't, or is the bound.
+    while hi - lo > 1 {
+        let mid = lo + (hi - lo) / 2;
+        if sector_at(fh, physical, sector, mid).await?.is_some() {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    Ok(lo + 1)
+}
+
+/// The head of the disk blanked and its last sectors as read: what
+/// [`table::read`] is given for the backup GPT, so that the damaged primary
+/// is never taken.
+struct Tail<'a> {
+    blank: u64,
+    at: u64,
+    tail: &'a [u8],
+}
+
+impl ReadAt for Tail<'_> {
+    fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> Result<(), String> {
+        let end = offset.checked_add(buf.len() as u64).ok_or("past the end")?;
+        if end <= self.blank {
+            buf.fill(0);
+            return Ok(());
+        }
+        if offset >= self.at {
+            let mut s: &[u8] = self.tail;
+            return s.read_at(offset - self.at, buf);
+        }
+        Err("outside the parts of the disk read for the GPT".into())
+    }
+}
+
+/// The GPT and the disk's size: the primary at LBA 1 when it checks out,
+/// else the backup at the last LBA.
+async fn read_gpt<T: Transport, E: ImageEdge>(
+    fh: &mut Firehose<T>,
+    sector: u32,
+    storage: Option<&StorageInfo>,
+    edge: &mut E,
+) -> Result<(Table, u64), EmergencyError> {
+    let s = sector as u64;
+    let reported = match storage.and_then(|i| i.total_blocks) {
+        Some(n) => Some(n.checked_mul(s).ok_or_else(|| EmergencyError::Storage(format!("{n} blocks")))?),
+        None => None,
+    };
+    let mut head = read_twice(fh, USER_AREA, sector, 0, GPT_SECTORS, "GPT").await?;
+    let header = gpt_header(&head, sector);
+    let why = match &header {
+        None => format!("no GPT header at LBA 1 with {sector}-byte sectors"),
+        Some(g) if g.head_len > GPT_MAX => format!("the GPT header at LBA 1 has entries ending at byte {}", g.head_len),
+        Some(g) => {
+            if g.head_len > head.len() as u64 {
+                let more = g.head_len / s - GPT_SECTORS;
+                head.extend_from_slice(&read_twice(fh, USER_AREA, sector, GPT_SECTORS, more, "GPT").await?);
+            }
+            let from_gpt = g.alternate_lba.checked_add(1).and_then(|n| n.checked_mul(s));
+            let size = reported.or(from_gpt);
+            match size.map(|z| table::read(&mut Head(&head), z, s)) {
+                Some(Ok(t)) if t.kind == table::Kind::Gpt && t.primary_ok && t.sector == s => {
+                    let size = size.unwrap_or_default();
+                    if let (Some(r), Some(f)) = (reported, from_gpt)
+                        && r < f
+                    {
+                        return Err(EmergencyError::Storage(format!(
+                            "the programmer reports {r} bytes, the GPT's backup header lies beyond that ({f})"
+                        )));
+                    }
+                    return Ok((t, size));
+                }
+                _ => "the primary GPT at LBA 1 doesn't check out".to_string(),
+            }
+        }
+    };
+    edge.note(&format!("{why}; looking for the backup GPT at the disk's last sector"));
+    // The disk's size: reported, else the damaged header's backup LBA when a
+    // GPT header is found there, else searched for.
+    let size = match reported {
+        Some(z) => z,
+        None => {
+            let mut hinted = None;
+            if let Some(lba) = header.as_ref().map(|g| g.alternate_lba).filter(|l| *l > GPT_SECTORS && *l < PROBE_MAX)
+                && let Some(h) = sector_at(fh, USER_AREA, sector, lba).await?
+                && &h[..8] == b"EFI PART"
+                && table::le64(&h, 24) == lba
+            {
+                hinted = Some((lba + 1) * s);
+            }
+            match hinted {
+                Some(z) => z,
+                None => {
+                    edge.note("the disk's size isn't reported: finding its last sector by reading single sectors");
+                    probe_end(fh, USER_AREA, sector, PROBE_MAX).await? * s
+                }
+            }
+        }
+    };
+    let both_bad = |w: &str| EmergencyError::Storage(format!("{why}, and the backup GPT {w}; nothing more is read"));
+    let last = (size / s)
+        .checked_sub(1)
+        .filter(|l| *l > GPT_SECTORS)
+        .ok_or_else(|| both_bad("can't be on a disk this small"))?;
+    let bh = read_twice(fh, USER_AREA, sector, last, 1, "backup GPT").await?;
+    if &bh[..8] != b"EFI PART" {
+        return Err(both_bad(&format!("isn't at LBA {last}")));
+    }
+    let (elba, n, esize) = (table::le64(&bh, 72), table::le32(&bh, 80) as u64, table::le32(&bh, 84) as u64);
+    let len = n
+        .checked_mul(esize)
+        .filter(|l| *l <= GPT_MAX)
+        .ok_or_else(|| both_bad("names entries too large"))?;
+    if elba <= GPT_SECTORS || elba >= last || last - elba > len.div_ceil(s) + GPT_SECTORS {
+        return Err(both_bad(&format!("names its entries at LBA {elba}")));
+    }
+    let mut tail = read_twice(fh, USER_AREA, sector, elba, last - elba, "backup GPT").await?;
+    tail.extend_from_slice(&bh);
+    let mut r = Tail {
+        blank: GPT_SECTORS * s,
+        at: elba * s,
+        tail: &tail,
+    };
+    match table::read(&mut r, size, s) {
+        Ok(t) if t.kind == table::Kind::Gpt && !t.primary_ok && t.sector == s => {
+            edge.note(&format!("using the backup GPT at LBA {last}: the primary is damaged"));
+            Ok((t, size))
+        }
+        _ => Err(both_bad(&format!("at LBA {last} doesn't check out either"))),
+    }
+}
+
+/// The size of a boot area, or why it isn't read: the programmer's storage
+/// facts for it when they are believable, confirmed by reading its last
+/// sector and refused one past it; else found by reading single sectors.
+async fn boot_area_size<T: Transport>(
+    fh: &mut Firehose<T>,
+    physical: u32,
+    sector: u32,
+    user: Option<&StorageInfo>,
+) -> Result<Result<u64, String>, EmergencyError> {
+    let s = sector as u64;
+    let info = fh.storage_info(physical).await?;
+    if info.as_ref().is_some_and(|i| i.names_rpmb) {
+        return Ok(Err("the programmer names it RPMB, which is never read".into()));
+    }
+    if info.as_ref().and_then(|i| i.total_blocks) == Some(0) {
+        return Ok(Err("the programmer reports it empty: the device has none".into()));
+    }
+    if sector_at(fh, physical, sector, 0).await?.is_none() {
+        return Ok(Err("the programmer refuses reading it: the device has none, or it isn't readable".into()));
+    }
+    // Facts equal to the user area's are the user area's, not this one's.
+    let reported = info
+        .as_ref()
+        .and_then(|i| i.total_blocks)
+        .filter(|n| *n > 0 && n.saturating_mul(s) <= BOOT_AREA_MAX && Some(*n) != user.and_then(|u| u.total_blocks));
+    if let Some(n) = reported
+        && sector_at(fh, physical, sector, n - 1).await?.is_some()
+        && sector_at(fh, physical, sector, n).await?.is_none()
+    {
+        return Ok(Ok(n * s));
+    }
+    Ok(Ok(probe_end(fh, physical, sector, BOOT_AREA_MAX / s).await? * s))
+}
+
 async fn read_all<T: Transport, E: ImageEdge>(
     fh: &mut Firehose<T>,
     scope: &Scope,
@@ -501,6 +762,7 @@ async fn read_all<T: Transport, E: ImageEdge>(
     edge: &mut E,
     images: &mut Vec<(DiskRecord, u64, String)>,
     incomplete: &mut Vec<(String, String, String)>,
+    skipped: &mut Vec<Skipped>,
 ) -> Result<Read, EmergencyError> {
     let storage = fh.storage_info(USER_AREA).await?;
     match &storage {
@@ -529,51 +791,7 @@ async fn read_all<T: Transport, E: ImageEdge>(
         }
     };
     let s = sector as u64;
-    // The GPT, read twice.
-    let mut head = fh.read_vec(USER_AREA, sector, 0, GPT_SECTORS).await?;
-    if fh.read_vec(USER_AREA, sector, 0, GPT_SECTORS).await? != head {
-        return Err(EmergencyError::Mismatch {
-            image: "GPT".into(),
-            offset: 0,
-        });
-    }
-    let gpt =
-        gpt_header(&head, sector).ok_or_else(|| EmergencyError::Storage(format!("no GPT header at LBA 1 with {sector}-byte sectors; nothing more is read")))?;
-    if gpt.head_len > head.len() as u64 {
-        if gpt.head_len > GPT_MAX {
-            return Err(EmergencyError::Storage(format!("a GPT whose entries end at byte {}", gpt.head_len)));
-        }
-        let more = gpt.head_len / s - GPT_SECTORS;
-        let a = fh.read_vec(USER_AREA, sector, GPT_SECTORS, more).await?;
-        if fh.read_vec(USER_AREA, sector, GPT_SECTORS, more).await? != a {
-            return Err(EmergencyError::Mismatch {
-                image: "GPT".into(),
-                offset: GPT_SECTORS * s,
-            });
-        }
-        head.extend_from_slice(&a);
-    }
-    let from_gpt = gpt
-        .alternate_lba
-        .checked_add(1)
-        .and_then(|n| n.checked_mul(s))
-        .ok_or_else(|| EmergencyError::Storage("a GPT header with an impossible backup LBA".into()))?;
-    let disk_size = match storage.as_ref().and_then(|i| i.total_blocks) {
-        Some(n) => {
-            let size = n.checked_mul(s).ok_or_else(|| EmergencyError::Storage(format!("{n} blocks")))?;
-            if size < from_gpt {
-                return Err(EmergencyError::Storage(format!(
-                    "the programmer reports {size} bytes, the GPT's backup header lies beyond that ({from_gpt})"
-                )));
-            }
-            size
-        }
-        None => from_gpt,
-    };
-    let t = table::read(&mut Head(&head), disk_size, s).map_err(EmergencyError::Storage)?;
-    if t.kind != table::Kind::Gpt || !t.primary_ok || t.sector != s {
-        return Err(EmergencyError::Storage("the primary GPT doesn't check out; nothing more is read".into()));
-    }
+    let (t, disk_size) = read_gpt(fh, sector, storage.as_ref(), edge).await?;
     edge.note(&format!(
         "GPT: {} partitions, disk {} bytes ({} sectors of {sector})",
         t.entries.len(),
@@ -582,6 +800,7 @@ async fn read_all<T: Transport, E: ImageEdge>(
     ));
     edge.note(&render_table(&t, sector));
 
+    let reserved = |n: &str| n == USER_AREA_NAME || BOOT_AREAS.iter().any(|(_, b)| *b == n);
     let wanted: Vec<Image> = match scope {
         Scope::GptOnly => vec![],
         Scope::WholeDisk => vec![Image {
@@ -602,7 +821,7 @@ async fn read_all<T: Transport, E: ImageEdge>(
                     [] => return Err(EmergencyError::Partition(format!("no partition named {n:?} in the GPT"))),
                     _ => return Err(EmergencyError::Partition(format!("more than one partition named {n:?} in the GPT"))),
                 };
-                if !storable_name(n) || n == USER_AREA_NAME || v.iter().any(|i| &i.disk.name == n) {
+                if !storable_name(n) || reserved(n) || v.iter().any(|i| &i.disk.name == n) {
                     return Err(EmergencyError::Partition(format!("{n:?} can't be stored under its name")));
                 }
                 v.push(Image {
@@ -619,13 +838,52 @@ async fn read_all<T: Transport, E: ImageEdge>(
         }
     };
     for img in &wanted {
-        edge.note(&format!(
-            "reading {} ({} bytes from sector {}), every range twice",
-            img.disk.name, img.disk.size, img.start_sector
-        ));
-        let (rec, file) = store_image(fh, img, opts, edge, incomplete).await?;
-        edge.note(&format!("{}: {} bytes, sha256 {}, checked", img.disk.name, img.disk.size, rec.sha256_hex()));
-        images.push((rec, img.start_sector, file));
+        store_one(fh, img, opts, edge, images, incomplete).await?;
+    }
+    // The boot areas after the user area: a problem with them never costs it.
+    if *scope == Scope::WholeDisk {
+        for (physical, name) in BOOT_AREAS {
+            match boot_area_size(fh, physical, sector, storage.as_ref()).await? {
+                Ok(size) => {
+                    let img = Image {
+                        disk: Disk {
+                            index: physical,
+                            name: name.into(),
+                            size,
+                            sector,
+                        },
+                        start_sector: 0,
+                    };
+                    store_one(fh, &img, opts, edge, images, incomplete).await?;
+                }
+                Err(why) => {
+                    edge.note(&format!("{name} (physical partition {physical}) isn't read: {why}"));
+                    skipped.push(Skipped {
+                        name: name.into(),
+                        physical,
+                        why,
+                    });
+                }
+            }
+        }
     }
     Ok((storage, sector, disk_size, t))
+}
+
+async fn store_one<T: Transport, E: ImageEdge>(
+    fh: &mut Firehose<T>,
+    img: &Image,
+    opts: Options,
+    edge: &mut E,
+    images: &mut Vec<(DiskRecord, u64, String)>,
+    incomplete: &mut Vec<(String, String, String)>,
+) -> Result<(), EmergencyError> {
+    edge.note(&format!(
+        "reading {} ({} bytes from sector {} of physical partition {}), every range twice",
+        img.disk.name, img.disk.size, img.start_sector, img.disk.index
+    ));
+    let (rec, file) = store_image(fh, img, opts, edge, incomplete).await?;
+    edge.note(&format!("{}: {} bytes, sha256 {}, checked", img.disk.name, img.disk.size, rec.sha256_hex()));
+    images.push((rec, img.start_sector, file));
+    Ok(())
 }

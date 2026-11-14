@@ -84,7 +84,26 @@ fn disk() -> Vec<u8> {
     le(&mut h, 16, c as u64, 4);
     d[SECTOR..SECTOR + 92].copy_from_slice(&h);
     d[2 * SECTOR..34 * SECTOR].copy_from_slice(&entries);
+    // The backup: the entries, then the header at the last LBA.
+    let mut b = h.clone();
+    le(&mut b, 16, 0, 4);
+    le(&mut b, 24, SECTORS - 1, 8);
+    le(&mut b, 32, 1, 8);
+    le(&mut b, 72, SECTORS - 33, 8);
+    let c = crc32(&b);
+    le(&mut b, 16, c as u64, 4);
+    let end = SECTORS as usize * SECTOR;
+    d[end - 33 * SECTOR..end - SECTOR].copy_from_slice(&entries);
+    d[end - SECTOR..end].fill(0);
+    d[end - SECTOR..end - SECTOR + 92].copy_from_slice(&b);
     d
+}
+
+/// A boot area's contents: a pattern of its number and LBA.
+fn boot_area(physical: u32, sectors: u64) -> Vec<u8> {
+    (0..sectors as usize * SECTOR)
+        .map(|i| (i / SECTOR) as u8 ^ (i as u8).wrapping_mul(physical as u8 * 3 + 1))
+        .collect()
 }
 
 fn pkt(c: u32, body: &[u32]) -> Vec<u8> {
@@ -133,6 +152,14 @@ struct Faults {
     deaf_until_logged: bool,
     /// Answers only from this configure on (1st, 2nd, ...; 0 as 1).
     answer_from: u32,
+    /// The eMMC's boot areas (physical partitions 1 and 2), this many
+    /// sectors each; none when 0 (reads on them are refused).
+    boot_sectors: u64,
+    /// getstorageinfo names each physical partition's own size; else it
+    /// answers with the user area's numbers whatever it is asked.
+    per_partition_info: bool,
+    /// getstorageinfo names this physical partition RPMB.
+    rpmb_named: Option<u32>,
     /// Ignores the 1st configure and answers it with the 2nd: two answers.
     late_pair: bool,
     /// Like `late_pair`, but the extra answer comes only before the answer to
@@ -142,6 +169,7 @@ struct Faults {
 
 struct Device {
     disk: Vec<u8>,
+    boot: [Vec<u8>; 2],
     f: Faults,
     out: VecDeque<Vec<u8>>,
     /// Every transfer the computer sent, in order.
@@ -195,8 +223,10 @@ impl Device {
                 out.push_back(pkt(cmd::DONE_RESP, &[1]));
             }
         }
+        let boot = [boot_area(1, f.boot_sectors), boot_area(2, f.boot_sectors)];
         Device {
             disk: disk(),
+            boot,
             f,
             out,
             sent: vec![],
@@ -269,10 +299,18 @@ impl Device {
                 }
             }
             "getstorageinfo" => {
+                let p = num("physical_partition_number");
+                assert!(p < 3, "getstorageinfo on physical partition {p}");
                 if self.f.storage_info {
+                    let total = if p == 0 || !self.f.per_partition_info { SECTORS } else { self.f.boot_sectors };
+                    let name = if self.f.rpmb_named == Some(p as u32) {
+                        r#", "phys_partition_name":"RPMB""#
+                    } else {
+                        ""
+                    };
                     // Unescaped quotes, and a serial: what programmers send.
                     let j = format!(
-                        r#"INFO: {{"storage_info": {{"total_blocks":{SECTORS}, "block_size":{}, "page_size":512, "num_physical":4, "serial_num":305419896, "fw_version":"1", "mem_type":"eMMC", "prod_name":"SYNTH"}}}}"#,
+                        r#"INFO: {{"storage_info": {{"total_blocks":{total}, "block_size":{}, "page_size":512, "num_physical":4, "serial_num":305419896, "fw_version":"1", "mem_type":"eMMC", "prod_name":"SYNTH"{name}}}}}"#,
                         self.f.block_size
                     );
                     self.push(vec![
@@ -286,19 +324,26 @@ impl Device {
             }
             "read" => {
                 assert_eq!(num("SECTOR_SIZE_IN_BYTES"), SECTOR as u64);
-                assert_eq!(num("physical_partition_number"), 0);
+                let p = num("physical_partition_number");
+                assert!(p < 3, "a read on physical partition {p}: {text}");
                 let (start, n) = (num("start_sector"), num("num_partition_sectors"));
-                assert!(n > 0 && start + n <= SECTORS, "a read past the disk: {text}");
-                let covers = |at: Option<u64>| at.is_some_and(|a| a >= start && a < start + n);
+                let area = if p == 0 { &self.disk } else { &self.boot[p as usize - 1] };
+                assert!(n > 0);
+                if start + n > (area.len() / SECTOR) as u64 {
+                    // Past the end, or an area the device doesn't have.
+                    self.push(vec![log("ERROR: sectors out of range"), doc("<response value=\"NAK\" />")]);
+                    return;
+                }
+                let covers = |at: Option<u64>| p == 0 && at.is_some_and(|a| a >= start && a < start + n);
                 if covers(self.f.nak_at) {
                     self.f.nak_at = None;
                     self.push(vec![log("ERROR: Failed to read sectors"), doc("<response value=\"NAK\" />")]);
                     return;
                 }
-                let mut data = self.disk[start as usize * SECTOR..(start + n) as usize * SECTOR].to_vec();
-                let times = self.reads_covering.entry(start).or_default();
+                let mut data = area[start as usize * SECTOR..(start + n) as usize * SECTOR].to_vec();
+                let times = self.reads_covering.entry(start + (p << 48)).or_default();
                 *times += 1;
-                if let Some(a) = self.f.flip_at.filter(|a| *a >= start && *a < start + n)
+                if let Some(a) = self.f.flip_at.filter(|a| p == 0 && *a >= start && *a < start + n)
                     && *times == 2
                 {
                     data[(a - start) as usize * SECTOR] ^= 1;
@@ -374,7 +419,8 @@ impl Transport for Device {
     }
 }
 
-/// Stores the images in memory.
+/// Stores the images in memory, as the command line's files do: under
+/// `NAME.img.partial` until kept.
 #[derive(Default)]
 struct Mem {
     files: BTreeMap<String, Vec<u8>>,
@@ -384,26 +430,52 @@ struct Mem {
     notes: Vec<String>,
     /// The stored copy reads back one byte different.
     corrupt_copy: bool,
+    /// Every call, in order: "begin NAME", "end NAME", "fill", "keep NAME", ...
+    events: Vec<String>,
+    /// What a process killed at each write or read-back would leave: the
+    /// names stored, and whether the manifest is.
+    kills: Vec<(Vec<String>, bool)>,
+}
+
+impl Mem {
+    fn snapshot(&mut self) {
+        self.kills.push((self.files.keys().cloned().collect(), self.manifest.is_some()));
+    }
 }
 
 impl ImageEdge for Mem {
     fn begin(&mut self, d: &Disk) -> Result<(), String> {
-        let n = format!("{}.img", d.name);
-        assert!(!self.files.contains_key(&n));
+        let n = format!("{}.img.partial", d.name);
+        assert!(!self.files.contains_key(&n) && !self.files.contains_key(&format!("{}.img", d.name)));
         self.files.insert(n.clone(), vec![]);
         self.writing = Some(n);
+        self.events.push(format!("begin {}", d.name));
         Ok(())
     }
     fn write(&mut self, data: &[u8]) -> Result<(), String> {
         let n = self.writing.clone().ok_or("nothing begun")?;
         self.files.get_mut(&n).unwrap().extend_from_slice(data);
+        if self.events.last().map(String::as_str) != Some("write") {
+            self.events.push("write".into());
+        }
+        self.snapshot();
         Ok(())
     }
-    fn end(&mut self, _: &Disk) -> Result<String, String> {
-        self.writing.take().ok_or("nothing begun".into())
+    fn end(&mut self, d: &Disk) -> Result<(), String> {
+        self.writing.take().ok_or("nothing begun")?;
+        self.events.push(format!("end {}", d.name));
+        Ok(())
+    }
+    fn keep(&mut self, d: &Disk) -> Result<String, String> {
+        let b = self.files.remove(&format!("{}.img.partial", d.name)).ok_or("no copy")?;
+        let n = format!("{}.img", d.name);
+        self.files.insert(n.clone(), b);
+        self.events.push(format!("keep {}", d.name));
+        Ok(n)
     }
     fn reopen(&mut self, d: &Disk) -> Result<(), String> {
-        let mut b = self.files[&format!("{}.img", d.name)].clone();
+        self.events.push(format!("reopen {}", d.name));
+        let mut b = self.files[&format!("{}.img.partial", d.name)].clone();
         if self.corrupt_copy {
             b[100] ^= 0x40;
         }
@@ -415,19 +487,25 @@ impl ImageEdge for Mem {
         let n = buf.len().min(b.len() - *at);
         buf[..n].copy_from_slice(&b[*at..*at + n]);
         *at += n;
+        if self.events.last().map(String::as_str) != Some("fill") {
+            self.events.push("fill".into());
+        }
+        self.snapshot();
         Ok(n)
     }
     fn incomplete(&mut self, d: &Disk) -> Result<String, String> {
         self.writing = None;
-        let n = format!("{}.img", d.name);
+        let n = format!("{}.img.partial", d.name);
         let b = self.files.remove(&n).ok_or("no such copy")?;
-        let m = format!("{n}.incomplete");
+        let m = format!("{}.img.incomplete", d.name);
         self.files.insert(m.clone(), b);
+        self.events.push(format!("incomplete {}", d.name));
         Ok(m)
     }
     fn manifest(&mut self, text: &str) -> Result<(), String> {
         assert!(self.manifest.is_none());
         self.manifest = Some(text.to_string());
+        self.events.push("manifest".into());
         Ok(())
     }
     fn progress(&mut self, _: &Disk, _: u64) {}
@@ -447,7 +525,11 @@ fn go_with(f: Faults, scope: Scope, mem: Mem) -> Run {
 }
 
 fn go_opts(f: Faults, scope: Scope, mem: Mem, opts: Options) -> Run {
-    let mut dev = Device::new(f);
+    go_dev(Device::new(f), scope, mem, opts)
+}
+
+fn go_dev(dev: Device, scope: Scope, mem: Mem, opts: Options) -> Run {
+    let mut dev = dev;
     let mut mem = mem;
     let r = block_on(emergency_read::run(&mut dev, &programmer(), &scope, opts, &mut mem));
     let run = Run { r, dev, mem };
@@ -498,8 +580,16 @@ fn whitelist(dev: &Device) {
 }
 
 fn reads(dev: &Device) -> Vec<(u64, u64)> {
+    reads_on(dev, 0)
+}
+
+/// The reads (start, sectors) on one physical partition, in order.
+fn reads_on(dev: &Device, physical: u32) -> Vec<(u64, u64)> {
     let Some(at) = dev.done_at else { return vec![] };
-    let re = Regex::new(r#"num_partition_sectors="(\d+)" physical_partition_number="0" start_sector="(\d+)""#).unwrap();
+    let re = Regex::new(&format!(
+        r#"num_partition_sectors="(\d+)" physical_partition_number="{physical}" start_sector="(\d+)""#
+    ))
+    .unwrap();
     dev.sent[at + 1..]
         .iter()
         .filter_map(|d| {
@@ -585,6 +675,125 @@ fn the_whole_disk_without_storage_info() {
     assert_eq!(run.mem.files["emmc-user.img"], disk());
     assert!(!done.configured.renegotiated);
     assert_eq!(done.restart, Restart::Done);
+    // No boot areas on this device: noted, and the run goes on.
+    assert_eq!(run.mem.files.len(), 1);
+    let m: serde_json::Value = serde_json::from_str(done.manifest.as_deref().unwrap()).unwrap();
+    assert_eq!(m["not_read"][0]["name"], "emmc-boot1");
+    assert_eq!(m["not_read"][1]["physical_partition"], 2);
+    assert!(run.mem.notes.iter().any(|n| n.starts_with("emmc-boot2 (physical partition 2) isn't read")));
+    assert_eq!(reads_on(&run.dev, 1), [(0, 1)]);
+}
+
+/// The whole disk (001 FR-009): the user area, then both boot areas, each
+/// read twice and checked; RPMB never.
+#[test]
+fn the_whole_disk_with_its_boot_areas() {
+    for per_partition_info in [true, false] {
+        let f = Faults {
+            boot_sectors: 640,
+            per_partition_info,
+            ..lively()
+        };
+        let run = go(f, Scope::WholeDisk);
+        let done = run.r.unwrap();
+        assert_eq!(run.mem.files["emmc-user.img"], disk());
+        assert_eq!(run.mem.files["emmc-boot1.img"], boot_area(1, 640));
+        assert_eq!(run.mem.files["emmc-boot2.img"], boot_area(2, 640));
+        assert_eq!(run.mem.files.len(), 3);
+        let m: serde_json::Value = serde_json::from_str(done.manifest.as_deref().unwrap()).unwrap();
+        assert_eq!(m["disks"][1]["name"], "emmc-boot1");
+        assert_eq!(m["disks"][1]["physical_partition"], 1);
+        assert_eq!(m["disks"][2]["physical_partition"], 2);
+        assert_eq!(m["disks"][2]["size"], 640 * 512);
+        assert_eq!(m["not_read"], serde_json::json!([]));
+        // Each range of a boot area twice (320 KiB: two ranges of 4 + 1 chunks).
+        let r = reads_on(&run.dev, 1);
+        let image: Vec<_> = r.iter().filter(|(_, n)| *n > 1).collect();
+        assert_eq!(image.len(), 2 * (4 + 1), "{r:?}");
+        if per_partition_info {
+            // The size reported, its last sector read and the next refused.
+            assert_eq!(&r[..3], [(0, 1), (639, 1), (640, 1)]);
+        }
+        // The user area first: no boot area read before its last check.
+        let c = commands(&run.dev);
+        assert!(c.iter().all(|x| ["configure", "getstorageinfo", "read", "power"].contains(&x.as_str())));
+        let kept_user = run.mem.events.iter().position(|e| e == "keep emmc-user").unwrap();
+        let begun_boot = run.mem.events.iter().position(|e| e == "begin emmc-boot1").unwrap();
+        assert!(kept_user < begun_boot);
+    }
+}
+
+#[test]
+fn a_partition_the_programmer_names_rpmb_is_never_read() {
+    let f = Faults {
+        boot_sectors: 640,
+        per_partition_info: true,
+        rpmb_named: Some(2),
+        ..lively()
+    };
+    let run = go(f, Scope::WholeDisk);
+    let done = run.r.unwrap();
+    assert!(run.mem.files.contains_key("emmc-boot1.img"));
+    assert!(!run.mem.files.keys().any(|k| k.starts_with("emmc-boot2")));
+    assert!(reads_on(&run.dev, 2).is_empty());
+    let m: serde_json::Value = serde_json::from_str(done.manifest.as_deref().unwrap()).unwrap();
+    assert_eq!(m["not_read"][0]["name"], "emmc-boot2");
+    assert!(m["not_read"][0]["why"].as_str().unwrap().contains("RPMB"));
+    // Nothing named physical partition 3 or above was sent.
+    let at = run.dev.done_at.unwrap();
+    for d in &run.dev.sent[at + 1..] {
+        let t = std::str::from_utf8(d).unwrap();
+        assert!(!Regex::new(r#"physical_partition_number="([3-9]|\d\d)"#).unwrap().is_match(t), "{t}");
+    }
+}
+
+#[test]
+fn boot_area_names_are_reserved() {
+    let run = go(lively(), Scope::Partitions(vec!["emmc-boot1".into()]));
+    // Not in the GPT anyway; the name check is what a GPT naming it meets.
+    assert!(matches!(run.r.unwrap_err().error, EmergencyError::Partition(_)));
+}
+
+/// 004 Scenario 5: a copy is under its final name only after both reads
+/// matched and it was read back; the manifest comes last. Whatever moment
+/// the process is killed at, no final-named image is unchecked and no
+/// manifest is there before the end.
+#[test]
+fn an_interrupted_run_leaves_no_final_name() {
+    let run = go(lively(), Scope::Partitions(vec!["devinfo".into(), "boot_a".into()]));
+    let done = run.r.unwrap();
+    assert_eq!(run.mem.events.last().unwrap(), "manifest");
+    assert_eq!(
+        run.mem.events,
+        [
+            "begin devinfo",
+            "write",
+            "end devinfo",
+            "reopen devinfo",
+            "fill",
+            "keep devinfo",
+            "begin boot_a",
+            "write",
+            "end boot_a",
+            "reopen boot_a",
+            "fill",
+            "keep boot_a",
+            "manifest"
+        ]
+    );
+    assert!(!run.mem.kills.is_empty());
+    for (names, manifest) in &run.mem.kills {
+        assert!(!manifest, "a manifest before the end");
+        // At most one copy in the works, under its temporary name.
+        assert_eq!(names.iter().filter(|n| n.ends_with(".partial")).count(), 1, "{names:?}");
+        assert!(!names.contains(&"boot_a.img".to_string()) || !names.contains(&"boot_a.img.partial".to_string()));
+    }
+    // Killed while boot_a was read: devinfo is checked and kept, boot_a only partial.
+    assert!(run.mem.kills.iter().any(|(n, _)| n == &["boot_a.img.partial", "devinfo.img"]));
+    assert!(!run.mem.kills.iter().any(|(n, _)| n.contains(&"boot_a.img".to_string())));
+    assert_eq!(run.mem.files.keys().collect::<Vec<_>>(), ["boot_a.img", "devinfo.img"]);
+    let m: serde_json::Value = serde_json::from_str(done.manifest.as_deref().unwrap()).unwrap();
+    assert_eq!(m["disks"][1]["file"], "boot_a.img");
 }
 
 #[test]
@@ -764,7 +973,11 @@ fn a_nak_on_read_marks_the_image_incomplete() {
     assert_eq!(f.restart, Restart::Done);
     assert!(run.mem.files.contains_key("devinfo.img"));
     assert!(run.mem.files.contains_key("boot_a.img.incomplete"));
+    // Failed mid-image: never under its final name, nothing left partial.
     assert!(!run.mem.files.contains_key("boot_a.img"));
+    assert!(!run.mem.files.keys().any(|k| k.ends_with(".partial")));
+    assert!(!run.mem.events.contains(&"keep boot_a".to_string()));
+    assert_eq!(run.mem.events.last().unwrap(), "manifest");
     let m: serde_json::Value = serde_json::from_str(f.manifest.as_deref().unwrap()).unwrap();
     assert_eq!(m["disks"].as_array().unwrap().len(), 1);
     assert_eq!(m["incomplete"][0]["name"], "boot_a");
@@ -835,17 +1048,82 @@ fn a_4096_byte_block_size_for_emmc_is_refused() {
     assert_eq!(f.restart, Restart::Done);
 }
 
+/// The synthetic disk with its primary GPT damaged: the header's CRC
+/// broken (its signature and backup LBA kept), or the head wiped.
+fn damaged(f: Faults, wipe: bool) -> Device {
+    let mut dev = Device::new(f);
+    if wipe {
+        dev.disk[..SECTOR * 34].fill(0);
+    } else {
+        dev.disk[SECTOR + 16] ^= 0xff;
+    }
+    dev
+}
+
 #[test]
-fn no_gpt_reads_nothing_more() {
-    let mut dev = Device::new(lively());
-    dev.disk[..SECTOR * 34].fill(0);
-    let mut mem = Mem::default();
-    let r = block_on(emergency_read::run(&mut dev, &programmer(), &Scope::WholeDisk, OPTS, &mut mem));
-    whitelist(&dev);
-    let f = r.unwrap_err();
-    assert!(f.error.to_string().contains("no GPT header at LBA 1"), "{}", f.error);
-    assert_eq!(reads(&dev).len(), 2);
-    assert!(mem.files.is_empty());
+fn a_damaged_primary_gpt_is_replaced_by_the_backup() {
+    for (info, wipe, what) in [
+        (true, true, "size reported"),
+        (false, false, "size from the damaged header's backup LBA"),
+        (false, true, "size searched for"),
+    ] {
+        let f = Faults {
+            storage_info: info,
+            ..lively()
+        };
+        let run = go_dev(damaged(f, wipe), Scope::Partitions(vec!["devinfo".into()]), Mem::default(), OPTS);
+        let done = run.r.unwrap_or_else(|e| panic!("{what}: {e:?}"));
+        assert!(!done.table.primary_ok, "{what}");
+        assert_eq!(done.table.entries.len(), 3, "{what}");
+        assert_eq!(done.disk_size, SECTORS * 512, "{what}");
+        assert_eq!(run.mem.files["devinfo.img"], slice(64, 191), "{what}");
+        assert!(
+            run.mem
+                .notes
+                .iter()
+                .any(|n| n == &format!("using the backup GPT at LBA {}: the primary is damaged", SECTORS - 1)),
+            "{what}"
+        );
+        let r = reads(&run.dev);
+        // The head twice, then the backup header and its entries twice each.
+        assert_eq!(&r[..2], [(0, 34), (0, 34)], "{what}");
+        assert!(r.contains(&(SECTORS - 1, 1)) && r.contains(&(SECTORS - 33, 32)), "{what}: {r:?}");
+        let singles = r.iter().filter(|(_, n)| *n == 1).count();
+        match what {
+            // The backup header twice.
+            "size reported" => assert_eq!(singles, 2, "{r:?}"),
+            // The hinted LBA once, then twice.
+            "size from the damaged header's backup LBA" => assert_eq!(singles, 3, "{r:?}"),
+            // Doubling and halving to the end: more.
+            _ => {
+                assert!(singles > 10, "{r:?}");
+                assert!(run.mem.notes.iter().any(|n| n.contains("finding its last sector")));
+            }
+        }
+        assert_eq!(done.restart, Restart::Done);
+    }
+}
+
+#[test]
+fn both_gpts_bad_reads_nothing_more() {
+    for info in [true, false] {
+        let mut dev = damaged(
+            Faults {
+                storage_info: info,
+                ..lively()
+            },
+            true,
+        );
+        let end = SECTORS as usize * SECTOR;
+        dev.disk[end - SECTOR..end].fill(0);
+        let run = go_dev(dev, Scope::WholeDisk, Mem::default(), OPTS);
+        let f = run.r.unwrap_err();
+        let e = f.error.to_string();
+        assert!(e.contains("no GPT header at LBA 1") && e.contains("the backup GPT isn't at LBA 16383"), "{e}");
+        assert!(run.mem.files.is_empty() && run.mem.manifest.is_none());
+        assert!(reads(&run.dev).iter().all(|(_, n)| *n <= 34));
+        assert_eq!(f.restart, Restart::Done);
+    }
 }
 
 #[test]

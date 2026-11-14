@@ -52,6 +52,26 @@ impl FileEdge {
     fn file(disk: &Disk) -> String {
         format!("{}.img.gz", disk.name)
     }
+
+    /// Starts writing `disk`'s copy under `name`, which must not exist.
+    fn start(&mut self, disk: &Disk, name: String) -> Result<(), String> {
+        let p = self.dir.join(&name);
+        let f = File::create_new(&p).map_err(|e| format!("{}: {e}", p.display()))?;
+        self.writing = Some((name, GzEncoder::new(BufWriter::with_capacity(1 << 20, f), Compression::fast())));
+        self.shown = 0;
+        self.started = Instant::now();
+        eprintln!("reading {} ({} bytes) into {}", disk.name, disk.size, p.display());
+        Ok(())
+    }
+
+    /// Opens the copy stored as `name` to read it back.
+    fn open_copy(&mut self, disk: &Disk, name: &str) -> Result<(), String> {
+        let p = self.dir.join(name);
+        let f = File::open(&p).map_err(|e| format!("{}: {e}", p.display()))?;
+        self.reading = Some(GzDecoder::new(BufReader::with_capacity(1 << 20, f)));
+        eprintln!("{}: checking the stored copy", disk.name);
+        Ok(())
+    }
 }
 
 impl BackupEdge for FileEdge {
@@ -81,14 +101,7 @@ impl BackupEdge for FileEdge {
     }
 
     fn begin(&mut self, disk: &Disk) -> Result<(), String> {
-        let name = Self::file(disk);
-        let p = self.dir.join(&name);
-        let f = File::create_new(&p).map_err(|e| format!("{}: {e}", p.display()))?;
-        self.writing = Some((name, GzEncoder::new(BufWriter::with_capacity(1 << 20, f), Compression::fast())));
-        self.shown = 0;
-        self.started = Instant::now();
-        eprintln!("reading {} ({} bytes) into {}", disk.name, disk.size, p.display());
-        Ok(())
+        self.start(disk, Self::file(disk))
     }
 
     fn write(&mut self, data: &[u8]) -> Result<(), String> {
@@ -105,11 +118,7 @@ impl BackupEdge for FileEdge {
     }
 
     fn reopen(&mut self, disk: &Disk) -> Result<(), String> {
-        let p = self.dir.join(Self::file(disk));
-        let f = File::open(&p).map_err(|e| format!("{}: {e}", p.display()))?;
-        self.reading = Some(GzDecoder::new(BufReader::with_capacity(1 << 20, f)));
-        eprintln!("{}: checking the stored copy", disk.name);
-        Ok(())
+        self.open_copy(disk, &Self::file(disk))
     }
 
     fn fill(&mut self, buf: &mut [u8]) -> Result<usize, String> {
@@ -187,23 +196,35 @@ pub fn run(ds: &[&glassine_installer::format1::Description], image: &[u8], out: 
 }
 
 /// The same files for the emergency read route (spec 004): a gzip file per
-/// image, the manifest beside them, and an image that failed its checks
-/// renamed to `NAME.img.gz.incomplete`.
+/// image, written as `NAME.img.gz.partial` and renamed to `NAME.img.gz` only
+/// after its checks (a killed run leaves no final name behind); an image that
+/// failed them renamed to `NAME.img.gz.incomplete`; the manifest stored last,
+/// under a temporary name renamed when it is whole.
 impl glassine_installer::emergency_read::ImageEdge for FileEdge {
     fn begin(&mut self, disk: &Disk) -> Result<(), String> {
-        BackupEdge::begin(self, disk)
+        let done = self.dir.join(Self::file(disk));
+        if done.exists() {
+            return Err(format!("{} exists already", done.display()));
+        }
+        self.start(disk, partial(disk))
     }
     fn write(&mut self, data: &[u8]) -> Result<(), String> {
         BackupEdge::write(self, data)
     }
-    fn end(&mut self, disk: &Disk) -> Result<String, String> {
-        BackupEdge::end(self, disk)
+    fn end(&mut self, disk: &Disk) -> Result<(), String> {
+        BackupEdge::end(self, disk).map(|_| ())
     }
     fn reopen(&mut self, disk: &Disk) -> Result<(), String> {
-        BackupEdge::reopen(self, disk)
+        self.open_copy(disk, &partial(disk))
     }
     fn fill(&mut self, buf: &mut [u8]) -> Result<usize, String> {
         BackupEdge::fill(self, buf)
+    }
+    fn keep(&mut self, disk: &Disk) -> Result<String, String> {
+        self.reading = None;
+        let (from, to) = (partial(disk), Self::file(disk));
+        rename_new(&self.dir, &from, &to)?;
+        Ok(to)
     }
     fn incomplete(&mut self, disk: &Disk) -> Result<String, String> {
         // Whatever was written is kept, under a name no backup is read by.
@@ -211,18 +232,130 @@ impl glassine_installer::emergency_read::ImageEdge for FileEdge {
             let _ = w.finish();
         }
         self.reading = None;
-        let name = Self::file(disk);
-        let to = format!("{name}.incomplete");
-        std::fs::rename(self.dir.join(&name), self.dir.join(&to)).map_err(|e| format!("{name}: {e}"))?;
+        let to = format!("{}.incomplete", Self::file(disk));
+        // Still under its temporary name, or (a failure after the rename)
+        // under its final one.
+        let from = [partial(disk), Self::file(disk)]
+            .into_iter()
+            .find(|n| self.dir.join(n).exists())
+            .ok_or_else(|| format!("{}: no copy to mark", Self::file(disk)))?;
+        rename_new(&self.dir, &from, &to)?;
         Ok(to)
     }
     fn manifest(&mut self, text: &str) -> Result<(), String> {
-        BackupEdge::manifest(self, text)
+        let tmp = format!("{MANIFEST}.partial");
+        let p = self.dir.join(&tmp);
+        let mut f = File::create_new(&p).map_err(|e| format!("{}: {e}", p.display()))?;
+        f.write_all(text.as_bytes())
+            .and_then(|_| f.sync_all())
+            .map_err(|e| format!("{}: {e}", p.display()))?;
+        rename_new(&self.dir, &tmp, MANIFEST)
     }
     fn progress(&mut self, disk: &Disk, done: u64) {
         BackupEdge::progress(self, disk, done)
     }
     fn note(&mut self, line: &str) {
         BackupEdge::note(self, line)
+    }
+}
+
+const MANIFEST: &str = "manifest.json";
+
+/// The temporary name of an emergency-read image.
+fn partial(disk: &Disk) -> String {
+    format!("{}.partial", FileEdge::file(disk))
+}
+
+/// Renames `from` to `to` in `dir`, never over an existing file, and makes
+/// the rename durable (the directory synced).
+fn rename_new(dir: &Path, from: &str, to: &str) -> Result<(), String> {
+    let t = dir.join(to);
+    if t.exists() {
+        return Err(format!("{} exists already", t.display()));
+    }
+    std::fs::rename(dir.join(from), &t).map_err(|e| format!("{from} to {to}: {e}"))?;
+    File::open(dir).and_then(|d| d.sync_all()).map_err(|e| format!("{}: {e}", dir.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use glassine_installer::emergency_read::ImageEdge;
+
+    /// A new directory under the system's temporary one, removed at the end.
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new(what: &str) -> TempDir {
+            let p = std::env::temp_dir().join(format!("glassine-edge-{what}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&p);
+            TempDir(p)
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn names(dir: &Path) -> Vec<String> {
+        let mut v: Vec<String> = std::fs::read_dir(dir).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
+        v.sort();
+        v
+    }
+
+    fn disk() -> Disk {
+        Disk {
+            index: 0,
+            name: "emmc-user".into(),
+            size: 4096,
+            sector: 512,
+        }
+    }
+
+    #[test]
+    fn a_killed_run_leaves_no_final_name() {
+        let t = TempDir::new("killed");
+        {
+            let mut e = FileEdge::new(&t.0).unwrap();
+            ImageEdge::begin(&mut e, &disk()).unwrap();
+            ImageEdge::write(&mut e, &[7u8; 2048]).unwrap();
+            // The process ends here: nothing more is called.
+        }
+        assert_eq!(names(&t.0), ["emmc-user.img.gz.partial"]);
+    }
+
+    #[test]
+    fn a_checked_copy_gets_its_final_name_and_the_manifest_comes_whole() {
+        let t = TempDir::new("kept");
+        let mut e = FileEdge::new(&t.0).unwrap();
+        let d = disk();
+        ImageEdge::begin(&mut e, &d).unwrap();
+        ImageEdge::write(&mut e, &[7u8; 4096]).unwrap();
+        ImageEdge::end(&mut e, &d).unwrap();
+        ImageEdge::reopen(&mut e, &d).unwrap();
+        let mut b = vec![0u8; 8192];
+        assert_eq!(ImageEdge::fill(&mut e, &mut b).unwrap(), 4096);
+        // Read back, not kept yet: still the temporary name.
+        assert_eq!(names(&t.0), ["emmc-user.img.gz.partial"]);
+        assert_eq!(ImageEdge::keep(&mut e, &d).unwrap(), "emmc-user.img.gz");
+        assert_eq!(names(&t.0), ["emmc-user.img.gz"]);
+        ImageEdge::manifest(&mut e, "{}\n").unwrap();
+        assert_eq!(names(&t.0), ["emmc-user.img.gz", "manifest.json"]);
+        assert_eq!(std::fs::read_to_string(t.0.join("manifest.json")).unwrap(), "{}\n");
+        // A second copy of the same image is refused.
+        assert!(ImageEdge::begin(&mut e, &d).is_err());
+    }
+
+    #[test]
+    fn a_failed_copy_is_marked_incomplete() {
+        let t = TempDir::new("failed");
+        let mut e = FileEdge::new(&t.0).unwrap();
+        let d = disk();
+        ImageEdge::begin(&mut e, &d).unwrap();
+        ImageEdge::write(&mut e, &[7u8; 1024]).unwrap();
+        assert_eq!(ImageEdge::incomplete(&mut e, &d).unwrap(), "emmc-user.img.gz.incomplete");
+        assert_eq!(names(&t.0), ["emmc-user.img.gz.incomplete"]);
     }
 }

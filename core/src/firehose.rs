@@ -43,6 +43,16 @@ pub const MEMORY_NAME: &str = "eMMC";
 /// header at LBA 1. 4096 is never tried for eMMC.
 pub const EMMC_SECTOR: u32 = 512;
 
+/// The eMMC physical partitions a request may name: the user area (0) and
+/// the two boot areas (1, 2). RPMB (3 on eMMC) holds the device's replay-
+/// protected keys and counters and is never asked for, nor are the general
+/// purpose areas after it: [`Firehose::request`] refuses any other number
+/// before anything is sent.
+pub const READABLE_PHYSICAL: [u32; 3] = [0, 1, 2];
+
+/// RPMB's physical partition number on eMMC.
+pub const RPMB_PHYSICAL: u32 = 3;
+
 /// What the computer offers as the largest payload it sends in one piece.
 /// Only writes use it (and this client has none), but the programmer
 /// expects it in `configure`, and may answer with the size it supports
@@ -286,6 +296,10 @@ pub struct StorageInfo {
     pub block_size: Option<u32>,
     pub num_physical: Option<u32>,
     pub mem_type: Option<String>,
+    /// The answer names this physical partition RPMB (a partition name or
+    /// type field saying so; not the product name): it is never read,
+    /// whatever its number.
+    pub names_rpmb: bool,
 }
 
 /// The storage facts from the log lines of a `getstorageinfo` answer:
@@ -309,6 +323,12 @@ pub fn parse_storage_info(logs: &[String]) -> Option<StorageInfo> {
             block_size: num("block_size").and_then(|n| u32::try_from(n).ok()),
             num_physical: num("num_physical").and_then(|n| u32::try_from(n).ok()),
             mem_type: s["mem_type"].as_str().map(str::to_string),
+            names_rpmb: s.as_object().is_some_and(|o| {
+                o.iter().any(|(k, v)| {
+                    let k = k.to_ascii_lowercase();
+                    k.contains("part") && (k.contains("name") || k.contains("type")) && v.as_str().is_some_and(|t| t.to_ascii_lowercase().contains("rpmb"))
+                })
+            }),
         });
     }
     None
@@ -597,6 +617,13 @@ impl<T: Transport> Firehose<T> {
 
     /// The one place that sends anything to the programmer.
     async fn request(&mut self, r: &Request) -> Result<(), FirehoseError> {
+        if let Request::Read { physical, .. } | Request::GetStorageInfo { physical } = r
+            && !READABLE_PHYSICAL.contains(physical)
+        {
+            return Err(FirehoseError::Refused(format!(
+                "physical partition {physical}: only the user area and the boot areas are read, never RPMB"
+            )));
+        }
         self.t.send(r.xml().as_bytes()).await?;
         Ok(())
     }
@@ -872,6 +899,44 @@ mod tests {
         assert_eq!(shown_logs(&logs), vec![logs[0].clone()]);
         assert!(parse_storage_info(&logs[..1]).is_none());
         assert!(shown_logs(&["Serial number 1".to_string()]).is_empty());
+    }
+
+    /// A transport that must never be used.
+    struct NoSend;
+
+    impl Transport for NoSend {
+        async fn send(&mut self, _: &[u8]) -> Result<(), FbError> {
+            panic!("sent something")
+        }
+        async fn recv(&mut self) -> Result<Vec<u8>, FbError> {
+            panic!("received")
+        }
+    }
+
+    #[test]
+    fn rpmb_and_the_other_physical_partitions_are_refused_before_sending() {
+        let mut fh = Firehose::new(NoSend);
+        fh.configured = Some(Configured {
+            payload_to_target: PAYLOAD_TO_TARGET,
+            renegotiated: false,
+            payload_from_target: None,
+            max_xml: None,
+            target_name: None,
+            version: None,
+            logs: vec![],
+        });
+        for p in [RPMB_PHYSICAL, 4, 7, u32::MAX] {
+            let e = pollster::block_on(fh.read_vec(p, 512, 0, 1)).unwrap_err();
+            assert!(matches!(&e, FirehoseError::Refused(w) if w.contains("never RPMB")), "{e:?}");
+            let e = pollster::block_on(fh.storage_info(p)).unwrap_err();
+            assert!(matches!(e, FirehoseError::Refused(_)), "{e:?}");
+        }
+        assert!(!READABLE_PHYSICAL.contains(&RPMB_PHYSICAL));
+        // A programmer that names a partition RPMB.
+        let l = vec![r#"INFO: {"storage_info": {"total_blocks":8192, "block_size":512, "phys_partition_name":"RPMB", "mem_type":"eMMC"}}"#.to_string()];
+        assert!(parse_storage_info(&l).unwrap().names_rpmb);
+        let l = vec![r#"INFO: {"storage_info": {"total_blocks":8192, "block_size":512, "mem_type":"eMMC", "prod_name":"rpmb-free"}}"#.to_string()];
+        assert!(!parse_storage_info(&l).unwrap().names_rpmb);
     }
 
     #[test]
