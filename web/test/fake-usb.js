@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-// A simulated fastboot device behind a fake navigator.usb, for the live test (web/test/live.js).
+// A simulated fastboot device behind a fake navigator.usb (and, for a 05c6:9008 filter, the
+// emergency-mode device of fake-edl.js when the page has one), for the live test (web/test/live.js).
 // The page runs the core's WebUSB code against it unchanged: nusb reads the device and
 // configuration descriptors (GET_DESCRIPTOR), claims the fastboot interface and does bulk
 // transfers. The device answers getvar from a facts snapshot and has the Note Air's USB driver
@@ -129,6 +130,13 @@ function installFakeUsb({ vars, warm = false, cancel = false, silentReboot = fal
 
   const usb = {
     async requestDevice(options) {
+      // The emergency download mode's chooser (05c6:9008): the device of fake-edl.js, if any.
+      if ((options.filters || []).some((f) => f.vendorId === 0x05c6)) {
+        called('requestDevice-emergency', [options]);
+        if (!window.__fakeEdlDevice) throw new DOMException('No device selected.', 'NotFoundError');
+        window.__fakeUsbDisconnect = listeners.disconnect;
+        return window.__fakeEdlDevice;
+      }
       called('requestDevice', [options]); log.requested += 1;
       if (cancel) throw new DOMException('No device selected.', 'NotFoundError');
       return device;

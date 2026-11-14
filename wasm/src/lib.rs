@@ -15,6 +15,7 @@
 //! The records are built by plain functions (tested natively); the browser
 //! entry points only add WebUSB around them.
 
+use glassine_installer::emergency_read::{Done, EmergencyError, Failure, Restart, Scope};
 use glassine_installer::facts::Snapshot;
 use glassine_installer::format1::Description;
 use glassine_installer::plan::{self, Input};
@@ -133,17 +134,127 @@ pub fn supplied_record(device: &str, file: &str, bytes: &[u8], reported: &str) -
     Ok(serde_json::to_string(&c).unwrap())
 }
 
+/// The programmer the person picked for the emergency read, checked again
+/// here as the command line does before it opens a device (004 FR-004): a
+/// known file goes on; one that fits but isn't known only with
+/// `accept_unknown` (the person ticked the warning); any other never does.
+/// The page's own check isn't trusted. A refusal is an error record
+/// (`not-sendable`, or `input` for a question the description can't answer).
+pub fn emergency_programmer(device: &str, file: &str, bytes: &[u8], accept_unknown: bool) -> Result<(), String> {
+    let ds = descriptions();
+    let d = ds
+        .iter()
+        .find(|d| d.id == device)
+        .ok_or_else(|| error("input", format!("no description {device:?}")))?;
+    let c = glassine_installer::supplied::check(d, file, bytes, None).map_err(|e| error("input", e))?;
+    match c.verdict.sendable() {
+        Some(false) => Ok(()),
+        Some(true) if accept_unknown => Ok(()),
+        Some(true) => Err(error(
+            "not-sendable",
+            "the file isn't a known one and its warning wasn't confirmed; nothing was sent",
+        )),
+        None => Err(error("not-sendable", "the file doesn't fit this device; nothing was sent")),
+    }
+}
+
+/// What an emergency read reads after the GPT: `whole-disk` (the plan's
+/// backup, 001 FR-009), `boot-areas`, or `partitions:NAME,NAME`. Something is
+/// always stored: the browser route has no table-only run.
+pub fn emergency_scope(scope: &str) -> Result<Scope, String> {
+    match scope {
+        "whole-disk" => Ok(Scope::WholeDisk),
+        "boot-areas" => Ok(Scope::BootAreas),
+        _ => match scope.strip_prefix("partitions:") {
+            Some(l) if l.split(',').all(|n| !n.is_empty()) => Ok(Scope::Partitions(l.split(',').map(str::to_string).collect())),
+            _ => Err(error(
+                "input",
+                format!("scope {scope:?}; expected whole-disk, boot-areas or partitions:NAME,NAME"),
+            )),
+        },
+    }
+}
+
+fn restart_record(r: &Restart) -> (&'static str, Option<String>) {
+    match r {
+        Restart::Done => ("done", None),
+        Restart::Failed(w) => ("failed", Some(w.clone())),
+        Restart::NotPossible => ("by-hand", None),
+    }
+}
+
+/// The record of an emergency read (`emergency_read_format` 1). `outcome`:
+/// `done`; `refused` (the boot ROM didn't take the file, or it didn't answer
+/// its first request: it doesn't work on this device, 004 FR-006, and
+/// nothing was read); `nothing-sent` (the boot ROM didn't answer, or reports
+/// a chip this installer doesn't know); `failed` (anything after the
+/// programmer answered: the images that are complete and those that aren't
+/// are in `manifest`). `restart`: `done`, `failed` (sent, not confirmed;
+/// `restart_why`) or `by-hand` (nothing answers that could restart it).
+/// No serial or other value unique to the unit.
+pub fn emergency_record(r: &Result<Done, Failure>) -> String {
+    let manifest = |m: &Option<String>| m.as_deref().and_then(|t| serde_json::from_str::<Value>(t).ok());
+    match r {
+        Ok(d) => {
+            let (restart, why) = restart_record(&d.restart);
+            json!({
+                "emergency_read_format": 1,
+                "outcome": "done",
+                "chip": d.chip,
+                "images": d.images.iter().map(|(rec, start, file)| json!({
+                    "name": rec.disk.name,
+                    "physical_partition": rec.disk.index,
+                    "start_sector": start,
+                    "size": rec.disk.size,
+                    "sha256": rec.sha256_hex(),
+                    "file": file,
+                })).collect::<Vec<_>>(),
+                "manifest": manifest(&d.manifest),
+                "restart": restart,
+                "restart_why": why,
+            })
+            .to_string()
+        }
+        Err(f) => {
+            let (restart, why) = restart_record(&f.restart);
+            let (outcome, kind) = match &f.error {
+                EmergencyError::Refused(_) => ("refused", "refused"),
+                EmergencyError::NotWorking(_) => ("refused", "not-working"),
+                EmergencyError::BootRom(_) => ("nothing-sent", "boot-rom"),
+                EmergencyError::UnknownChip(_) => ("nothing-sent", "unknown-chip"),
+                EmergencyError::Firehose(_) => ("failed", "programmer"),
+                EmergencyError::Storage(_) => ("failed", "storage"),
+                EmergencyError::Partition(_) => ("failed", "partition"),
+                EmergencyError::Mismatch { .. } => ("failed", "mismatch"),
+                EmergencyError::Edge(_) => ("failed", "store"),
+            };
+            json!({
+                "emergency_read_format": 1,
+                "outcome": outcome,
+                "error": kind,
+                "message": f.error.to_string(),
+                "manifest": manifest(&f.manifest),
+                "restart": restart,
+                "restart_why": why,
+            })
+            .to_string()
+        }
+    }
+}
+
 #[cfg(target_arch = "wasm32")]
 mod web {
     use super::*;
-    use glassine_installer::fastboot;
+    use glassine_installer::emergency_read;
+    use glassine_installer::fastboot::{self, FbError, Transport};
+    use glassine_installer::glassine_read::Disk;
     use glassine_installer::inspect::{self, Host};
     use glassine_installer::sahara;
     use glassine_installer_usb as usb;
     use std::cell::RefCell;
     use std::rc::Rc;
     use wasm_bindgen::prelude::*;
-    use wasm_bindgen_futures::{future_to_promise, js_sys, spawn_local};
+    use wasm_bindgen_futures::{JsFuture, future_to_promise, js_sys, spawn_local};
 
     fn js(r: Result<String, String>) -> Result<String, JsValue> {
         r.map_err(|e| JsValue::from_str(&e))
@@ -190,6 +301,189 @@ mod web {
         };
         let f = read.await.map_err(|e| JsValue::from_str(&error("device", e)))?;
         Ok(serde_json::to_string(&sahara::InfoReport::new(&f, ids.vendor_id, ids.product_id, false)).unwrap())
+    }
+
+    /// Where the page stores an emergency read's images (web/lib/store.js
+    /// over a folder the person picked): the steps of
+    /// [`emergency_read::AsyncImageEdge`] by image name, each a promise but
+    /// `write` (queued; it throws a failure of an earlier write), `progress`
+    /// and `note`. `ready()` resolves once the queued bytes are few enough
+    /// to read on: the read waits for it before each transfer from the
+    /// device, so a slow disk slows the read instead of filling memory.
+    #[wasm_bindgen]
+    extern "C" {
+        pub type ImageStore;
+        #[wasm_bindgen(method, catch)]
+        fn begin(this: &ImageStore, name: &str) -> Result<js_sys::Promise, JsValue>;
+        #[wasm_bindgen(method, catch)]
+        fn write(this: &ImageStore, data: &[u8]) -> Result<(), JsValue>;
+        #[wasm_bindgen(method, catch)]
+        fn end(this: &ImageStore, name: &str) -> Result<js_sys::Promise, JsValue>;
+        #[wasm_bindgen(method, catch)]
+        fn reopen(this: &ImageStore, name: &str) -> Result<js_sys::Promise, JsValue>;
+        #[wasm_bindgen(method, catch)]
+        fn read(this: &ImageStore, max: u32) -> Result<js_sys::Promise, JsValue>;
+        #[wasm_bindgen(method, catch)]
+        fn keep(this: &ImageStore, name: &str) -> Result<js_sys::Promise, JsValue>;
+        #[wasm_bindgen(method, catch)]
+        fn incomplete(this: &ImageStore, name: &str) -> Result<js_sys::Promise, JsValue>;
+        #[wasm_bindgen(method, catch)]
+        fn manifest(this: &ImageStore, text: &str) -> Result<js_sys::Promise, JsValue>;
+        #[wasm_bindgen(method)]
+        fn progress(this: &ImageStore, name: &str, done: f64, size: f64);
+        #[wasm_bindgen(method)]
+        fn note(this: &ImageStore, line: &str);
+        #[wasm_bindgen(method)]
+        fn ready(this: &ImageStore) -> js_sys::Promise;
+    }
+
+    /// A JS failure in words.
+    fn words(e: JsValue) -> String {
+        if let Some(t) = e.as_string() {
+            return t;
+        }
+        js_sys::Reflect::get(&e, &JsValue::from_str("message"))
+            .ok()
+            .and_then(|m| m.as_string())
+            .unwrap_or_else(|| format!("{e:?}"))
+    }
+
+    async fn settle(p: Result<js_sys::Promise, JsValue>) -> Result<JsValue, String> {
+        JsFuture::from(p.map_err(words)?).await.map_err(words)
+    }
+
+    struct WebEdge(Rc<ImageStore>);
+
+    impl emergency_read::AsyncImageEdge for WebEdge {
+        async fn begin(&mut self, d: &Disk) -> Result<(), String> {
+            settle(self.0.begin(&d.name)).await.map(|_| ())
+        }
+        fn write(&mut self, data: &[u8]) -> Result<(), String> {
+            self.0.write(data).map_err(words)
+        }
+        async fn end(&mut self, d: &Disk) -> Result<(), String> {
+            settle(self.0.end(&d.name)).await.map(|_| ())
+        }
+        async fn reopen(&mut self, d: &Disk) -> Result<(), String> {
+            settle(self.0.reopen(&d.name)).await.map(|_| ())
+        }
+        async fn fill(&mut self, buf: &mut [u8]) -> Result<usize, String> {
+            let v = settle(self.0.read(buf.len().min(u32::MAX as usize) as u32)).await?;
+            let a = js_sys::Uint8Array::new(&v);
+            let n = a.length() as usize;
+            if n > buf.len() {
+                return Err(format!("the store gave {n} bytes for {}", buf.len()));
+            }
+            a.copy_to(&mut buf[..n]);
+            Ok(n)
+        }
+        async fn keep(&mut self, d: &Disk) -> Result<String, String> {
+            let v = settle(self.0.keep(&d.name)).await?;
+            v.as_string().ok_or_else(|| "the store named no file".into())
+        }
+        async fn incomplete(&mut self, d: &Disk) -> Result<String, String> {
+            let v = settle(self.0.incomplete(&d.name)).await?;
+            v.as_string().ok_or_else(|| "the store named no file".into())
+        }
+        async fn manifest(&mut self, text: &str) -> Result<(), String> {
+            settle(self.0.manifest(text)).await.map(|_| ())
+        }
+        fn progress(&mut self, d: &Disk, done: u64) {
+            self.0.progress(&d.name, done as f64, d.size as f64);
+        }
+        fn note(&mut self, line: &str) {
+            self.0.note(line);
+        }
+    }
+
+    /// The device's transport, waiting for the store before each transfer
+    /// from the device; given back through `back` when the route drops it,
+    /// so that its interface is let go of and waited for.
+    struct Paced {
+        t: Option<usb::UsbTransport>,
+        store: Rc<ImageStore>,
+        back: Rc<RefCell<Option<usb::UsbTransport>>>,
+    }
+
+    impl Paced {
+        fn t(&mut self) -> Result<&mut usb::UsbTransport, FbError> {
+            self.t.as_mut().ok_or_else(|| FbError::Usb("the connection is gone".into()))
+        }
+    }
+
+    impl Drop for Paced {
+        fn drop(&mut self) {
+            *self.back.borrow_mut() = self.t.take();
+        }
+    }
+
+    impl Transport for Paced {
+        async fn send(&mut self, data: &[u8]) -> Result<(), FbError> {
+            self.t()?.send(data).await
+        }
+        async fn recv(&mut self) -> Result<Vec<u8>, FbError> {
+            let _ = JsFuture::from(self.store.ready()).await;
+            self.t()?.recv().await
+        }
+        async fn recv_max(&mut self, max: usize) -> Result<Vec<u8>, FbError> {
+            let _ = JsFuture::from(self.store.ready()).await;
+            self.t()?.recv_max(max).await
+        }
+        fn set_short_wait(&mut self, wait: Option<std::time::Duration>) {
+            if let Some(t) = self.t.as_mut() {
+                t.set_short_wait(wait);
+            }
+        }
+    }
+
+    /// The bound on one transfer during an emergency read: the command
+    /// line's (the wait for the programmer's first answer, and each piece of
+    /// a read).
+    const EMERGENCY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+    /// Reads a device in its emergency download mode through the programmer
+    /// the person supplied (spec 004) and stores the images in `store`:
+    /// `device` and `file` name the description and its supplied file,
+    /// `programmer` is the file's bytes (kept in the page; checked again here
+    /// before anything opens a device, as on the command line, with
+    /// `accept_unknown` the person's confirmation of the warning), `scope`
+    /// one of [`super::emergency_scope`]'s. Then asks the browser for the
+    /// device (USB 05c6:9008; call it from a click) and runs the core's
+    /// route ([`emergency_read::run`]): the boot ROM's facts, the upload,
+    /// Firehose, the reads (each range twice), the stored copy read back,
+    /// the restart. Only list, read and restart reach the device (FR-007).
+    /// Resolves with the run's record ([`super::emergency_record`]), a
+    /// failed run included; rejects with an error record when nothing was
+    /// started (the file, the scope, the chooser, the device's interface).
+    #[wasm_bindgen]
+    pub async fn emergency_read(
+        device: String,
+        file: String,
+        programmer: Vec<u8>,
+        accept_unknown: bool,
+        scope: String,
+        store: ImageStore,
+    ) -> Result<String, JsValue> {
+        let scope = super::emergency_scope(&scope).map_err(|e| JsValue::from_str(&e))?;
+        super::emergency_programmer(&device, &file, &programmer, accept_unknown).map_err(|e| JsValue::from_str(&e))?;
+        let (mut t, _ids) = usb::request_kind(usb::Kind::Emergency)
+            .await
+            .map_err(|e| JsValue::from_str(&error(e.kind(), &e)))?;
+        t.set_timeout(EMERGENCY_TIMEOUT);
+        let store = Rc::new(store);
+        let back = Rc::new(RefCell::new(None));
+        let paced = Paced {
+            t: Some(t),
+            store: store.clone(),
+            back: back.clone(),
+        };
+        let mut edge = WebEdge(store);
+        let r = emergency_read::run(paced, &programmer, &scope, emergency_read::Options::default(), &mut edge).await;
+        let left = back.borrow_mut().take();
+        if let Some(t) = left {
+            t.close().await;
+        }
+        Ok(super::emergency_record(&r))
     }
 
     /// One inspected device and its fastboot session, still open. The Note
@@ -314,6 +608,90 @@ mod tests {
             let e: Value = serde_json::from_str(&supplied_record(d, f, b"", rep).unwrap_err()).unwrap();
             assert_eq!(e["error"], "input");
         }
+    }
+
+    /// The supplied fixtures of the core's tests (web/fixtures/supplied/).
+    fn supplied(name: &str) -> Vec<u8> {
+        let p = format!("{}/../web/fixtures/supplied/{name}.hex", env!("CARGO_MANIFEST_DIR"));
+        let h: String = std::fs::read_to_string(p).unwrap().split_whitespace().collect();
+        (0..h.len()).step_by(2).map(|i| u8::from_str_radix(&h[i..i + 2], 16).unwrap()).collect()
+    }
+
+    /// 004 FR-004 again in the export: only a file that may be sent goes on,
+    /// whatever the page said; an unknown one only with the confirmation.
+    #[test]
+    fn the_emergency_read_checks_the_file_again() {
+        let fits = supplied("fits-unknown");
+        assert_eq!(emergency_programmer("onyx-noteair", "emergency-programmer", &fits, true), Ok(()));
+        let kind = |r: Result<(), String>| serde_json::from_str::<Value>(&r.unwrap_err()).unwrap()["error"].clone();
+        assert_eq!(kind(emergency_programmer("onyx-noteair", "emergency-programmer", &fits, false)), "not-sendable");
+        let junk = supplied("not-a-programmer");
+        assert_eq!(kind(emergency_programmer("onyx-noteair", "emergency-programmer", &junk, true)), "not-sendable");
+        assert_eq!(kind(emergency_programmer("nope", "emergency-programmer", &fits, true)), "input");
+        assert_eq!(kind(emergency_programmer("onyx-noteair", "nope", &fits, true)), "input");
+    }
+
+    #[test]
+    fn emergency_scopes() {
+        assert_eq!(emergency_scope("whole-disk"), Ok(Scope::WholeDisk));
+        assert_eq!(emergency_scope("boot-areas"), Ok(Scope::BootAreas));
+        assert_eq!(
+            emergency_scope("partitions:devinfo,boot_a"),
+            Ok(Scope::Partitions(vec!["devinfo".into(), "boot_a".into()]))
+        );
+        for bad in ["", "gpt-only", "partitions:", "partitions:a,,b", "whole"] {
+            let e: Value = serde_json::from_str(&emergency_scope(bad).unwrap_err()).unwrap();
+            assert_eq!(e["error"], "input", "{bad}");
+        }
+    }
+
+    /// The outcome kinds the Back up screen acts on: only a file the device
+    /// didn't take or that didn't answer is `refused` (004 FR-006).
+    #[test]
+    fn emergency_records_by_outcome() {
+        use glassine_installer::firehose::FirehoseError;
+        use glassine_installer::sahara::SaharaError;
+        let fail = |error| Failure {
+            error,
+            restart: Restart::NotPossible,
+            manifest: None,
+        };
+        for (e, outcome, kind) in [
+            (EmergencyError::Refused("x".into()), "refused", "refused"),
+            (EmergencyError::NotWorking("x".into()), "refused", "not-working"),
+            (
+                EmergencyError::BootRom(SaharaError::Transport(glassine_installer::fastboot::FbError::Timeout("x".into()))),
+                "nothing-sent",
+                "boot-rom",
+            ),
+            (EmergencyError::UnknownChip("x".into()), "nothing-sent", "unknown-chip"),
+            (EmergencyError::Firehose(FirehoseError::NoAnswer), "failed", "programmer"),
+            (EmergencyError::Storage("x".into()), "failed", "storage"),
+            (EmergencyError::Partition("x".into()), "failed", "partition"),
+            (
+                EmergencyError::Mismatch {
+                    image: "emmc-user".into(),
+                    offset: 0,
+                },
+                "failed",
+                "mismatch",
+            ),
+            (EmergencyError::Edge("disk full".into()), "failed", "store"),
+        ] {
+            let r: Value = serde_json::from_str(&emergency_record(&Err(fail(e)))).unwrap();
+            assert_eq!(r["emergency_read_format"], 1);
+            assert_eq!((r["outcome"].as_str().unwrap(), r["error"].as_str().unwrap()), (outcome, kind));
+            assert_eq!(r["restart"], "by-hand");
+            assert!(r["manifest"].is_null());
+        }
+        let r: Value = serde_json::from_str(&emergency_record(&Err(Failure {
+            error: EmergencyError::Edge("disk full".into()),
+            restart: Restart::Failed("no answer".into()),
+            manifest: Some("{\"manifest_format\": 1}".into()),
+        })))
+        .unwrap();
+        assert_eq!((r["restart"].as_str(), r["restart_why"].as_str()), (Some("failed"), Some("no answer")));
+        assert_eq!(r["manifest"]["manifest_format"], 1);
     }
 
     #[test]

@@ -17,6 +17,9 @@ const path = require('path');
 const puppeteer = require('puppeteer-core');
 const { serve } = require('./serve.js');
 const { installFakeUsb } = require('./fake-usb.js');
+const { installFakeEdl, installFakeDir } = require('./fake-edl.js');
+const zlib = require('zlib');
+const crypto = require('crypto');
 
 const ROOT = path.resolve(__dirname, '..', '..');
 const SITE = path.resolve(process.argv[2] || path.join(ROOT, 'target/web-site'));
@@ -34,7 +37,8 @@ function answers(fixture) {
 const BROWSER = { platform: 'browser', connections: ['usb-web'] };
 // The pkg's exports: the three records, the descriptions' source and the inspect's Connection
 // (its facts, and reboot in its session), nothing that writes.
-const EXPORTS = ['Connection', 'check', 'default', 'description', 'emergency_info', 'initSync', 'inspect', 'plan', 'supplied_check'];
+// emergency_read reads a device in its emergency mode: list, read and restart only (004 FR-007).
+const EXPORTS = ['Connection', 'check', 'default', 'description', 'emergency_info', 'emergency_read', 'initSync', 'inspect', 'plan', 'supplied_check'];
 // What the site may load: its own files. Never the repository's records or descriptions.
 const FORBIDDEN = /^(core|devices|fixtures|web|test)\//;
 
@@ -51,7 +55,7 @@ async function main() {
     try { await fn(); passes++; process.stdout.write(`ok - ${name}\n`); } catch (e) { failures++; process.stdout.write(`not ok - ${name}\n  ${String((e && e.stack) || e).split('\n').slice(0, 8).join('\n  ')}\n`); }
   };
 
-  async function open(device) {
+  async function open(device, { edl = null, dir = null, noPicker = false } = {}) {
     const page = await browser.newPage();
     await page.setViewport({ width: 1280, height: 1000 });
     const problems = [];
@@ -67,6 +71,9 @@ async function main() {
     page.on('requestfailed', (r) => problems.push(`request failed: ${r.url()} ${r.failure() && r.failure().errorText}`));
     page.on('response', (r) => { if (r.status() >= 400) problems.push(`HTTP ${r.status()}: ${r.url()}`); });
     await page.evaluateOnNewDocument(installFakeUsb, device);
+    if (edl) await page.evaluateOnNewDocument(installFakeEdl, edl);
+    if (dir) await page.evaluateOnNewDocument(installFakeDir, dir);
+    if (noPicker) await page.evaluateOnNewDocument(() => { window.showDirectoryPicker = undefined; });
     return { page, problems };
   }
   const rendered = (page, route, timeout = 30000) => page.waitForFunction(
@@ -104,7 +111,7 @@ async function main() {
   // the one length, and `reboot` exactly `reboots` times (0 or 1), last; the simulated device
   // decoded each as it was meant (its length bug included); only GET_DESCRIPTOR on control;
   // no other request of any kind.
-  const ALLOWED_CALLS = ['requestDevice', 'open', 'controlTransferIn', 'claimInterface', 'releaseInterface', 'close'];
+  const ALLOWED_CALLS = ['requestDevice', 'requestDevice-emergency', 'open', 'controlTransferIn', 'claimInterface', 'releaseInterface', 'close'];
   function readOnly(log, { reboots = 0 } = {}) {
     assert.ok(log.outs.length >= 1, 'nothing was sent');
     assert.strictEqual(log.outs[0].cmd, 'getvar:product', 'the opening');
@@ -415,6 +422,160 @@ async function main() {
     }
     assert.strictEqual(await outs(page), sent, 'the check sent something to the device');
     assert.deepStrictEqual(requests.slice(asked).filter((r) => r !== null && !/^(index\.html|app\.js|records|screens|lib|pkg|vendor|interleaf|installer\.css)/.test(r)), [], 'the check fetched something');
+    assert.deepStrictEqual(problems, []);
+    await page.close();
+  });
+
+  // ---- the backup through the emergency mode (spec 004 FR-010) ----------------------------------
+
+  const fixtureBytes = (name) => Buffer.from(fs.readFileSync(path.join(ROOT, `web/fixtures/supplied/${name}.hex`), 'utf8').replace(/\s/g, ''), 'hex');
+  const sha = (b) => crypto.createHash('sha256').update(b).digest('hex');
+  const PROGRAMMER = fixtureBytes('fits-unknown');
+  // What the boot ROM reports: the description's chip and key (public values of the description).
+  const PK = '7be49b72f9e4337223ccb84d6eccca4e61ce16e3602ac2008cb18b75babe6d09';
+  const edlOpts = (more = {}) => ({ programmerSize: PROGRAMMER.length, pkHash: PK, ...more });
+  const PLAN_Q = 'machine=live-1&hardware.emergency-cable=yes';
+  const edlLog = (page) => page.evaluate(() => { const { disk, ...rest } = window.__fakeEdl; return JSON.parse(JSON.stringify(rest)); });
+  const tree = (page) => page.evaluate(() => window.__fakeDir.tree());
+  const files = (t) => Object.keys(t).filter((k) => !k.endsWith('/')).sort();
+
+  // Check, then Supply with the programmer picked and its warning confirmed, then Back up with the
+  // folder chosen: the moment before the person clicks to choose the device.
+  async function toBackup(page) {
+    await connect(page);
+    await rendered(page, 'check');
+    await go(page, `#/supply?${PLAN_Q}`, 'supply');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'glassine-supplied-'));
+    const file = path.join(dir, 'programmer.elf');
+    fs.writeFileSync(file, PROGRAMMER);
+    await (await page.$('#file-input')).uploadFile(file);
+    await page.waitForFunction(() => { const f = document.querySelector('#file'); return f && f.dataset.verdict === 'fits-unknown'; }, { timeout: 15000 });
+    await page.click('#trust');
+    await go(page, `#/backup?${PLAN_Q}`, 'backup');
+    assert.ok(await page.$('#connect'), 'Back up doesn’t ask for the device');
+    assert.ok(await page.$eval('#start-backup', (x) => x.disabled), 'the backup can start before a folder is chosen');
+    await page.click('#choose-folder');
+    await page.waitForFunction(() => document.querySelector('#folder').textContent === 'Backups', { timeout: 15000 });
+    assert.ok(!(await page.$eval('#start-backup', (x) => x.disabled)));
+  }
+
+  // After the boot ROM's DONE only configure, getstorageinfo, read and power reset reach the
+  // programmer, and never on RPMB (physical partition 3); before it only Sahara's packets.
+  function readsOnly(log) {
+    const xml = log.outs.filter((o) => o.xml);
+    for (const { xml: x } of xml) {
+      assert.ok(['configure', 'getstorageinfo', 'read', 'power'].includes(x.cmd), `the programmer was sent ${x.cmd}`);
+      if (x.cmd === 'power') assert.strictEqual(x.attrs.value, 'reset');
+      if ('physical_partition_number' in x.attrs) assert.ok(Number(x.attrs.physical_partition_number) < 3, `a ${x.cmd} on physical partition ${x.attrs.physical_partition_number}`);
+    }
+    return xml;
+  }
+
+  await test('the backup in the browser: Sahara, the supplied file, Firehose reads, stored and read back in the folder', async () => {
+    const { page, problems } = await open({ vars: answers('noteair-stock-fastboot') }, { edl: edlOpts(), dir: {} });
+    await toBackup(page);
+    await page.click('#start-backup');
+    await page.waitForSelector('#backup-done', { timeout: 60000 });
+    const t = await tree(page);
+    const names = files(t);
+    assert.strictEqual(names.length, 4, names.join(', '));
+    const folder = names[0].split('/')[0];
+    assert.match(folder, /^onyx-noteair-backup-\d{4}-\d\d-\d\d-\d{6}$/);
+    assert.deepStrictEqual(names.map((n) => n.slice(folder.length + 1)), ['emmc-boot1.img.gz', 'emmc-boot2.img.gz', 'emmc-user.img.gz', 'manifest.json']);
+    for (const n of names) assert.strictEqual(t[n].open, 0, `${n} is still open`);
+    const manifest = JSON.parse(Buffer.from(await page.evaluate((p) => window.__fakeDir.bytes(p), `${folder}/manifest.json`), 'base64').toString());
+    assert.strictEqual(manifest.manifest_format, 1);
+    assert.strictEqual(manifest.kind, 'glassine-emergency-backup');
+    assert.strictEqual(manifest.programmer_sha256, sha(PROGRAMMER));
+    assert.deepStrictEqual(manifest.incomplete, []);
+    assert.deepStrictEqual(manifest.disks.map((d) => [d.name, d.physical_partition, d.file]), [['emmc-user', 0, 'emmc-user.img.gz'], ['emmc-boot1', 1, 'emmc-boot1.img.gz'], ['emmc-boot2', 2, 'emmc-boot2.img.gz']]);
+    // Each file is a gzip the command line reads, of the device's bytes, as the manifest says.
+    for (const d of manifest.disks) {
+      const raw = zlib.gunzipSync(Buffer.from(await page.evaluate((p) => window.__fakeDir.bytes(p), `${folder}/${d.file}`), 'base64'));
+      const dev = Buffer.from(await page.evaluate((p) => window.__fakeEdl.disk(p), d.physical_partition), 'base64');
+      assert.ok(raw.equals(dev), `${d.file} isn’t the device’s bytes`);
+      assert.strictEqual(raw.length, d.size);
+      assert.strictEqual(sha(raw), d.sha256);
+    }
+    const log = await edlLog(page);
+    assert.strictEqual(log.uploaded, sha(PROGRAMMER), 'the boot ROM didn’t get the file the person picked');
+    const xml = readsOnly(log);
+    assert.strictEqual(xml.filter((o) => o.xml.cmd === 'configure').length, 1, 'configure sent more than once');
+    assert.strictEqual(xml[xml.length - 1].xml.cmd, 'power', 'the device wasn’t restarted last');
+    const run = await records(page, 'backupRun', 'live-1');
+    assert.strictEqual(run.record.outcome, 'done');
+    assert.strictEqual(run.record.restart, 'done');
+    assert.match(await text(page), /restarts into its own system by itself/);
+    assert.ok(await page.$('a.il-btn.ins-primary[href*="#/install"]'), 'no way on to the installation');
+    readOnly(await usbLog(page));
+    assert.deepStrictEqual(problems, []);
+    await page.close();
+  });
+
+  await test('a run cut off mid-image leaves only the .partial name; then the image is marked incomplete', async () => {
+    const { page, problems } = await open({ vars: answers('noteair-stock-fastboot') }, { edl: edlOpts({ hangAtRead: 4 }), dir: {} });
+    await toBackup(page);
+    await page.click('#start-backup');
+    await page.waitForFunction(() => window.__fakeEdl.hung, { timeout: 30000 });
+    await settle(page);
+    // What a tab closed now leaves: the temporary name, its bytes still in the browser's own
+    // temporary file (none under the name), no final name, no manifest.
+    let t = await tree(page);
+    let names = files(t);
+    assert.strictEqual(names.length, 1, names.join(', '));
+    assert.match(names[0], /\/emmc-user\.img\.gz\.partial$/);
+    assert.deepStrictEqual([t[names[0]].size, t[names[0]].open], [0, 1]);
+    // The read times out: the core marks the copy incomplete and stores the manifest saying so.
+    await page.waitForSelector('#failed-run', { timeout: 30000 });
+    t = await tree(page);
+    names = files(t);
+    const folder = names[0].split('/')[0];
+    assert.deepStrictEqual(names.map((n) => n.slice(folder.length + 1)), ['emmc-user.img.gz.incomplete', 'manifest.json']);
+    const manifest = JSON.parse(Buffer.from(await page.evaluate((p) => window.__fakeDir.bytes(p), `${folder}/manifest.json`), 'base64').toString());
+    assert.deepStrictEqual(manifest.disks, []);
+    assert.deepStrictEqual(manifest.incomplete.map((i) => [i.name, i.file]), [['emmc-user', 'emmc-user.img.gz.incomplete']]);
+    const run = await records(page, 'backupRun', 'live-1');
+    assert.strictEqual(run.record.outcome, 'failed');
+    assert.ok(await page.$('#again'), 'no way to back up again');
+    readsOnly(await edlLog(page));
+    assert.deepStrictEqual(problems, []);
+    await page.close();
+  });
+
+  await test('a file the boot ROM refuses: Back up says refused, the file is marked, nothing is read or stored', async () => {
+    const { page, problems } = await open({ vars: answers('noteair-stock-fastboot') }, { edl: edlOpts({ refuse: true }), dir: {} });
+    await toBackup(page);
+    await page.click('#start-backup');
+    await page.waitForSelector('#refused', { timeout: 30000 });
+    assert.match(await text(page), /didn’t accept the emergency programmer|didn’t accept the/);
+    assert.ok(await page.$('#another-file'));
+    const log = await edlLog(page);
+    assert.strictEqual(log.uploaded, sha(PROGRAMMER));
+    assert.deepStrictEqual(readsOnly(log), [], 'something reached a programmer the boot ROM refused');
+    assert.ok(log.outs.some((o) => o.sahara === 7), 'the boot ROM wasn’t asked to restart');
+    assert.deepStrictEqual(files(await tree(page)), [], 'something was stored');
+    // The refusal mark (004 FR-006): the file's bytes are gone, Supply says the device refused it.
+    const got = await records(page, 'supplied', 'live-1', 'emergency-programmer');
+    assert.strictEqual(got.bytes, null);
+    assert.ok(await records(page, 'deviceRefused', 'live-1', 'emergency-programmer', sha(PROGRAMMER)));
+    await page.click('#another-file');
+    await rendered(page, 'supply');
+    assert.strictEqual(await page.$eval('#file', (x) => x.dataset.refused), 'device');
+    assert.deepStrictEqual(problems, []);
+    await page.close();
+  });
+
+  await test('a browser without the folder picker: Back up names the browsers and the command line', async () => {
+    const { page, problems } = await open({ vars: answers('noteair-stock-fastboot') }, { noPicker: true });
+    await connect(page);
+    await rendered(page, 'check');
+    await go(page, `#/backup?${PLAN_Q}`, 'backup');
+    assert.ok(await page.$('#nofolder'));
+    assert.match(await text(page), /glassine-install emergency-read/);
+    assert.strictEqual(await page.$('#start-backup'), null);
+    // The address can't make a backup that doesn't exist, or mark a file refused.
+    await go(page, `#/backup?${PLAN_Q}&state=refused`, 'backup');
+    assert.strictEqual(await page.$('#refused'), null);
     assert.deepStrictEqual(problems, []);
     await page.close();
   });

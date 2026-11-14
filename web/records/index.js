@@ -17,6 +17,15 @@
 //   refuseSupplied(machine, file, sha256) / deviceRefused(machine, file, sha256)
 //                             -> marks a file the device refused (spec 004 FR-006), by its
 //                                checksum / whether it was refused
+//   canStoreBackup()          -> whether this page can run the backup and store it (live, and the
+//                                browser has the folder picker: lib/store.js)
+//   chooseBackupFolder(machine) / startBackup(machine, device, file)
+//                             -> the backup through the emergency mode (spec 004 FR-010): the
+//                                folder it goes to, then the device's chooser and the core's
+//                                read, stored by lib/store.js
+//   backupRun(machine) / onBackupRun(fn)
+//                             -> that run: { state, folder, images, record, error, notes }, and
+//                                fn called whenever it changes
 //
 // A picked file (spec 004 FR-003) lives only in this page's memory: its bytes, the core's check
 // and whether the person confirmed the warning. It is never uploaded, put in an address or kept
@@ -48,6 +57,7 @@
 //   reaches no device.
 
 import { descriptionTexts } from './description-texts.js';
+import { storeSupported, pickFolder, newFolder, folderName, folderStore } from '../lib/store.js';
 
 const at = (path) => new URL(path, import.meta.url);
 
@@ -320,3 +330,87 @@ export const refuseSupplied = (machine, file, sha256) => {
   const p = picked.get(k);
   if (p && p.check.sha256 === sha256) { p.bytes = null; p.trusted = false; }
 };
+
+// ---- the backup through the emergency mode (spec 004 FR-010) ----------------------------------
+
+// The run of this page (one at a time), for the machine it was started for:
+//   state   idle (a folder is chosen) | running | done | refused | nothing-sent | failed |
+//           not-started (nothing was sent: the chooser was closed, the device's interface busy,
+//           the file not sendable; error says why)
+//   folder  the name of the folder the person picked, then of the new folder in it
+//   images  each image the core began: { name, size, done, checked, phase: saving | checking |
+//           kept | incomplete, file }
+//   record  the core's record of the run (emergency_read_format 1), once it ended
+//   sha     the checksum of the file it was started with
+// The images are written into a new folder inside the picked one, made when the first image
+// begins. A failed or refused run can be started again with the same folder: it makes another.
+let run = null;
+const runWatchers = new Set();
+const runChanged = () => { for (const f of runWatchers) f(backupRun(run && run.machine)); };
+
+export const canStoreBackup = () => !FIXTURES && storeSupported();
+
+export function backupRun(machine) {
+  if (!run || run.machine !== machine) return null;
+  const { parent: _p, ...v } = run;
+  return { ...v, images: run.images.map((i) => ({ ...i })), notes: run.notes.slice() };
+}
+
+export function onBackupRun(fn) {
+  runWatchers.add(fn);
+  return () => runWatchers.delete(fn);
+}
+
+// Asks for the folder (call from a click). Resolves with the run; a closed picker changes nothing.
+export async function chooseBackupFolder(machine) {
+  if (run && run.state === 'running') throw new Error('The backup is running.');
+  let parent;
+  try { parent = await pickFolder(); } catch (e) {
+    if (e && e.name === 'AbortError') return backupRun(machine);
+    throw e;
+  }
+  run = { machine, state: 'idle', parent, folder: parent.name, images: [], record: null, error: null, notes: [] };
+  runChanged();
+  return backupRun(machine);
+}
+
+function onStore(r, ev) {
+  const img = r.images.find((i) => i.name === ev.name);
+  if (ev.kind === 'begin') r.images.push({ name: ev.name, size: null, done: 0, checked: 0, phase: 'saving', file: null });
+  else if (ev.kind === 'saved' && img) { img.done = ev.done; img.size = ev.size; }
+  else if (ev.kind === 'checking' && img) { img.phase = 'checking'; img.checked = ev.done; }
+  else if ((ev.kind === 'kept' || ev.kind === 'incomplete') && img) { img.phase = ev.kind; img.file = ev.file; }
+  else if (ev.kind === 'note') { r.notes.push(ev.line); if (r.notes.length > 50) r.notes.shift(); }
+  else return;
+  runChanged();
+}
+
+// Starts the backup of `machine` (call from a click: the device's chooser needs one) with the file
+// picked for `file` of description `device` on Supply. Resolves with the run when it ended.
+export async function startBackup(machine, device, file, scope = 'whole-disk') {
+  if (!run || run.machine !== machine || !run.parent) throw new Error('Choose the folder for the backup first.');
+  if (run.state === 'running') return backupRun(machine);
+  const got = supplied(machine, file);
+  if (!got || !got.bytes) throw new Error('The file for the backup isn’t chosen, or it may not be sent.');
+  const m = await wasm();
+  const r = run, parent = r.parent, name = folderName(device);
+  Object.assign(r, { state: 'running', sha: got.check.sha256, folder: parent.name, images: [], record: null, error: null, notes: [] });
+  runChanged();
+  const store = folderStore(async () => {
+    const dir = await newFolder(parent, name);
+    r.folder = `${parent.name}/${name}`;
+    runChanged();
+    return dir;
+  }, (ev) => onStore(r, ev));
+  try {
+    r.record = JSON.parse(await m.emergency_read(device, file, got.bytes, !!got.trusted, scope, store));
+    r.state = r.record.outcome;
+    // The device didn't take the file, or it didn't answer (004 FR-006): never offered again.
+    if (r.state === 'refused') refuseSupplied(machine, file, got.check.sha256);
+  } catch (e) {
+    r.state = 'not-started';
+    r.error = failure(e);
+  }
+  runChanged();
+  return backupRun(machine);
+}
