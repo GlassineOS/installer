@@ -5,7 +5,9 @@
 //! fastboot session, the only command besides getvar it can send; `check(facts)`
 //! a report (`report_format`), `plan(facts, input)` a plan (`plan_format`),
 //! `description(id)` the source of a shipped description (TOML), for the
-//! texts the screens show.
+//! texts the screens show, `supplied_check(device, file, bytes, reported)` the
+//! check of a file the person picked for a mode (`supplied_check_format`),
+//! made in the page: the file's bytes never leave it.
 //! A failure is a record too: `{"error": KIND, "message": TEXT}`, KIND one of
 //! no-device, several-devices, busy, permission, usb, not-fresh, timeout,
 //! device, descriptions, facts, input, closed.
@@ -110,6 +112,25 @@ pub fn plan_record(facts: &str, answers: &str) -> Result<String, String> {
     let i = input(answers)?;
     let rec = recognize::recognize(&refs, &f);
     Ok(serde_json::to_string(&plan::plan(&refs, &f, &rec, &i)).unwrap())
+}
+
+/// The check of a file the person supplied (004 FR-004) as a record:
+/// `reported` is what the device reported in the mode as a JSON object of
+/// the route's keys (`{"chip": HEX, "pk_hash": HEX}`), or empty before it is
+/// there. Only reads the bytes.
+pub fn supplied_record(device: &str, file: &str, bytes: &[u8], reported: &str) -> Result<String, String> {
+    let ds = descriptions();
+    let d = ds
+        .iter()
+        .find(|d| d.id == device)
+        .ok_or_else(|| error("input", format!("no description {device:?}")))?;
+    let rep: Option<std::collections::BTreeMap<String, String>> = if reported.trim().is_empty() {
+        None
+    } else {
+        Some(serde_json::from_str(reported).map_err(|e| error("input", format!("reported: {e}; expected {{\"KEY\": \"VALUE\"}}")))?)
+    };
+    let c = glassine_installer::supplied::check(d, file, bytes, rep.as_ref()).map_err(|e| error("input", e))?;
+    Ok(serde_json::to_string(&c).unwrap())
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -237,6 +258,13 @@ mod web {
     pub fn description(id: &str) -> Option<String> {
         description_source(id).map(str::to_string)
     }
+
+    /// The check record of a file the person picked (a `Uint8Array`), made
+    /// here in the page; see `supplied_record`.
+    #[wasm_bindgen]
+    pub fn supplied_check(device: &str, file: &str, bytes: &[u8], reported: &str) -> Result<String, JsValue> {
+        js(supplied_record(device, file, bytes, reported))
+    }
 }
 
 #[cfg(test)]
@@ -267,6 +295,24 @@ mod tests {
         for bad in ["[]", r#"{"choices": 1}"#, r#"{"nope": 1}"#, r#"{"hardware": {"x": "yes"}}"#] {
             let e: Value = serde_json::from_str(&plan_record(&f, bad).unwrap_err()).unwrap();
             assert_eq!(e["error"], "input", "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_supplied_file_check_is_a_record() {
+        let r: Value = serde_json::from_str(&supplied_record("onyx-noteair", "emergency-programmer", b"not a programmer", "").unwrap()).unwrap();
+        assert_eq!(r["supplied_check_format"], 1);
+        assert_eq!(r["verdict"], "not-a-programmer");
+        let dev = r#"{"chip": "0014d0e1", "pk_hash": "00"}"#;
+        let r: Value = serde_json::from_str(&supplied_record("onyx-noteair", "emergency-programmer", b"x", dev).unwrap()).unwrap();
+        assert_eq!(r["verdict"], "wrong-chip-or-key");
+        for (d, f, rep) in [
+            ("nope", "emergency-programmer", ""),
+            ("onyx-noteair", "nope", ""),
+            ("onyx-noteair", "emergency-programmer", "["),
+        ] {
+            let e: Value = serde_json::from_str(&supplied_record(d, f, b"", rep).unwrap_err()).unwrap();
+            assert_eq!(e["error"], "input");
         }
     }
 

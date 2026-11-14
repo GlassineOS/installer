@@ -27,6 +27,7 @@ pub mod release;
 pub mod report;
 pub mod sahara;
 pub mod shape;
+pub mod supplied;
 pub mod table;
 pub mod validate;
 pub mod vocab;

@@ -17,6 +17,7 @@ use std::process::ExitCode;
 mod backup;
 mod emergency;
 mod emergency_try;
+mod supplied_check;
 
 include!(concat!(env!("OUT_DIR"), "/embedded.rs"));
 
@@ -31,6 +32,7 @@ const USAGE: &str = "usage:
                         [--json] [--devices DIR]
   glassine-install backup --ram IMAGE --out DIR [--accept-slot-flags] [--devices DIR]
   glassine-install emergency-info [--json] [--serial]
+  glassine-install supplied-check [--device ID] [--file ID] [--reported KEY=VALUE]... [--json] [--devices DIR] FILE
   glassine-install schema
   glassine-install lock-unpinned LOCKFILE
 
@@ -59,7 +61,14 @@ mode (Qualcomm, USB 05c6:9008) reports, in Sahara's command mode: the Sahara ver
 version. It sends queries only, never a program, and leaves the device waiting in that mode:
 hold its power key ~10 s to restart it. The serial number is unique to the unit and shown only
 with --serial. Linux needs no driver (a udev rule or root for access); Windows needs the WinUSB
-driver for the device, installed once with Zadig.";
+driver for the device, installed once with Zadig.
+
+supplied-check checks FILE as a file the device's description needs from the person (a programmer
+for its emergency mode), as the installer does before sending one: its checksum against the files
+known to work, then that it is made for the chip and key the description names; --reported gives
+what the device reported (chip=HEX, pk_hash=HEX), which must match too. It reads the file only and
+sends nothing anywhere. Exit status 0: a known file; 2: it fits but isn't known (sent only after
+the person confirms); 1: refused (another chip or key, or not a programmer).";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -71,6 +80,7 @@ fn main() -> ExitCode {
         Some("backup") => backup_cmd(&args[1..]),
         Some("emergency-info") => emergency_cmd(&args[1..]),
         Some("emergency-try-program") => emergency_try_cmd(&args[1..]),
+        Some("supplied-check") => supplied_check::cmd(&args[1..]),
         Some("schema") => {
             println!("{}", serde_json::to_string_pretty(&format1::json_schema()).unwrap());
             Ok(ExitCode::SUCCESS)
