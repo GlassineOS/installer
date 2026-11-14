@@ -80,8 +80,12 @@ pub enum Scope {
     GptOnly,
     /// These partitions of the GPT, by name, each into its own image.
     Partitions(Vec<String>),
-    /// The whole user area into one image.
+    /// The whole disk: the user area into one image, then each eMMC boot
+    /// area the device has into its own.
     WholeDisk,
+    /// Only the eMMC boot areas, read and stored as in a whole-disk run: a
+    /// short run that tests that path without reading the user area.
+    BootAreas,
 }
 
 /// How the route reads. The defaults: reads of [`firehose::READ_CHUNK`],
@@ -801,7 +805,7 @@ async fn read_all<T: Transport, E: ImageEdge>(
 
     let reserved = |n: &str| n == USER_AREA_NAME || BOOT_AREAS.iter().any(|(_, b)| *b == n);
     let wanted: Vec<Image> = match scope {
-        Scope::GptOnly => vec![],
+        Scope::GptOnly | Scope::BootAreas => vec![],
         Scope::WholeDisk => vec![Image {
             disk: Disk {
                 index: USER_AREA,
@@ -840,7 +844,7 @@ async fn read_all<T: Transport, E: ImageEdge>(
         store_one(fh, img, opts, edge, images, incomplete).await?;
     }
     // The boot areas after the user area: a problem with them never costs it.
-    if *scope == Scope::WholeDisk {
+    if matches!(scope, Scope::WholeDisk | Scope::BootAreas) {
         for (physical, name) in BOOT_AREAS {
             let size = match boot_area_size(fh, physical, sector, storage.as_ref()).await {
                 Ok(z) => z,
@@ -876,6 +880,12 @@ async fn read_all<T: Transport, E: ImageEdge>(
                 }
             }
         }
+    }
+    // Asked for the boot areas only, and the device has none that reads: the
+    // run read nothing it was asked for.
+    if *scope == Scope::BootAreas && images.is_empty() {
+        let why: Vec<String> = skipped.iter().map(|k| format!("{}: {}", k.name, k.why)).collect();
+        return Err(EmergencyError::Storage(format!("no eMMC boot area was read ({})", why.join("; "))));
     }
     Ok((storage, sector, disk_size, t))
 }

@@ -123,11 +123,13 @@ export function suppliedFor(s) {
 export const shortValue = (v) => (v && v.length > 20 ? v.slice(0, 16) + '…' : v);
 
 // The file picked for it in this page, and whether it may be used: known, or not known and the
-// person confirmed the warning (004 FR-004). Never for any other verdict.
+// person confirmed the warning (004 FR-004). Never for any other verdict, and never a file the
+// device refused in this page (byDevice, 004 FR-006), whatever its check said.
 export function suppliedState(s, need = suppliedFor(s)) {
   const got = need ? s.supplied(s.machine, need.id) : null;
   const v = got ? got.check.verdict : null;
-  return { need, got, verdict: v, ok: !need || v === 'known' || (v === 'fits-unknown' && got.trusted) };
+  const byDevice = !!got && s.deviceRefused(s.machine, need.id, got.check.sha256);
+  return { need, got, verdict: v, byDevice, ok: !need || (!byDevice && (v === 'known' || (v === 'fits-unknown' && got.trusted))) };
 }
 
 export function stepViews(s) {
