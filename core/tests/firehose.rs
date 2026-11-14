@@ -711,8 +711,9 @@ fn the_whole_disk_with_its_boot_areas() {
         let image: Vec<_> = r.iter().filter(|(_, n)| *n > 1).collect();
         assert_eq!(image.len(), 2 * (4 + 1), "{r:?}");
         if per_partition_info {
-            // The size reported, its last sector read and the next refused.
-            assert_eq!(&r[..3], [(0, 1), (639, 1), (640, 1)]);
+            // The size reported and its last sector read: nothing past the end.
+            assert_eq!(&r[..2], [(0, 1), (639, 1)]);
+            assert!(r.iter().all(|(s, n)| s + n <= 640), "{r:?}");
         }
         // The user area first: no boot area read before its last check.
         let c = commands(&run.dev);

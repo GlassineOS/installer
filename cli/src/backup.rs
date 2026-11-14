@@ -266,15 +266,21 @@ fn partial(disk: &Disk) -> String {
     format!("{}.partial", FileEdge::file(disk))
 }
 
-/// Renames `from` to `to` in `dir`, never over an existing file, and makes
-/// the rename durable (the directory synced).
+/// Renames `from` to `to` in `dir`, never over an existing file. Where it
+/// can (Unix), the directory is synced after so that the rename lasts; a
+/// directory that can't be synced isn't an error once the rename is done,
+/// so a checked copy is never demoted for it.
 fn rename_new(dir: &Path, from: &str, to: &str) -> Result<(), String> {
     let t = dir.join(to);
     if t.exists() {
         return Err(format!("{} exists already", t.display()));
     }
     std::fs::rename(dir.join(from), &t).map_err(|e| format!("{from} to {to}: {e}"))?;
-    File::open(dir).and_then(|d| d.sync_all()).map_err(|e| format!("{}: {e}", dir.display()))
+    #[cfg(unix)]
+    if let Err(e) = File::open(dir).and_then(|d| d.sync_all()) {
+        eprintln!("{}: the rename to {to} is done, but syncing the directory failed ({e})", dir.display());
+    }
+    Ok(())
 }
 
 #[cfg(test)]

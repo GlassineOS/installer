@@ -722,8 +722,8 @@ async fn read_gpt<T: Transport, E: ImageEdge>(
 }
 
 /// The size of a boot area, or why it isn't read: the programmer's storage
-/// facts for it when they are believable, confirmed by reading its last
-/// sector and refused one past it; else found by reading single sectors.
+/// facts for it when they are believable and its last sector reads; else
+/// found by reading single sectors (which relies on a refusal past the end).
 async fn boot_area_size<T: Transport>(
     fh: &mut Firehose<T>,
     physical: u32,
@@ -748,7 +748,6 @@ async fn boot_area_size<T: Transport>(
         .filter(|n| *n > 0 && n.saturating_mul(s) <= BOOT_AREA_MAX && Some(*n) != user.and_then(|u| u.total_blocks));
     if let Some(n) = reported
         && sector_at(fh, physical, sector, n - 1).await?.is_some()
-        && sector_at(fh, physical, sector, n).await?.is_none()
     {
         return Ok(Ok(n * s));
     }
@@ -843,7 +842,18 @@ async fn read_all<T: Transport, E: ImageEdge>(
     // The boot areas after the user area: a problem with them never costs it.
     if *scope == Scope::WholeDisk {
         for (physical, name) in BOOT_AREAS {
-            match boot_area_size(fh, physical, sector, storage.as_ref()).await? {
+            let size = match boot_area_size(fh, physical, sector, storage.as_ref()).await {
+                Ok(z) => z,
+                Err(e) => {
+                    skipped.push(Skipped {
+                        name: name.into(),
+                        physical,
+                        why: format!("finding its size failed: {e}"),
+                    });
+                    return Err(e);
+                }
+            };
+            match size {
                 Ok(size) => {
                     let img = Image {
                         disk: Disk {
