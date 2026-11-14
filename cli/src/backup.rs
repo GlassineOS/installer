@@ -185,3 +185,44 @@ pub fn run(ds: &[&glassine_installer::format1::Description], image: &[u8], out: 
         Err(e) => Err(e.to_string()),
     }
 }
+
+/// The same files for the emergency read route (spec 004): a gzip file per
+/// image, the manifest beside them, and an image that failed its checks
+/// renamed to `NAME.img.gz.incomplete`.
+impl glassine_installer::emergency_read::ImageEdge for FileEdge {
+    fn begin(&mut self, disk: &Disk) -> Result<(), String> {
+        BackupEdge::begin(self, disk)
+    }
+    fn write(&mut self, data: &[u8]) -> Result<(), String> {
+        BackupEdge::write(self, data)
+    }
+    fn end(&mut self, disk: &Disk) -> Result<String, String> {
+        BackupEdge::end(self, disk)
+    }
+    fn reopen(&mut self, disk: &Disk) -> Result<(), String> {
+        BackupEdge::reopen(self, disk)
+    }
+    fn fill(&mut self, buf: &mut [u8]) -> Result<usize, String> {
+        BackupEdge::fill(self, buf)
+    }
+    fn incomplete(&mut self, disk: &Disk) -> Result<String, String> {
+        // Whatever was written is kept, under a name no backup is read by.
+        if let Some((_, w)) = self.writing.take() {
+            let _ = w.finish();
+        }
+        self.reading = None;
+        let name = Self::file(disk);
+        let to = format!("{name}.incomplete");
+        std::fs::rename(self.dir.join(&name), self.dir.join(&to)).map_err(|e| format!("{name}: {e}"))?;
+        Ok(to)
+    }
+    fn manifest(&mut self, text: &str) -> Result<(), String> {
+        BackupEdge::manifest(self, text)
+    }
+    fn progress(&mut self, disk: &Disk, done: u64) {
+        BackupEdge::progress(self, disk, done)
+    }
+    fn note(&mut self, line: &str) {
+        BackupEdge::note(self, line)
+    }
+}
