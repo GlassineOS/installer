@@ -97,6 +97,14 @@ async function openSession(route, q) {
   s.forgetSupplied = records.forgetSupplied;
   s.refuseSupplied = records.refuseSupplied;
   s.deviceRefused = records.deviceRefused;
+  // Live: the backup through the emergency mode (spec 004 FR-010), stored in a folder the person
+  // picks; it outlives the screens (records/index.js).
+  s.canStoreBackup = records.canStoreBackup;
+  s.backupRun = records.backupRun;
+  s.onBackupRun = records.onBackupRun;
+  s.chooseBackupFolder = records.chooseBackupFolder;
+  s.startBackup = records.startBackup;
+  s.stopBackup = records.stopBackup;
   s.param = (k, d) => (q.get(k) === null ? d : q.get(k));
   s.num = (k, d) => (q.get(k) === null || !/^\d+$/.test(q.get(k)) ? d : Number(q.get(k)));
   s.live = q.get('live') === '1';

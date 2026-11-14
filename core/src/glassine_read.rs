@@ -445,6 +445,19 @@ pub async fn verify_on_device<T: Transport>(r: &mut Reader<T>, rec: &DiskRecord)
 /// many bytes it gave; 0 at its end) and compares it with what was read, range
 /// by range.
 pub fn check_copy(rec: &DiskRecord, mut fill: impl FnMut(&mut [u8]) -> Result<usize, String>) -> Result<(), ReadError> {
+    // The same check as `check_copy_async`; with a `fill` that never waits it
+    // is done at its first poll.
+    let f = check_copy_async(rec, async |b: &mut [u8]| fill(b));
+    let mut f = std::pin::pin!(f);
+    match f.as_mut().poll(&mut std::task::Context::from_waker(std::task::Waker::noop())) {
+        std::task::Poll::Ready(r) => r,
+        std::task::Poll::Pending => unreachable!("a synchronous fill never waits"),
+    }
+}
+
+/// [`check_copy`] for a stored copy that is read back asynchronously (the
+/// browser's files).
+pub async fn check_copy_async(rec: &DiskRecord, mut fill: impl AsyncFnMut(&mut [u8]) -> Result<usize, String>) -> Result<(), ReadError> {
     let mut buf = vec![0u8; TRANSFER];
     let mut total = 0u64;
     for (k, want) in rec.ranges.iter().enumerate() {
@@ -454,7 +467,7 @@ pub fn check_copy(rec: &DiskRecord, mut fill: impl FnMut(&mut [u8]) -> Result<us
         let mut done = 0;
         while done < len {
             let want_n = (len - done).min(buf.len() as u64) as usize;
-            let n = fill(&mut buf[..want_n]).map_err(ReadError::Sink)?;
+            let n = fill(&mut buf[..want_n]).await.map_err(ReadError::Sink)?;
             if n == 0 {
                 return Err(ReadError::CopyDiffers {
                     disk: rec.disk.name.clone(),
@@ -473,7 +486,7 @@ pub fn check_copy(rec: &DiskRecord, mut fill: impl FnMut(&mut [u8]) -> Result<us
         }
     }
     // nothing past the disk's end
-    if fill(&mut buf[..1]).map_err(ReadError::Sink)? != 0 {
+    if fill(&mut buf[..1]).await.map_err(ReadError::Sink)? != 0 {
         return Err(ReadError::CopyDiffers {
             disk: rec.disk.name.clone(),
             offset: total,

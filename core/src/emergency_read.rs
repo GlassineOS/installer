@@ -170,6 +170,58 @@ pub trait ImageEdge {
     fn note(&mut self, line: &str);
 }
 
+/// [`ImageEdge`] for storage that is reached asynchronously (the browser's
+/// files): the same steps with the same rules, each storing step awaited.
+/// `write` stays synchronous: it is called from inside a read, so an edge
+/// that can't write at once queues the bytes and reports a failure at the
+/// next `write` or at `end`. Every [`ImageEdge`] is one.
+#[allow(async_fn_in_trait)]
+pub trait AsyncImageEdge {
+    async fn begin(&mut self, disk: &Disk) -> Result<(), String>;
+    fn write(&mut self, data: &[u8]) -> Result<(), String>;
+    async fn end(&mut self, disk: &Disk) -> Result<(), String>;
+    async fn reopen(&mut self, disk: &Disk) -> Result<(), String>;
+    async fn fill(&mut self, buf: &mut [u8]) -> Result<usize, String>;
+    async fn keep(&mut self, disk: &Disk) -> Result<String, String>;
+    async fn incomplete(&mut self, disk: &Disk) -> Result<String, String>;
+    async fn manifest(&mut self, text: &str) -> Result<(), String>;
+    fn progress(&mut self, disk: &Disk, done: u64);
+    fn note(&mut self, line: &str);
+}
+
+impl<E: ImageEdge> AsyncImageEdge for E {
+    async fn begin(&mut self, disk: &Disk) -> Result<(), String> {
+        ImageEdge::begin(self, disk)
+    }
+    fn write(&mut self, data: &[u8]) -> Result<(), String> {
+        ImageEdge::write(self, data)
+    }
+    async fn end(&mut self, disk: &Disk) -> Result<(), String> {
+        ImageEdge::end(self, disk)
+    }
+    async fn reopen(&mut self, disk: &Disk) -> Result<(), String> {
+        ImageEdge::reopen(self, disk)
+    }
+    async fn fill(&mut self, buf: &mut [u8]) -> Result<usize, String> {
+        ImageEdge::fill(self, buf)
+    }
+    async fn keep(&mut self, disk: &Disk) -> Result<String, String> {
+        ImageEdge::keep(self, disk)
+    }
+    async fn incomplete(&mut self, disk: &Disk) -> Result<String, String> {
+        ImageEdge::incomplete(self, disk)
+    }
+    async fn manifest(&mut self, text: &str) -> Result<(), String> {
+        ImageEdge::manifest(self, text)
+    }
+    fn progress(&mut self, disk: &Disk, done: u64) {
+        ImageEdge::progress(self, disk, done)
+    }
+    fn note(&mut self, line: &str) {
+        ImageEdge::note(self, line)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EmergencyError {
     /// Waiting for the boot ROM, reading its facts.
@@ -186,8 +238,14 @@ pub enum EmergencyError {
     ProbeHangs { image: String, physical: u32, lba: u64 },
     /// The boot ROM refused the programmer, or didn't start it.
     Refused(String),
-    /// The programmer didn't answer its first request (FR-006).
+    /// The programmer refused its first request (FR-006): a NAK, or it
+    /// wants authentication.
     NotWorking(String),
+    /// The boot ROM stopped answering during the upload, or the programmer
+    /// didn't answer its first request in time (FR-006: it doesn't count as
+    /// working). No verdict on the file: a cable or a slow start looks the
+    /// same.
+    NoAnswer(String),
     /// The programmer answered, then something failed.
     Firehose(FirehoseError),
     /// The storage isn't what this route reads (block size, no GPT, ...).
@@ -215,6 +273,7 @@ impl fmt::Display for EmergencyError {
             ),
             EmergencyError::Refused(w) => write!(f, "the programmer isn't working on this device: {w}"),
             EmergencyError::NotWorking(w) => write!(f, "the programmer isn't working on this device: {w}"),
+            EmergencyError::NoAnswer(w) => write!(f, "the programmer isn't working on this device, or the connection was lost: {w}"),
             EmergencyError::Firehose(e) => write!(f, "{e}"),
             EmergencyError::Storage(w) => write!(f, "the storage: {w}"),
             EmergencyError::Partition(w) => write!(f, "{w}"),
@@ -398,7 +457,7 @@ pub struct Skipped {
 /// Reads `img` into the edge: range by range, each range read twice (the
 /// first pass stored and hashed, the second hashed and compared), then the
 /// stored copy read back and compared.
-pub async fn read_image<T: Transport, E: ImageEdge>(fh: &mut Firehose<T>, img: &Image, opts: Options, edge: &mut E) -> Result<DiskRecord, EmergencyError> {
+pub async fn read_image<T: Transport, E: AsyncImageEdge>(fh: &mut Firehose<T>, img: &Image, opts: Options, edge: &mut E) -> Result<DiskRecord, EmergencyError> {
     let d = &img.disk;
     let s = d.sector as u64;
     if opts.range == 0 || !opts.range.is_multiple_of(s) || !d.size.is_multiple_of(s) || d.size == 0 {
@@ -449,29 +508,31 @@ pub async fn read_image<T: Transport, E: ImageEdge>(fh: &mut Firehose<T>, img: &
 
 /// Reads, stores and checks one image; a failure after it was begun marks it
 /// incomplete.
-async fn store_image<T: Transport, E: ImageEdge>(
+async fn store_image<T: Transport, E: AsyncImageEdge>(
     fh: &mut Firehose<T>,
     img: &Image,
     opts: Options,
     edge: &mut E,
     incomplete: &mut Vec<(String, String, String)>,
 ) -> Result<(DiskRecord, String), EmergencyError> {
-    edge.begin(&img.disk).map_err(EmergencyError::Edge)?;
+    edge.begin(&img.disk).await.map_err(EmergencyError::Edge)?;
     let r = async {
         let rec = read_image(fh, img, opts, edge).await?;
-        edge.end(&img.disk).map_err(EmergencyError::Edge)?;
-        edge.reopen(&img.disk).map_err(EmergencyError::Edge)?;
-        glassine_read::check_copy(&rec, |b| edge.fill(b)).map_err(|e| match e {
-            glassine_read::ReadError::CopyDiffers { disk, offset } => EmergencyError::Mismatch { image: disk, offset },
-            e => EmergencyError::Edge(e.to_string()),
-        })?;
+        edge.end(&img.disk).await.map_err(EmergencyError::Edge)?;
+        edge.reopen(&img.disk).await.map_err(EmergencyError::Edge)?;
+        glassine_read::check_copy_async(&rec, async |b: &mut [u8]| edge.fill(b).await)
+            .await
+            .map_err(|e| match e {
+                glassine_read::ReadError::CopyDiffers { disk, offset } => EmergencyError::Mismatch { image: disk, offset },
+                e => EmergencyError::Edge(e.to_string()),
+            })?;
         // Both reads matched and the stored copy checked: only now its final name.
-        let file = edge.keep(&img.disk).map_err(EmergencyError::Edge)?;
+        let file = edge.keep(&img.disk).await.map_err(EmergencyError::Edge)?;
         Ok::<_, EmergencyError>((rec, file))
     }
     .await;
     if let Err(e) = &r {
-        let file = edge.incomplete(&img.disk).unwrap_or_else(|w| format!("(not marked: {w})"));
+        let file = edge.incomplete(&img.disk).await.unwrap_or_else(|w| format!("(not marked: {w})"));
         incomplete.push((img.disk.name.clone(), file, e.to_string()));
     }
     r
@@ -491,7 +552,7 @@ pub struct Expected<'a> {
 /// after the GPT. Before anything is sent, the chip and key hash the boot ROM
 /// reports are compared with the description ([`supplied::before_sending`],
 /// 004 FR-004): a device that isn't the described one gets nothing.
-pub async fn run_checked<T: Transport, E: ImageEdge>(
+pub async fn run_checked<T: Transport, E: AsyncImageEdge>(
     t: T,
     programmer: &[u8],
     expected: Expected<'_>,
@@ -506,11 +567,11 @@ pub async fn run_checked<T: Transport, E: ImageEdge>(
 /// know is refused; the device's report isn't compared with anything. A
 /// route that has the description (the command line, the browser) uses
 /// [`run_checked`].
-pub async fn run<T: Transport, E: ImageEdge>(t: T, programmer: &[u8], scope: &Scope, opts: Options, edge: &mut E) -> Result<Done, Failure> {
+pub async fn run<T: Transport, E: AsyncImageEdge>(t: T, programmer: &[u8], scope: &Scope, opts: Options, edge: &mut E) -> Result<Done, Failure> {
     run_for(t, programmer, None, scope, opts, edge).await
 }
 
-async fn run_for<T: Transport, E: ImageEdge>(
+async fn run_for<T: Transport, E: AsyncImageEdge>(
     t: T,
     programmer: &[u8],
     expected: Option<Expected<'_>>,
@@ -549,28 +610,33 @@ async fn run_for<T: Transport, E: ImageEdge>(
     edge.note(&format!("sending the programmer ({} bytes)", programmer.len()));
     let refused = match s.upload(programmer).await {
         Ok(up) if up.done == DoneStatus::Complete => None,
-        Ok(up) => Some(format!("the boot ROM ended the transfer without starting it ({:?})", up.done)),
-        Err(e) => Some(e.to_string()),
+        Ok(up) => Some(EmergencyError::Refused(format!(
+            "the boot ROM ended the transfer without starting it ({:?})",
+            up.done
+        ))),
+        // Silence or a lost connection is no answer about the file.
+        Err(e @ SaharaError::Transport(_)) => Some(EmergencyError::NoAnswer(format!("the boot ROM stopped answering during the upload: {e}"))),
+        Err(e) => Some(EmergencyError::Refused(e.to_string())),
     };
-    if let Some(why) = refused {
+    if let Some(error) = refused {
         let restart = match s.reset().await {
             Ok(()) => Restart::Done,
             Err(e) => Restart::Failed(e.to_string()),
         };
-        return Err(fail(EmergencyError::Refused(why), restart));
+        return Err(fail(error, restart));
     }
     let mut fh = Firehose::new(s.into_transport());
     if opts.listen_first {
         match fh.listen().await {
             Ok(n) => edge.note(&format!("the programmer started and logged {n} line(s)")),
-            Err(e) => return Err(fail(EmergencyError::NotWorking(e.to_string()), Restart::NotPossible)),
+            Err(e) => return Err(fail(EmergencyError::NoAnswer(e.to_string()), Restart::NotPossible)),
         }
     }
     let c = match fh.configure(opts.resend_configure).await {
         Ok(c) => c.clone(),
         Err(FirehoseError::NoAnswer) => {
             return Err(fail(
-                EmergencyError::NotWorking("the boot ROM took it, but it didn't answer its first request".into()),
+                EmergencyError::NoAnswer("the boot ROM took it, but it didn't answer its first request".into()),
                 Restart::NotPossible,
             ));
         }
@@ -582,7 +648,7 @@ async fn run_for<T: Transport, E: ImageEdge>(
             };
             return Err(fail(EmergencyError::NotWorking(e.to_string()), restart));
         }
-        Err(e) => return Err(fail(EmergencyError::NotWorking(e.to_string()), Restart::NotPossible)),
+        Err(e) => return Err(fail(EmergencyError::NoAnswer(e.to_string()), Restart::NotPossible)),
     };
     edge.note(&format!(
         "the programmer answers{}{}",
@@ -609,7 +675,7 @@ async fn run_for<T: Transport, E: ImageEdge>(
         None
     } else {
         let m = manifest(chip.as_deref(), programmer, &images, &incomplete, &skipped);
-        match edge.manifest(&m) {
+        match edge.manifest(&m).await {
             Ok(()) => Some(m),
             Err(e) => {
                 return Err(Failure {
@@ -779,7 +845,7 @@ impl ReadAt for Tail<'_> {
 
 /// The GPT and the disk's size, and where the size came from: the primary
 /// at LBA 1 when it checks out, else the backup at the last LBA.
-async fn read_gpt<T: Transport, E: ImageEdge>(
+async fn read_gpt<T: Transport, E: AsyncImageEdge>(
     fh: &mut Firehose<T>,
     sector: u32,
     storage: Option<&StorageInfo>,
@@ -949,7 +1015,7 @@ struct Found {
     sizes: Vec<AreaSize>,
 }
 
-async fn read_all<T: Transport, E: ImageEdge>(
+async fn read_all<T: Transport, E: AsyncImageEdge>(
     fh: &mut Firehose<T>,
     scope: &Scope,
     opts: Options,
@@ -1114,7 +1180,7 @@ async fn read_all<T: Transport, E: ImageEdge>(
 fn size_line(name: &str, physical: u32, bytes: u64, source: &str) -> String {
     format!("{name} (physical partition {physical}): {bytes} bytes, size from {source}")
 }
-async fn store_one<T: Transport, E: ImageEdge>(
+async fn store_one<T: Transport, E: AsyncImageEdge>(
     fh: &mut Firehose<T>,
     img: &Image,
     opts: Options,
