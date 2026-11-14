@@ -8,14 +8,18 @@
 //! command is configure, getstorageinfo, read or power reset (004 FR-007).
 //! No serial, key, programmer or disk of a real unit is in here.
 
-use glassine_installer::emergency_read::{self, Done, EmergencyError, Failure, ImageEdge, Options, Restart, Scope};
+mod common;
+use glassine_installer::emergency_read::{self, Done, EmergencyError, Expected, Failure, ImageEdge, Options, PROBE_WAIT, Restart, Scope};
 use glassine_installer::fastboot::{FbError, Transport};
 use glassine_installer::firehose;
+use glassine_installer::format1::Description;
 use glassine_installer::glassine_read::Disk;
 use glassine_installer::sahara::{self, cmd};
+use glassine_installer::supplied::Unsendable;
 use glassine_installer::table::crc32;
 use pollster::block_on;
 use regex_lite::Regex;
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, VecDeque};
 
 const SECTOR: usize = 512;
@@ -37,6 +41,31 @@ const PARTS: &[(&str, u64, u64)] = &[("devinfo", 64, 191), ("boot_a", 256, 2303)
 fn programmer() -> Vec<u8> {
     // Stand-in bytes: not a program.
     (0..0x40u32).map(|i| (i * 13) as u8).collect()
+}
+
+fn hex(b: &[u8]) -> String {
+    b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
+/// The key hash the simulated boot ROM reports ([`Faults::other_key`]: another).
+fn pk_hash(other: bool) -> Vec<u8> {
+    (0u8..32).map(|b| b ^ if other { 0x5a } else { 0x3c }).collect()
+}
+
+/// The Note Air's key hash and known programmer in its description.
+const DESC_PK: &str = "7be49b72f9e4337223ccb84d6eccca4e61ce16e3602ac2008cb18b75babe6d09";
+const DESC_KNOWN: &str = "b3e409558677f9b280fed7851e8cc66f0079ad78ef0b07519a3a98d86c14d41b";
+
+/// The Note Air's description for the simulated device: its key hash the
+/// simulated boot ROM's, its known programmer the stand-in bytes.
+fn desc_text() -> String {
+    common::noteair()
+        .replace(DESC_PK, &hex(&pk_hash(false)))
+        .replace(DESC_KNOWN, &hex(&Sha256::digest(programmer())))
+}
+
+fn desc() -> Description {
+    common::valid(&desc_text())
 }
 
 fn le(v: &mut [u8], at: usize, x: u64, n: usize) {
@@ -120,6 +149,13 @@ fn pkt(c: u32, body: &[u32]) -> Vec<u8> {
 struct Faults {
     /// The boot ROM reports another chip.
     other_chip: bool,
+    /// The boot ROM reports another key hash (the chip is the described one).
+    other_key: bool,
+    /// Reads past the end of an area get no answer at all (a hang), instead
+    /// of a NAK; `power` is still answered.
+    silent_past_end: bool,
+    /// Reads past the end of an area answer zeros instead of a NAK.
+    reads_past_end: bool,
     /// The boot ROM refuses the programmer.
     sahara_refuses: bool,
     /// The programmer never answers.
@@ -197,7 +233,7 @@ fn log(v: &str) -> Vec<u8> {
 
 impl Device {
     fn new(f: Faults) -> Self {
-        let hash: Vec<u8> = (0u8..32).map(|b| b ^ 0x3c).collect();
+        let hash = pk_hash(f.other_key);
         let msm: u64 = if f.other_chip { 0x0012_3456_0000_0000 } else { 0x000c_c0e1_0000_0000 };
         let mut out: VecDeque<Vec<u8>> = vec![
             pkt(cmd::HELLO, &[2, 1, 0x400, 3, 0, 0, 0, 0, 0, 0]),
@@ -330,6 +366,17 @@ impl Device {
                 let area = if p == 0 { &self.disk } else { &self.boot[p as usize - 1] };
                 assert!(n > 0);
                 if start + n > (area.len() / SECTOR) as u64 {
+                    if self.f.silent_past_end {
+                        // Hangs: nothing comes, not even a log.
+                        return;
+                    }
+                    if self.f.reads_past_end {
+                        let mut items = vec![doc("<response value=\"ACK\" rawmode=\"true\" />")];
+                        items.push(vec![0u8; n as usize * SECTOR]);
+                        items.push(doc("<response value=\"ACK\" rawmode=\"false\" />"));
+                        self.push(items);
+                        return;
+                    }
                     // Past the end, or an area the device doesn't have.
                     self.push(vec![log("ERROR: sectors out of range"), doc("<response value=\"NAK\" />")]);
                     return;
@@ -529,9 +576,19 @@ fn go_opts(f: Faults, scope: Scope, mem: Mem, opts: Options) -> Run {
 }
 
 fn go_dev(dev: Device, scope: Scope, mem: Mem, opts: Options) -> Run {
+    go_desc(dev, &desc(), scope, mem, opts)
+}
+
+/// The checked run ([`emergency_read::run_checked`]) for the device `d`
+/// describes.
+fn go_desc(dev: Device, d: &Description, scope: Scope, mem: Mem, opts: Options) -> Run {
     let mut dev = dev;
     let mut mem = mem;
-    let r = block_on(emergency_read::run(&mut dev, &programmer(), &scope, opts, &mut mem));
+    let expected = Expected {
+        description: d,
+        file: "emergency-programmer",
+    };
+    let r = block_on(emergency_read::run_checked(&mut dev, &programmer(), expected, &scope, opts, &mut mem));
     let run = Run { r, dev, mem };
     whitelist(&run.dev);
     run
@@ -1308,4 +1365,264 @@ fn the_source_has_no_other_command() {
             assert!(!code.contains("<?xml") && !code.contains("<data"), "{name} builds no XML");
         }
     }
+}
+
+// ---- the device's report before the upload (004 FR-004) ----------------------
+
+/// What the computer sent up to the end of the boot ROM's command mode: the
+/// facts' queries and the SWITCH_MODE back, nothing that starts an upload.
+fn nothing_uploaded(dev: &Device) {
+    assert!(dev.done_at.is_none(), "the upload was finished");
+    assert!(!dev.sent.contains(&programmer()), "the programmer was sent");
+    for d in &dev.sent {
+        let c = u32::from_le_bytes(d[..4].try_into().unwrap());
+        assert!(
+            [cmd::HELLO_RESP, cmd::EXECUTE, cmd::EXECUTE_DATA, cmd::SWITCH_MODE].contains(&c),
+            "Sahara packet {c:#x}"
+        );
+    }
+    let last = dev.sent.last().unwrap();
+    assert_eq!(u32::from_le_bytes(last[..4].try_into().unwrap()), cmd::SWITCH_MODE, "something after the facts");
+}
+
+/// The described device: the report is compared, said, and the programmer sent.
+#[test]
+fn the_described_device_gets_the_programmer() {
+    let run = go(lively(), Scope::GptOnly);
+    let done = run.r.unwrap();
+    assert_eq!(done.restart, Restart::Done);
+    assert!(run.dev.sent.contains(&programmer()));
+    let compared = run
+        .mem
+        .notes
+        .iter()
+        .position(|n| n.starts_with("the boot ROM's chip and key hash are "))
+        .unwrap();
+    let sending = run.mem.notes.iter().position(|n| n.starts_with("sending the programmer")).unwrap();
+    assert!(compared < sending);
+}
+
+/// A boot ROM that reports another key hash than the description's: nothing
+/// is sent, not even a reset; the error says what was reported and expected.
+#[test]
+fn another_key_hash_gets_nothing() {
+    let run = go(Faults { other_key: true, ..lively() }, Scope::GptOnly);
+    let f = run.r.unwrap_err();
+    let EmergencyError::NotSent(Unsendable::OtherDevice { reported, expected, differs }) = &f.error else {
+        panic!("{:?}", f.error)
+    };
+    assert_eq!(differs, &["pk_hash"]);
+    assert_eq!(reported["pk_hash"], hex(&pk_hash(true)));
+    assert_eq!(expected["pk_hash"], hex(&pk_hash(false)));
+    assert_eq!(reported["chip"], "000cc0e1");
+    let e = f.error.to_string();
+    assert!(
+        e.contains(&hex(&pk_hash(true))) && e.contains(&hex(&pk_hash(false))) && e.contains("nothing was sent"),
+        "{e}"
+    );
+    assert_eq!(f.restart, Restart::NotPossible);
+    nothing_uploaded(&run.dev);
+}
+
+/// A chip this installer knows, but not the one the description names:
+/// nothing is sent.
+#[test]
+fn a_chip_the_description_doesnt_name_gets_nothing() {
+    let d = common::valid(&desc_text().replace("000cc0e1", "000cc0e2"));
+    let run = go_desc(Device::new(lively()), &d, Scope::GptOnly, Mem::default(), OPTS);
+    let f = run.r.unwrap_err();
+    let EmergencyError::NotSent(Unsendable::OtherDevice { differs, expected, .. }) = &f.error else {
+        panic!("{:?}", f.error)
+    };
+    assert_eq!(differs, &["chip"]);
+    assert_eq!(expected["chip"], "000cc0e2");
+    assert!(f.error.to_string().contains("chip 000cc0e1"), "{}", f.error);
+    nothing_uploaded(&run.dev);
+}
+
+/// A file the description lists as not working is never sent, even when it
+/// reached the route (the command line refuses it first).
+#[test]
+fn a_known_bad_file_is_not_sent_by_the_route() {
+    let t = desc_text().replace(&hex(&Sha256::digest(programmer())), DESC_KNOWN).replace(
+        "4c2c494e92551b1d7f06f7beece875c0ef2b9b7b2ffab347f76a3dda8fa3d20c",
+        &hex(&Sha256::digest(programmer())),
+    );
+    let run = go_desc(Device::new(lively()), &common::valid(&t), Scope::GptOnly, Mem::default(), OPTS);
+    let f = run.r.unwrap_err();
+    assert!(
+        matches!(&f.error, EmergencyError::NotSent(Unsendable::File(w)) if w.contains("known not to work")),
+        "{:?}",
+        f.error
+    );
+    nothing_uploaded(&run.dev);
+}
+
+/// The unchecked entry still runs (a route without the description).
+#[test]
+fn the_unchecked_run_reads_the_gpt() {
+    let mut dev = Device::new(lively());
+    let r = block_on(emergency_read::run(&mut dev, &programmer(), &Scope::GptOnly, OPTS, &mut Mem::default()));
+    assert_eq!(r.unwrap().table.entries.len(), 3);
+}
+
+// ---- where a size came from, and the size search -----------------------------
+
+/// One line per area says its size and where it came from.
+#[test]
+fn every_size_says_where_it_came_from() {
+    for per_partition_info in [true, false] {
+        let f = Faults {
+            boot_sectors: 640,
+            per_partition_info,
+            ..lively()
+        };
+        let run = go(f, Scope::WholeDisk);
+        let done = run.r.unwrap();
+        let user = format!("emmc-user (physical partition 0): {} bytes, size from getstorageinfo", SECTORS * 512);
+        assert!(run.mem.notes.iter().any(|n| n.starts_with(&user)), "{:#?}", run.mem.notes);
+        for p in [1, 2] {
+            let line = format!("emmc-boot{p} (physical partition {p}): {} bytes, size from ", 640 * 512);
+            let n = run
+                .mem
+                .notes
+                .iter()
+                .find(|n| n.starts_with(&line))
+                .unwrap_or_else(|| panic!("{:#?}", run.mem.notes));
+            if per_partition_info {
+                assert!(n.ends_with("getstorageinfo (640 sectors; its last sector reads)"), "{n}");
+            } else {
+                assert!(n.contains("the single-sector search (") && n.contains("answers with the user area's"), "{n}");
+            }
+        }
+        assert_eq!(done.sizes.len(), 3);
+        assert_eq!(done.sizes[1].bytes, 640 * 512);
+    }
+    // Without getstorageinfo the user area's size is the GPT's.
+    let run = go(
+        Faults {
+            storage_info: false,
+            ..lively()
+        },
+        Scope::GptOnly,
+    );
+    run.r.unwrap();
+    let line = format!(
+        "emmc-user (physical partition 0): {} bytes, size from the primary GPT header's backup LBA ({})",
+        SECTORS * 512,
+        SECTORS - 1
+    );
+    assert!(run.mem.notes.contains(&line), "{:#?}", run.mem.notes);
+}
+
+/// `--find-boot-area-sizes` with a programmer that refuses (NAK) reads past
+/// the end: both sizes found by the search whatever getstorageinfo says,
+/// nothing stored, every search read bounded, the device restarted.
+#[test]
+fn the_size_search_with_a_programmer_that_refuses() {
+    let f = Faults {
+        boot_sectors: 640,
+        per_partition_info: true,
+        ..lively()
+    };
+    let run = go(f, Scope::BootAreaSizes);
+    let done = run.r.unwrap();
+    assert_eq!(done.restart, Restart::Done);
+    assert!(run.mem.files.is_empty() && run.mem.events.is_empty() && done.manifest.is_none());
+    assert_eq!(
+        done.sizes.iter().map(|z| (z.physical, z.bytes)).collect::<Vec<_>>(),
+        [(0, SECTORS * 512), (1, 640 * 512), (2, 640 * 512)]
+    );
+    for z in &done.sizes[1..] {
+        assert!(z.source.starts_with("the single-sector search ("), "{}", z.source);
+        assert!(z.source.contains("refused by the programmer past the end"), "{}", z.source);
+        assert!(z.source.ends_with("getstorageinfo reports the same 640 sectors"), "{}", z.source);
+    }
+    for p in [1, 2] {
+        let r = reads_on(&run.dev, p);
+        assert!(r.iter().all(|(_, n)| *n == 1), "only single sectors: {r:?}");
+        assert!(r.contains(&(639, 1)) && r.contains(&(640, 1)), "{r:?}");
+    }
+    // Each search read with the short wait, restored after.
+    let w = &run.dev.waits;
+    assert!(w.contains(&Some(PROBE_WAIT)));
+    assert_eq!(
+        w.iter().filter(|x| **x == Some(PROBE_WAIT)).count(),
+        w.iter().filter(|x| x.is_none()).count() - 1,
+        "{w:?}"
+    );
+    assert_eq!(w.last(), Some(&None));
+    assert_eq!(commands(&run.dev).last().unwrap(), "power");
+}
+
+/// A programmer that hangs on a read past the end instead of refusing it:
+/// the search stops at that read with a clear message, nothing more is read,
+/// and the device is still restarted.
+#[test]
+fn the_size_search_with_a_programmer_that_hangs() {
+    let f = Faults {
+        boot_sectors: 640,
+        silent_past_end: true,
+        ..lively()
+    };
+    let run = go(f, Scope::BootAreaSizes);
+    let f = run.r.unwrap_err();
+    let EmergencyError::ProbeHangs { image, physical, lba } = &f.error else {
+        panic!("{:?}", f.error)
+    };
+    assert_eq!((image.as_str(), *physical), ("emmc-boot1", 1));
+    assert!(*lba >= 640, "{lba}");
+    let e = f.error.to_string();
+    assert!(
+        e.contains("hangs instead of refusing") && e.contains(&format!("within {} s", PROBE_WAIT.as_secs())),
+        "{e}"
+    );
+    assert_eq!(f.restart, Restart::Done);
+    // The hung read was the last; then only the restart.
+    let c = commands(&run.dev);
+    assert_eq!(&c[c.len() - 2..], ["read", "power"]);
+    assert_eq!(reads_on(&run.dev, 1).last(), Some(&(*lba, 1)));
+    assert!(reads_on(&run.dev, 2).is_empty());
+    assert!(run.mem.files.is_empty());
+}
+
+/// The same hang in a whole-disk run: the user area stays stored and listed,
+/// the boot area isn't, and the device is restarted.
+#[test]
+fn a_hang_in_the_search_keeps_what_was_read() {
+    let f = Faults {
+        boot_sectors: 640,
+        silent_past_end: true,
+        ..lively()
+    };
+    let run = go(f, Scope::WholeDisk);
+    let f = run.r.unwrap_err();
+    assert!(matches!(f.error, EmergencyError::ProbeHangs { physical: 1, .. }), "{:?}", f.error);
+    assert_eq!(f.restart, Restart::Done);
+    assert_eq!(run.mem.files.keys().collect::<Vec<_>>(), ["emmc-user.img"]);
+    let m: serde_json::Value = serde_json::from_str(f.manifest.as_deref().unwrap()).unwrap();
+    assert_eq!(m["disks"][0]["name"], "emmc-user");
+    assert_eq!(m["not_read"][0]["name"], "emmc-boot1");
+}
+
+/// A programmer that reads past the end (zeros) never ends the search with
+/// a size at the bound: no size is found, and nothing is stored.
+#[test]
+fn a_programmer_that_never_refuses_gives_no_size() {
+    let f = Faults {
+        boot_sectors: 640,
+        reads_past_end: true,
+        ..lively()
+    };
+    let run = go(f.clone(), Scope::BootAreaSizes);
+    let e = run.r.unwrap_err().error.to_string();
+    assert!(
+        e.contains("no eMMC boot area's size was found") && e.contains("doesn't refuse reads past the end"),
+        "{e}"
+    );
+    let run = go(f, Scope::WholeDisk);
+    let done = run.r.unwrap();
+    assert!(!run.mem.files.keys().any(|k| k.starts_with("emmc-boot")), "{:?}", run.mem.files.keys());
+    let m: serde_json::Value = serde_json::from_str(done.manifest.as_deref().unwrap()).unwrap();
+    assert_eq!(m["not_read"].as_array().unwrap().len(), 2);
 }

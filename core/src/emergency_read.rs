@@ -5,7 +5,8 @@
 //!
 //! 1. Sahara: the boot ROM's HELLO, its facts in command mode
 //!    ([`sahara::emergency_info`]); a chip this installer doesn't know gets
-//!    nothing sent.
+//!    nothing sent, and neither does a device whose chip or key hash isn't
+//!    the description's ([`run_checked`], [`supplied::before_sending`]).
 //! 2. The programmer the person supplied is sent ([`Sahara::upload`]). The
 //!    installer never builds or sends a program of its own (FR-005): the
 //!    bytes come from the caller, who got them from the person (FR-003).
@@ -13,7 +14,11 @@
 //!    until it answered nothing is read.
 //! 4. `getstorageinfo` (when the programmer has it), the sector size, the
 //!    GPT, read twice. A damaged primary GPT is replaced by the backup at the
-//!    disk's last sector; only when both are bad does the run stop.
+//!    disk's last sector; only when both are bad does the run stop. Each
+//!    size is noted with where it came from: `getstorageinfo`, a GPT header,
+//!    or the single-sector search, whose every read is bounded by
+//!    [`PROBE_WAIT`] (a programmer that hangs instead of refusing a read
+//!    past the end stops the run, and the device is still restarted).
 //! 5. The images [`Scope`] asks for, each read twice range by range and
 //!    compared, then the stored copy read back (FR-008); a mismatch makes the
 //!    image incomplete. The whole disk (001 FR-009) is the user area and,
@@ -36,13 +41,16 @@
 //! manifest names the programmer's checksum instead of the RAM image's, and
 //! incomplete images are listed in it.
 
-use crate::fastboot::Transport;
+use crate::fastboot::{FbError, Transport};
 use crate::firehose::{self, Configured, EMMC_SECTOR, Firehose, FirehoseError, StorageInfo};
+use crate::format1::Description;
 use crate::glassine_read::{self, Disk, DiskRecord};
 use crate::sahara::{self, DoneStatus, EmergencyFacts, Sahara, SaharaError};
+use crate::supplied::{self, Unsendable};
 use crate::table::{self, ReadAt, Table};
 use sha2::{Digest, Sha256};
 use std::fmt;
+use std::time::Duration;
 
 /// The physical partition of the eMMC's user area, where the GPT and every
 /// partition the installation writes are.
@@ -63,6 +71,13 @@ pub const BOOT_AREA_MAX: u64 = 255 * (128 << 10);
 /// The most sectors the end of the user area is searched up to when nothing
 /// reports its size (2^40 sectors: far more than any eMMC).
 const PROBE_MAX: u64 = 1 << 40;
+
+/// The bound on each single-sector read of the search for a size: one
+/// sector answers at once, so a read that takes longer means the programmer
+/// hangs on it instead of refusing it. Applied through
+/// [`Transport::set_short_wait`]; a transport without short waits (the
+/// browser's) keeps its own bound.
+pub const PROBE_WAIT: Duration = Duration::from_secs(5);
 
 /// The sectors read for the GPT: the protective MBR, the header and 128
 /// entries of 128 bytes. A table with more entries is read further.
@@ -86,6 +101,12 @@ pub enum Scope {
     /// Only the eMMC boot areas, read and stored as in a whole-disk run: a
     /// short run that tests that path without reading the user area.
     BootAreas,
+    /// Only the eMMC boot areas' sizes, found by the single-sector search
+    /// whatever `getstorageinfo` says (it is still asked, and its numbers
+    /// noted beside the search's): a read-only run that stores nothing and
+    /// shows whether the programmer refuses a read past the end of a
+    /// physical partition, or hangs.
+    BootAreaSizes,
 }
 
 /// How the route reads. The defaults: reads of [`firehose::READ_CHUNK`],
@@ -155,6 +176,14 @@ pub enum EmergencyError {
     BootRom(SaharaError),
     /// A chip this installer doesn't know: nothing was sent.
     UnknownChip(String),
+    /// The device in the mode isn't the described one (its chip or key hash
+    /// differs), or the file isn't one to send to it: nothing was sent
+    /// ([`run_checked`]).
+    NotSent(Unsendable),
+    /// A single-sector read of the search for a size got no answer within
+    /// [`PROBE_WAIT`]: the programmer hangs on it instead of refusing it.
+    /// Nothing more is read.
+    ProbeHangs { image: String, physical: u32, lba: u64 },
     /// The boot ROM refused the programmer, or didn't start it.
     Refused(String),
     /// The programmer didn't answer its first request (FR-006).
@@ -178,6 +207,12 @@ impl fmt::Display for EmergencyError {
         match self {
             EmergencyError::BootRom(e) => write!(f, "the boot ROM: {e}"),
             EmergencyError::UnknownChip(w) => write!(f, "{w}"),
+            EmergencyError::NotSent(u) => write!(f, "{u}"),
+            EmergencyError::ProbeHangs { image, physical, lba } => write!(
+                f,
+                "{image}: the programmer didn't answer a one-sector read at sector {lba} of physical partition {physical} within {} s: it hangs instead of refusing a read it can't do, so its size can't be found by searching; nothing more is read",
+                PROBE_WAIT.as_secs()
+            ),
             EmergencyError::Refused(w) => write!(f, "the programmer isn't working on this device: {w}"),
             EmergencyError::NotWorking(w) => write!(f, "the programmer isn't working on this device: {w}"),
             EmergencyError::Firehose(e) => write!(f, "{e}"),
@@ -240,6 +275,8 @@ pub struct Done {
     pub sector: u32,
     pub disk_size: u64,
     pub table: Table,
+    /// The size of each area the run found, and where it came from.
+    pub sizes: Vec<AreaSize>,
     /// Each stored image, with its start sector and the name it is stored under.
     pub images: Vec<(DiskRecord, u64, String)>,
     pub manifest: Option<String>,
@@ -440,9 +477,47 @@ async fn store_image<T: Transport, E: ImageEdge>(
     r
 }
 
-/// The run against a device at its boot ROM's first HELLO. `programmer` is
-/// the person's file; `scope` what to read after the GPT.
+/// The device a run is for: its description and the id of the supplied file
+/// the programmer is.
+#[derive(Clone, Copy, Debug)]
+pub struct Expected<'a> {
+    pub description: &'a Description,
+    pub file: &'a str,
+}
+
+/// The run against a device at its boot ROM's first HELLO, for the device
+/// `expected` describes. `programmer` is the person's file, checked
+/// ([`supplied::check`]) before the device was opened; `scope` what to read
+/// after the GPT. Before anything is sent, the chip and key hash the boot ROM
+/// reports are compared with the description ([`supplied::before_sending`],
+/// 004 FR-004): a device that isn't the described one gets nothing.
+pub async fn run_checked<T: Transport, E: ImageEdge>(
+    t: T,
+    programmer: &[u8],
+    expected: Expected<'_>,
+    scope: &Scope,
+    opts: Options,
+    edge: &mut E,
+) -> Result<Done, Failure> {
+    run_for(t, programmer, Some(expected), scope, opts, edge).await
+}
+
+/// [`run_checked`] without a description: only a chip this installer doesn't
+/// know is refused; the device's report isn't compared with anything. A
+/// route that has the description (the command line, the browser) uses
+/// [`run_checked`].
 pub async fn run<T: Transport, E: ImageEdge>(t: T, programmer: &[u8], scope: &Scope, opts: Options, edge: &mut E) -> Result<Done, Failure> {
+    run_for(t, programmer, None, scope, opts, edge).await
+}
+
+async fn run_for<T: Transport, E: ImageEdge>(
+    t: T,
+    programmer: &[u8],
+    expected: Option<Expected<'_>>,
+    scope: &Scope,
+    opts: Options,
+    edge: &mut E,
+) -> Result<Done, Failure> {
     let fail = |error, restart| Failure {
         error,
         restart,
@@ -463,6 +538,14 @@ pub async fn run<T: Transport, E: ImageEdge>(t: T, programmer: &[u8], scope: &Sc
         ));
     };
     edge.note(&format!("boot ROM: {chip_name}, oem pk hash {}", facts.pk_hash_hex()));
+    if let Some(x) = expected {
+        // The device's own report against the description, before the upload
+        // (004 FR-004): another device gets nothing, not even a reset.
+        if let Err(u) = supplied::before_sending(x.description, x.file, programmer, &supplied::emergency_values(&facts)) {
+            return Err(fail(EmergencyError::NotSent(u), Restart::NotPossible));
+        }
+        edge.note(&format!("the boot ROM's chip and key hash are {}'s", x.description.name));
+    }
     edge.note(&format!("sending the programmer ({} bytes)", programmer.len()));
     let refused = match s.upload(programmer).await {
         Ok(up) if up.done == DoneStatus::Complete => None,
@@ -510,10 +593,14 @@ pub async fn run<T: Transport, E: ImageEdge>(t: T, programmer: &[u8], scope: &Sc
             String::new()
         }
     ));
-    let mut incomplete = Vec::new();
-    let mut images = Vec::new();
-    let mut skipped = Vec::new();
-    let body = read_all(&mut fh, scope, opts, edge, &mut images, &mut incomplete, &mut skipped).await;
+    let mut found = Found::default();
+    let body = read_all(&mut fh, scope, opts, edge, &mut found).await;
+    let Found {
+        images,
+        incomplete,
+        skipped,
+        sizes,
+    } = found;
     let restart = match fh.reset().await {
         Ok(()) => Restart::Done,
         Err(e) => Restart::Failed(e.to_string()),
@@ -542,6 +629,7 @@ pub async fn run<T: Transport, E: ImageEdge>(t: T, programmer: &[u8], scope: &Sc
             sector,
             disk_size,
             table,
+            sizes,
             images,
             manifest,
             restart,
@@ -550,15 +638,35 @@ pub async fn run<T: Transport, E: ImageEdge>(t: T, programmer: &[u8], scope: &Sc
     }
 }
 
+/// The size of one area of the storage the run found, and where it came from
+/// (`getstorageinfo`, a GPT header, or the single-sector search).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AreaSize {
+    pub name: String,
+    pub physical: u32,
+    pub bytes: u64,
+    pub source: String,
+}
+
 type Read = (Option<StorageInfo>, u32, u64, Table);
 
-/// One sector of a physical partition, read once: `None` when the
-/// programmer refuses the read (past the end, or an area the device doesn't
-/// have). A refusal leaves the session in step; any other failure ends it.
-async fn sector_at<T: Transport>(fh: &mut Firehose<T>, physical: u32, sector: u32, lba: u64) -> Result<Option<Vec<u8>>, EmergencyError> {
-    match fh.read_vec(physical, sector, lba, 1).await {
+/// One sector of a physical partition, read once, the wait bounded by
+/// [`PROBE_WAIT`]: `None` when the programmer refuses the read (past the
+/// end, or an area the device doesn't have). A refusal leaves the session in
+/// step; no answer in time is [`EmergencyError::ProbeHangs`] (after which
+/// nothing more is read), any other failure ends the run too.
+async fn sector_at<T: Transport>(fh: &mut Firehose<T>, image: &str, physical: u32, sector: u32, lba: u64) -> Result<Option<Vec<u8>>, EmergencyError> {
+    fh.set_short_wait(Some(PROBE_WAIT));
+    let r = fh.read_vec(physical, sector, lba, 1).await;
+    fh.set_short_wait(None);
+    match r {
         Ok(v) => Ok(Some(v)),
         Err(FirehoseError::Nak { .. }) => Ok(None),
+        Err(FirehoseError::Transport(FbError::Timeout(_)) | FirehoseError::Short { .. }) => Err(EmergencyError::ProbeHangs {
+            image: image.into(),
+            physical,
+            lba,
+        }),
         Err(e) => Err(e.into()),
     }
 }
@@ -576,17 +684,54 @@ async fn read_twice<T: Transport>(fh: &mut Firehose<T>, physical: u32, sector: u
     Ok(a)
 }
 
+/// What the single-sector search found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Search {
+    /// How many sectors read; `None` when even the sector at the bound read
+    /// (the programmer doesn't refuse reads past the end).
+    sectors: Option<u64>,
+    reads: u32,
+    /// The reads the programmer refused (NAK).
+    refused: u32,
+}
+
+impl Search {
+    /// Whether sector `lba` reads, counted.
+    async fn at<T: Transport>(&mut self, fh: &mut Firehose<T>, image: &str, physical: u32, sector: u32, lba: u64) -> Result<bool, EmergencyError> {
+        self.reads += 1;
+        let ok = sector_at(fh, image, physical, sector, lba).await?.is_some();
+        if !ok {
+            self.refused += 1;
+        }
+        Ok(ok)
+    }
+
+    fn said(&self) -> String {
+        format!(
+            "the single-sector search ({} one-sector reads, {} of them refused by the programmer past the end)",
+            self.reads, self.refused
+        )
+    }
+}
+
 /// How many sectors of `physical` can be read, found by reading single
 /// sectors (the programmer refuses those past the end): doubling, then
-/// halving. Sector 0 must be readable; at most `max`.
-async fn probe_end<T: Transport>(fh: &mut Firehose<T>, physical: u32, sector: u32, max: u64) -> Result<u64, EmergencyError> {
+/// halving. Sector 0 must be readable; at most `max`, and the sector at
+/// `max` is read too when all below it read, so that a programmer that
+/// never refuses isn't taken for an area of exactly `max` sectors.
+async fn probe_end<T: Transport>(fh: &mut Firehose<T>, image: &str, physical: u32, sector: u32, max: u64) -> Result<Search, EmergencyError> {
+    let mut s = Search {
+        sectors: None,
+        reads: 0,
+        refused: 0,
+    };
     let (mut lo, mut hi) = (0u64, 1u64);
     loop {
         if hi >= max {
             hi = max;
             break;
         }
-        if sector_at(fh, physical, sector, hi).await?.is_none() {
+        if !s.at(fh, image, physical, sector, hi).await? {
             break;
         }
         lo = hi;
@@ -595,13 +740,17 @@ async fn probe_end<T: Transport>(fh: &mut Firehose<T>, physical: u32, sector: u3
     // lo reads; hi doesn't, or is the bound.
     while hi - lo > 1 {
         let mid = lo + (hi - lo) / 2;
-        if sector_at(fh, physical, sector, mid).await?.is_some() {
+        if s.at(fh, image, physical, sector, mid).await? {
             lo = mid;
         } else {
             hi = mid;
         }
     }
-    Ok(lo + 1)
+    s.sectors = Some(lo + 1);
+    if lo + 1 == max && s.at(fh, image, physical, sector, max).await? {
+        s.sectors = None;
+    }
+    Ok(s)
 }
 
 /// The head of the disk blanked and its last sectors as read: what
@@ -628,14 +777,14 @@ impl ReadAt for Tail<'_> {
     }
 }
 
-/// The GPT and the disk's size: the primary at LBA 1 when it checks out,
-/// else the backup at the last LBA.
+/// The GPT and the disk's size, and where the size came from: the primary
+/// at LBA 1 when it checks out, else the backup at the last LBA.
 async fn read_gpt<T: Transport, E: ImageEdge>(
     fh: &mut Firehose<T>,
     sector: u32,
     storage: Option<&StorageInfo>,
     edge: &mut E,
-) -> Result<(Table, u64), EmergencyError> {
+) -> Result<(Table, u64, String), EmergencyError> {
     let s = sector as u64;
     let reported = match storage.and_then(|i| i.total_blocks) {
         Some(n) => Some(n.checked_mul(s).ok_or_else(|| EmergencyError::Storage(format!("{n} blocks")))?),
@@ -663,7 +812,12 @@ async fn read_gpt<T: Transport, E: ImageEdge>(
                             "the programmer reports {r} bytes, the GPT's backup header lies beyond that ({f})"
                         )));
                     }
-                    return Ok((t, size));
+                    let source = match (reported, from_gpt) {
+                        (Some(_), Some(f)) => format!("getstorageinfo (the GPT's backup header at LBA {} lies within it)", f / s - 1),
+                        (Some(_), None) => "getstorageinfo".to_string(),
+                        (None, _) => format!("the primary GPT header's backup LBA ({})", g.alternate_lba),
+                    };
+                    return Ok((t, size, source));
                 }
                 _ => "the primary GPT at LBA 1 doesn't check out".to_string(),
             }
@@ -672,22 +826,31 @@ async fn read_gpt<T: Transport, E: ImageEdge>(
     edge.note(&format!("{why}; looking for the backup GPT at the disk's last sector"));
     // The disk's size: reported, else the damaged header's backup LBA when a
     // GPT header is found there, else searched for.
-    let size = match reported {
-        Some(z) => z,
+    let (size, source) = match reported {
+        Some(z) => (z, "getstorageinfo".to_string()),
         None => {
             let mut hinted = None;
             if let Some(lba) = header.as_ref().map(|g| g.alternate_lba).filter(|l| *l > GPT_SECTORS && *l < PROBE_MAX)
-                && let Some(h) = sector_at(fh, USER_AREA, sector, lba).await?
+                && let Some(h) = sector_at(fh, USER_AREA_NAME, USER_AREA, sector, lba).await?
                 && &h[..8] == b"EFI PART"
                 && table::le64(&h, 24) == lba
             {
-                hinted = Some((lba + 1) * s);
+                hinted = Some((
+                    (lba + 1) * s,
+                    format!("the backup GPT header found at the damaged primary's backup LBA ({lba})"),
+                ));
             }
             match hinted {
                 Some(z) => z,
                 None => {
                     edge.note("the disk's size isn't reported: finding its last sector by reading single sectors");
-                    probe_end(fh, USER_AREA, sector, PROBE_MAX).await? * s
+                    let found = probe_end(fh, USER_AREA_NAME, USER_AREA, sector, PROBE_MAX).await?;
+                    let n = found.sectors.ok_or_else(|| {
+                        EmergencyError::Storage(format!(
+                            "the programmer read every sector searched up to {PROBE_MAX}: it doesn't refuse reads past the end, so the disk's size can't be found"
+                        ))
+                    })?;
+                    (n * s, found.said())
                 }
             }
         }
@@ -719,43 +882,71 @@ async fn read_gpt<T: Transport, E: ImageEdge>(
     match table::read(&mut r, size, s) {
         Ok(t) if t.kind == table::Kind::Gpt && !t.primary_ok && t.sector == s => {
             edge.note(&format!("using the backup GPT at LBA {last}: the primary is damaged"));
-            Ok((t, size))
+            Ok((t, size, source))
         }
         _ => Err(both_bad(&format!("at LBA {last} doesn't check out either"))),
     }
 }
 
-/// The size of a boot area, or why it isn't read: the programmer's storage
-/// facts for it when they are believable and its last sector reads; else
-/// found by reading single sectors (which relies on a refusal past the end).
+/// The size of a boot area and where it came from, or why it isn't read:
+/// the programmer's storage facts for it when they are believable and its
+/// last sector reads; else found by reading single sectors (which relies on
+/// a refusal past the end). With `search`, the facts are only noted beside
+/// the search's result, which is always taken (only a partition the
+/// programmer names RPMB is still never touched).
 async fn boot_area_size<T: Transport>(
     fh: &mut Firehose<T>,
     physical: u32,
+    name: &str,
     sector: u32,
     user: Option<&StorageInfo>,
-) -> Result<Result<u64, String>, EmergencyError> {
+    search: bool,
+) -> Result<Result<(u64, String), String>, EmergencyError> {
     let s = sector as u64;
     let info = fh.storage_info(physical).await?;
     if info.as_ref().is_some_and(|i| i.names_rpmb) {
         return Ok(Err("the programmer names it RPMB, which is never read".into()));
     }
-    if info.as_ref().and_then(|i| i.total_blocks) == Some(0) {
+    if !search && info.as_ref().and_then(|i| i.total_blocks) == Some(0) {
         return Ok(Err("the programmer reports it empty: the device has none".into()));
     }
-    if sector_at(fh, physical, sector, 0).await?.is_none() {
+    if sector_at(fh, name, physical, sector, 0).await?.is_none() {
         return Ok(Err("the programmer refuses reading it: the device has none, or it isn't readable".into()));
     }
+    let blocks = info.as_ref().and_then(|i| i.total_blocks);
+    let users = user.and_then(|u| u.total_blocks);
     // Facts equal to the user area's are the user area's, not this one's.
-    let reported = info
-        .as_ref()
-        .and_then(|i| i.total_blocks)
-        .filter(|n| *n > 0 && n.saturating_mul(s) <= BOOT_AREA_MAX && Some(*n) != user.and_then(|u| u.total_blocks));
-    if let Some(n) = reported
-        && sector_at(fh, physical, sector, n - 1).await?.is_some()
+    let reported = blocks.filter(|n| *n > 0 && n.saturating_mul(s) <= BOOT_AREA_MAX && Some(*n) != users);
+    if !search
+        && let Some(n) = reported
+        && sector_at(fh, name, physical, sector, n - 1).await?.is_some()
     {
-        return Ok(Ok(n * s));
+        return Ok(Ok((n * s, format!("getstorageinfo ({n} sectors; its last sector reads)"))));
     }
-    Ok(Ok(probe_end(fh, physical, sector, BOOT_AREA_MAX / s).await? * s))
+    let found = probe_end(fh, name, physical, sector, BOOT_AREA_MAX / s).await?;
+    let said = found.said();
+    let Some(n) = found.sectors else {
+        return Ok(Err(format!(
+            "{said} found no refusal up to {} sectors: the programmer doesn't refuse reads past the end, so its size can't be found",
+            BOOT_AREA_MAX / s
+        )));
+    };
+    let beside = match (blocks, reported) {
+        (None, _) => "getstorageinfo reports no size for it".to_string(),
+        (Some(b), _) if Some(b) == users => format!("getstorageinfo answers with the user area's {b} sectors"),
+        (Some(b), Some(_)) if b == n => format!("getstorageinfo reports the same {b} sectors"),
+        (Some(b), _) => format!("getstorageinfo reports {b} sectors"),
+    };
+    Ok(Ok((n * s, format!("{said}; {beside}"))))
+}
+
+/// What a run collected, also when it failed part way.
+#[derive(Default)]
+struct Found {
+    images: Vec<(DiskRecord, u64, String)>,
+    incomplete: Vec<(String, String, String)>,
+    skipped: Vec<Skipped>,
+    sizes: Vec<AreaSize>,
 }
 
 async fn read_all<T: Transport, E: ImageEdge>(
@@ -763,10 +954,14 @@ async fn read_all<T: Transport, E: ImageEdge>(
     scope: &Scope,
     opts: Options,
     edge: &mut E,
-    images: &mut Vec<(DiskRecord, u64, String)>,
-    incomplete: &mut Vec<(String, String, String)>,
-    skipped: &mut Vec<Skipped>,
+    found: &mut Found,
 ) -> Result<Read, EmergencyError> {
+    let Found {
+        images,
+        incomplete,
+        skipped,
+        sizes,
+    } = found;
     let storage = fh.storage_info(USER_AREA).await?;
     match &storage {
         Some(i) => edge.note(&format!(
@@ -794,18 +989,25 @@ async fn read_all<T: Transport, E: ImageEdge>(
         }
     };
     let s = sector as u64;
-    let (t, disk_size) = read_gpt(fh, sector, storage.as_ref(), edge).await?;
+    let (t, disk_size, source) = read_gpt(fh, sector, storage.as_ref(), edge).await?;
     edge.note(&format!(
         "GPT: {} partitions, disk {} bytes ({} sectors of {sector})",
         t.entries.len(),
         disk_size,
         disk_size / s
     ));
+    edge.note(&size_line(USER_AREA_NAME, USER_AREA, disk_size, &source));
+    sizes.push(AreaSize {
+        name: USER_AREA_NAME.into(),
+        physical: USER_AREA,
+        bytes: disk_size,
+        source,
+    });
     edge.note(&render_table(&t, sector));
 
     let reserved = |n: &str| n == USER_AREA_NAME || BOOT_AREAS.iter().any(|(_, b)| *b == n);
     let wanted: Vec<Image> = match scope {
-        Scope::GptOnly | Scope::BootAreas => vec![],
+        Scope::GptOnly | Scope::BootAreas | Scope::BootAreaSizes => vec![],
         Scope::WholeDisk => vec![Image {
             disk: Disk {
                 index: USER_AREA,
@@ -844,9 +1046,13 @@ async fn read_all<T: Transport, E: ImageEdge>(
         store_one(fh, img, opts, edge, images, incomplete).await?;
     }
     // The boot areas after the user area: a problem with them never costs it.
-    if matches!(scope, Scope::WholeDisk | Scope::BootAreas) {
+    if matches!(scope, Scope::WholeDisk | Scope::BootAreas | Scope::BootAreaSizes) {
+        let search = *scope == Scope::BootAreaSizes;
+        if search {
+            edge.note("finding the boot areas' sizes by reading single sectors, whatever getstorageinfo reports; nothing is stored");
+        }
         for (physical, name) in BOOT_AREAS {
-            let size = match boot_area_size(fh, physical, sector, storage.as_ref()).await {
+            let size = match boot_area_size(fh, physical, name, sector, storage.as_ref(), search).await {
                 Ok(z) => z,
                 Err(e) => {
                     skipped.push(Skipped {
@@ -858,7 +1064,17 @@ async fn read_all<T: Transport, E: ImageEdge>(
                 }
             };
             match size {
-                Ok(size) => {
+                Ok((size, source)) => {
+                    edge.note(&size_line(name, physical, size, &source));
+                    sizes.push(AreaSize {
+                        name: name.into(),
+                        physical,
+                        bytes: size,
+                        source,
+                    });
+                    if search {
+                        continue;
+                    }
                     let img = Image {
                         disk: Disk {
                             index: physical,
@@ -887,9 +1103,17 @@ async fn read_all<T: Transport, E: ImageEdge>(
         let why: Vec<String> = skipped.iter().map(|k| format!("{}: {}", k.name, k.why)).collect();
         return Err(EmergencyError::Storage(format!("no eMMC boot area was read ({})", why.join("; "))));
     }
+    if *scope == Scope::BootAreaSizes && sizes.iter().all(|z| z.physical == USER_AREA) {
+        let why: Vec<String> = skipped.iter().map(|k| format!("{}: {}", k.name, k.why)).collect();
+        return Err(EmergencyError::Storage(format!("no eMMC boot area's size was found ({})", why.join("; "))));
+    }
     Ok((storage, sector, disk_size, t))
 }
 
+/// The line that says an area's size and where it came from.
+fn size_line(name: &str, physical: u32, bytes: u64, source: &str) -> String {
+    format!("{name} (physical partition {physical}): {bytes} bytes, size from {source}")
+}
 async fn store_one<T: Transport, E: ImageEdge>(
     fh: &mut Firehose<T>,
     img: &Image,
