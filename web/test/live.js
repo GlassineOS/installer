@@ -12,6 +12,7 @@
 'use strict';
 const assert = require('assert');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const puppeteer = require('puppeteer-core');
 const { serve } = require('./serve.js');
@@ -57,6 +58,7 @@ async function main() {
     await page.setRequestInterception(true);
     page.on('request', (r) => {
       const u = new URL(r.url());
+      if (r.method() !== 'GET') problems.push(`a ${r.method()} request: ${r.url()}`);
       if (u.protocol === 'data:' || u.protocol === 'blob:' || (u.hostname === '127.0.0.1' && u.port === String(server.address().port))) r.continue();
       else { problems.push(`request to another site: ${r.url()}`); r.abort(); }
     });
@@ -201,7 +203,7 @@ async function main() {
     const p = await records(page, 'plan', 'live-1', { hardware: { 'emergency-cable': true } });
     assert.strictEqual(p.status, golden('noteair-cable-yes').status);
     assert.deepStrictEqual(p.steps.map((x) => x.id), golden('noteair-cable-yes').steps.map((x) => x.id));
-    assert.strictEqual(await page.$$eval('li[data-step]', (x) => x.length), p.steps.length);
+    assert.strictEqual(await page.$$eval('li[data-step]:not(details li)', (x) => x.length), p.steps.length);
     // A choice the core's tests never planned still gets the core's answer (with fixtures it had none).
     await page.evaluate(() => document.querySelectorAll('input[name="hw-emergency-cable"]')[1].click());
     await page.waitForFunction(() => document.documentElement.dataset.hash.includes('hardware.emergency-cable=no') && document.documentElement.dataset.hash === location.hash && document.documentElement.dataset.ready === 'plan', { timeout: 15000 });
@@ -388,6 +390,32 @@ async function main() {
     await page.goto(base + '#/check?machine=live-1', { waitUntil: 'load' });
     await page.waitForFunction(() => document.documentElement.dataset.ready === 'error', { timeout: 30000 });
     assert.match(await text(page), /Connect the device again/);
+    await page.close();
+  });
+
+  await test('a picked file is checked by the core in the page: the record of the core’s tests, nothing sent', async () => {
+    const { page, problems } = await open({ vars: answers('noteair-stock-fastboot') });
+    await connect(page);
+    await rendered(page, 'check');
+    const sent = await outs(page), asked = requests.length;
+    await go(page, '#/supply?machine=live-1&hardware.emergency-cable=yes', 'supply');
+    assert.match(await text(page), /The Onyx Boox Note Air’s emergency programmer/);
+    // The shipped description gives these two files the verdicts the core's tests recorded
+    // (the others need the tests' own checksums or a device's report).
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'glassine-supplied-'));
+    for (const name of ['fits-unknown', 'not-a-programmer']) {
+      const file = path.join(dir, name + '.bin');
+      fs.writeFileSync(file, Buffer.from(fs.readFileSync(path.join(ROOT, `web/fixtures/supplied/${name}.hex`), 'utf8').replace(/\s/g, ''), 'hex'));
+      const input = await page.$('#file-input');
+      await input.uploadFile(file);
+      await page.waitForFunction((v) => { const f = document.querySelector('#file'); return f && f.dataset.verdict === v; }, { timeout: 15000 }, name);
+      const got = await records(page, 'supplied', 'live-1', 'emergency-programmer');
+      assert.deepStrictEqual(got.check, json(`web/fixtures/supplied/${name}.json`));
+      assert.strictEqual(got.bytes === null, name === 'not-a-programmer', 'kept the bytes of a file that is never sent');
+    }
+    assert.strictEqual(await outs(page), sent, 'the check sent something to the device');
+    assert.deepStrictEqual(requests.slice(asked).filter((r) => r !== null && !/^(index\.html|app\.js|records|screens|lib|pkg|vendor|interleaf|installer\.css)/.test(r)), [], 'the check fetched something');
+    assert.deepStrictEqual(problems, []);
     await page.close();
   });
 

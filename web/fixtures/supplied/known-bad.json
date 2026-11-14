@@ -1,0 +1,11 @@
+{
+  "supplied_check_format": 1,
+  "device": "onyx-noteair",
+  "file": "emergency-programmer",
+  "route": "emergency-download",
+  "size": 5888,
+  "sha256": "7fa4a1e072fb92182bf3c858caf71d2c1923f62ab4eae1571fc3f7eb61d07320",
+  "verdict": "known-bad",
+  "reason": "It starts, then hangs while reading the partition table and never answers.",
+  "verified": false
+}

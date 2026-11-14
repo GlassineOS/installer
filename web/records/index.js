@@ -10,6 +10,14 @@
 //   device()                  -> the live device's session: { machine, state, error }, or null
 //   restart()                 -> restarts the live device in its session (the person's action)
 //   onDevice(fn)              -> calls fn whenever device() changes; returns the unsubscribe
+//   suppliedCheck(device, file, bytes)
+//                             -> the core's check of a file the person picked (supplied_check_format 1)
+//   supplied(machine, file)   -> the file picked for that machine in this page, or null
+//   keepSupplied(machine, file, picked) / forgetSupplied(machine, file)
+//
+// A picked file (spec 004 FR-003) lives only in this page's memory: its bytes, the core's check
+// and whether the person confirmed the warning. It is never uploaded, put in an address or kept
+// in the browser's storage; a reload forgets it.
 //
 // Two sources, chosen by the page's address:
 //
@@ -29,7 +37,9 @@
 //   core's tests (core/tests/fixtures/facts/), and the records are the core's own output for
 //   it: the plan golden files (core/tests/golden/*.json, written by core/tests/plan.rs) and the
 //   check reports of web/fixtures/reports/ (written by `make web-records`, checked against the
-//   program by `make descriptions`). An input the core's tests never planned has no record:
+//   program by `make descriptions`). A picked file is answered with the record of the core's
+//   tests (web/fixtures/supplied/, written by core/tests/supplied.rs) whose file has the same
+//   checksum. An input the core's tests never planned has no record:
 //   plan() returns null and the screens say so. This mode needs the repository's files and
 //   reaches no device.
 
@@ -264,3 +274,31 @@ export async function description(id) {
   const src = (await wasm()).description(id);
   return src ? descriptionTexts(src, `${id}.toml`) : null;
 }
+
+// ---- files the person supplies (spec 004) ----------------------------------------------------
+
+// The test records of web/fixtures/supplied/, one per verdict.
+export const SUPPLIED_RECORDS = ['known', 'fits-unknown', 'wrong-chip-or-key', 'known-bad', 'not-a-programmer'];
+
+const hexOf = (buf) => [...new Uint8Array(buf)].map((x) => x.toString(16).padStart(2, '0')).join('');
+
+async function fixtureSupplied(bytes) {
+  const sum = hexOf(await crypto.subtle.digest('SHA-256', bytes));
+  for (const name of SUPPLIED_RECORDS) {
+    const r = await load(at(`../fixtures/supplied/${name}.json`), 'json');
+    if (r.sha256 === sum) return r;
+  }
+  throw new Error('The core’s tests have no record of a file with this checksum: with fixtures, pick one of the files of web/fixtures/supplied/ (written from its .hex).');
+}
+
+// Only reads the bytes; nothing is sent anywhere.
+export async function suppliedCheck(device, file, bytes) {
+  if (FIXTURES) return fixtureSupplied(bytes);
+  const m = await wasm();
+  return call(() => m.supplied_check(device, file, bytes, ''));
+}
+
+const picked = new Map(); // `${machine} ${file}` -> { name, size, bytes, check, trusted }
+export const supplied = (machine, file) => picked.get(`${machine} ${file}`) || null;
+export const keepSupplied = (machine, file, p) => { picked.set(`${machine} ${file}`, p); };
+export const forgetSupplied = (machine, file) => { picked.delete(`${machine} ${file}`); };

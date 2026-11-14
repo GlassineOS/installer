@@ -55,6 +55,16 @@ export const HARDWARE = {
 };
 export const hardwareName = (id) => (HARDWARE[id] ? HARDWARE[id].name : id);
 
+// A file the person supplies, by the route of the mode that needs it (spec 004; the mode's kind,
+// vocab MODE_KINDS): what it is called on every device of that route.
+export const SUPPLIED_ROUTE = {
+  'emergency-download': { noun: 'emergency programmer', short: 'programmer' },
+};
+export const suppliedWords = (route) => SUPPLIED_ROUTE[route] || { noun: 'file', short: 'file' };
+
+// The values a supplied file must match (vocab SUPPLIED_MATCHES keys).
+export const SUPPLIED_MATCH = { chip: 'Chip', pk_hash: 'Signing key' };
+
 // Boot settings (vocab BOOT_SETTING_KINDS).
 export const BOOT_SETTING = {
   'boot-loader': 'The boot loader, the program that starts the device',

@@ -3,7 +3,7 @@
 // device description's texts. Pure functions of a session: { report, plan, desc, kind, ... }.
 
 import {
-  LEAVES, BOOT_SETTING, SYSTEM_KIND, MODE, PARTITION_FOR, cap, list, human,
+  LEAVES, BOOT_SETTING, SYSTEM_KIND, MODE, PARTITION_FOR, SUPPLIED_MATCH, suppliedWords, cap, list, human,
 } from './words.js';
 
 export function machineOf(report, desc) {
@@ -97,6 +97,37 @@ export function targetOptions(s) {
   const imaged = new Set(b.images.map((i) => i.index));
   const disks = (s.report ? s.report.machine.disks : []).map((d, i) => i).filter((i) => !imaged.has(i));
   return [targetView(s, { kind: first }), ...disks.map((i) => targetView(s, { kind: 'disk', disk: i }))];
+}
+
+// The file the person must supply for this plan (spec 004 Scenario 2): the one the mode of the
+// back-up step needs (its description's `needs`), while the backup is on. null: none is needed.
+export function suppliedFor(s) {
+  const p = s.plan, d = s.desc;
+  if (!p || !d || p.backup.choice === 'off') return null;
+  const step = p.steps.find((x) => x.kind === 'back-up');
+  const mode = step && d.modes.find((m) => m.id === step.mode);
+  const f = mode && mode.needs ? d.supplied_files.find((x) => x.id === mode.needs) : null;
+  if (!f) return null;
+  const w = suppliedWords(mode.kind);
+  return {
+    id: f.id, route: mode.kind, noun: w.noun, short: w.short, step,
+    title: `${cap(s.m.the)}’s ${w.noun}`,
+    usualName: f.usual_name || null,
+    matches: Object.entries(f.matches || {}).map(([k, v]) => ({ key: k, name: SUPPLIED_MATCH[k] || k, value: v })),
+    testKeys: f.boot_rom === 'test-keys-accepted',
+    texts: d.texts.supplied_files[f.what] || {},
+  };
+}
+
+// A long value (a key hash) as its first 16 digits.
+export const shortValue = (v) => (v && v.length > 20 ? v.slice(0, 16) + '…' : v);
+
+// The file picked for it in this page, and whether it may be used: known, or not known and the
+// person confirmed the warning (004 FR-004). Never for any other verdict.
+export function suppliedState(s, need = suppliedFor(s)) {
+  const got = need ? s.supplied(s.machine, need.id) : null;
+  const v = got ? got.check.verdict : null;
+  return { need, got, verdict: v, ok: !need || v === 'known' || (v === 'fits-unknown' && got.trusted) };
 }
 
 export function stepViews(s) {
