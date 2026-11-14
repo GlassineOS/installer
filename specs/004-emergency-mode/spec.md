@@ -1,87 +1,103 @@
-# Feature Specification: Reading a device in its emergency mode, with nothing from the vendor
+# Feature Specification: Reading a device in its emergency mode, with the person's own programmer
 
 **Feature branch:** `emergency-mode`
-**Created:** 2026-11-13 · **Status:** spec, for review; nothing built
+**Created:** 2026-11-13 · **Status:** spec, for review
 **Builds on:** [001-install-from-stock](../001-install-from-stock/spec.md) (FR-009 the
-full backup, FR-012a special hardware), [002-device-description](../002-device-description/spec.md),
-[003-check](../003-check/spec.md) · **Decision:**
-[docs 0014](https://docs.glassine.org/decisions/0014-installation-and-provisioning/)
+full backup), [002-device-description](../002-device-description/spec.md),
+[003-check](../003-check/spec.md) · **Decisions:**
+[docs 0014](https://docs.glassine.org/decisions/0014-installation-and-provisioning/),
+[docs 0008](https://docs.glassine.org/decisions/0008-bring-your-own-stock-kernel/)
 
 ## Summary
 
 Some devices can't be backed up through their own boot loader before anything changes:
 the maker's boot loader can't start a system sent over USB, or isn't open at all. Many
-such devices have an emergency mode in the chip's boot ROM that runs a small program sent
-over USB, before any boot loader. The installer uses that mode to read the device's
-storage, with a program GlassineOS builds and may ship, never a vendor file.
+such devices have an emergency mode in the chip's boot ROM that runs a small program,
+signed for that chip, sent over USB before any boot loader. The installer uses that mode
+to read the device's storage with a programmer the person supplies for their own device.
+GlassineOS doesn't build, ship or host such programs, and sends only programs the device
+itself accepts as signed.
 
 The first target is the Onyx Boox Note Air (Qualcomm SDM636). It reaches the mode from
 stock Android with USB debugging on, without root and without unlocking.
 
-The program does only what the installer needs: say what it is, list and read storage,
-give a hash of what it read, and restart the device. Writing is a later feature with its
-own spec and its own failure tests.
+The installer only reads through the programmer: it lists and reads storage, checks what
+it read, and restarts the device. Writing is a later feature with its own spec and its
+own failure tests.
 
 ## User scenarios
 
 ### Scenario 1 – Back up a stock Note Air before anything changes (P1)
 
-**Given** a Note Air on stock Android with USB debugging on,
-**When** the person starts the backup,
-**Then** the installer restarts it into its emergency mode, starts the GlassineOS program,
-reads every disk the installation will write to into one full image each, checks each
-image against the hash the device reports, restarts the device into stock Android, and
-says where the images are. Nothing on the device has changed.
+**Given** a Note Air on stock Android with USB debugging on, and a programmer file for
+its chip on the computer,
+**When** the person starts the backup and picks that file,
+**Then** the installer restarts the device into its emergency mode, sends the
+programmer, reads every disk the installation will write to into one full image each,
+checks each image, restarts the device into stock Android, and says where the images
+are. Nothing on the device has changed.
 
-### Scenario 2 – Find out whether the mode can be used, before anything is sent (P1)
+### Scenario 2 – Find out whether a programmer fits, before anything is read (P1)
 
-**Given** a device in its emergency mode,
-**When** the installer inspects it,
-**Then** it reads what the boot ROM reports about the chip without sending any program,
-and says whether this unit accepts a program GlassineOS built. A unit that only accepts
-programs signed by its maker is reported as such, and the plan offers no route through
-this mode.
+**Given** a device in its emergency mode and a programmer file,
+**When** the installer inspects them,
+**Then** it reads what the boot ROM reports about the chip without sending anything,
+says whether the file is made for that chip and signing key, and only then sends it. A
+file the boot ROM refuses, or one that doesn't answer once started, is reported as not
+fitting this device; the device is restarted and nothing else is tried.
 
-### Scenario 3 – An interrupted read (P2)
+### Scenario 3 – No programmer at hand (P2)
+
+**Given** a device that needs this mode for its backup,
+**When** the person has no programmer file,
+**Then** the plan says which chip and signing key the file must fit, that GlassineOS
+can't supply it, and that the installation can go on without the backup only by the
+person's explicit opt-out (001 FR-009a).
+
+### Scenario 4 – An interrupted read (P2)
 
 **Given** a read in progress,
 **When** the cable is pulled or the computer stops,
-**Then** the device restarts on its own within a bounded time into the system it had, and
-the partial image is marked incomplete and never offered as a backup.
+**Then** the partial image is marked incomplete and never offered as a backup, and the
+person is told how to restart the device into the system it had.
 
 ## Edge cases
 
-- The device is in the mode but the program doesn't answer: the installer restarts the
-  device the way the boot ROM allows, or tells the person the button or cable that does.
 - The device reports a chip the description doesn't name: the installer sends nothing.
-- The mode is reached without Android (special hardware only): FR-012a applies.
-- The computer needs a one-time driver to reach the mode (Windows): the plan says so up
-  front.
+- The programmer starts but answers in a way the installer doesn't know: it stops,
+  restarts the device, and reports the file as unsupported.
+- The mode is reached without Android (special hardware only): 001's special-hardware
+  edge case applies.
+- The computer needs a one-time driver or permission to reach the mode (Windows driver,
+  Linux device rule): the plan says so up front.
 
 ## Requirements
 
 - **FR-001**: The installer recognises a device in its emergency mode from what the boot
-  ROM reports (chip, and whether the unit only runs maker-signed programs), before
-  sending anything.
-- **FR-002**: The installer sends only a program GlassineOS builds from source in its own
-  repository, under a licence that lets it ship. It never asks for, reads, stores or
-  uploads a vendor's program.
-- **FR-003**: The program can't write the device's storage. This is proven by its source
-  (no write path) and by a test that sends it every write the protocol could express and
-  reads the storage back unchanged.
-- **FR-004**: Every read is checked: the program reports a hash of what it read, and the
-  installer compares it with the data it received.
-- **FR-005**: The program restarts the device on its own if the computer stops talking to
-  it for a bounded time.
-- **FR-006**: The device description says which chip it has, how the device enters the
-  mode, and the program that fits; the program's build is part of the release.
-- **FR-007**: Everything works from a browser over WebUSB as from the command line.
+  ROM reports (chip, signing key), before sending anything.
+- **FR-002**: The programmer comes only from the person: the installer asks for a file
+  and uses it for that session. GlassineOS doesn't ship, download, host or point to a
+  download of any programmer, and the installer doesn't upload it anywhere.
+- **FR-003**: Before sending a file, the installer checks that it is a programmer for the
+  reported chip and signing key, and sends nothing else. The installer never builds or
+  sends a program of its own.
+- **FR-004**: A programmer counts as working for a device only once the device has
+  accepted it and it answers the installer's first request; until then nothing is read.
+- **FR-005**: Through the programmer the installer only lists and reads storage and
+  restarts the device. It has no way to issue a write, erase or any other change, proven
+  by its source and by a test that records every request it sends.
+- **FR-006**: Every read is checked: each image is read back a second time, or checked
+  against a hash the programmer reports, and a mismatch makes the image incomplete.
+- **FR-007**: The device description says which chip and signing key the device has, how
+  it enters the mode, how it leaves it, and which programmer protocol it speaks; it never
+  names or contains a programmer file.
+- **FR-008**: Everything works from a browser over WebUSB as from the command line.
 
 ## Success criteria
 
-- **SC-001**: A stock Note Air is fully backed up through this mode with no vendor file
-  on the computer, and its storage reads back identical before and after.
-- **SC-002**: The program's source and build are public, and the image sent to the device
-  is reproducible from them.
-- **SC-003**: An interrupted read leaves the device starting its own system within one
-  minute.
+- **SC-001**: A stock Note Air is fully backed up through this mode with a programmer the
+  person supplied, and its storage reads back identical before and after.
+- **SC-002**: No GlassineOS repository, release or page contains or links a programmer
+  file.
+- **SC-003**: A file that doesn't fit (other chip, other key, refused, silent) is
+  reported as such, and the device starts its own system again afterwards.
