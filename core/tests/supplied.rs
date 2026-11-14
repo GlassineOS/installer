@@ -403,3 +403,37 @@ fn the_record_keeps_its_own_keys() {
         assert_eq!(s.matches(k).count(), 1, "{k} in {s}");
     }
 }
+
+/// Program headers placed at the end of the address space are refused, not
+/// read from somewhere else.
+#[test]
+fn program_headers_beyond_the_file_are_refused() {
+    let d = valid(&noteair());
+    for (wide, phoff) in [(true, u64::MAX - 8), (true, u64::MAX / 2), (false, u32::MAX as u64 - 4)] {
+        let (mut b, _) = programmer(wide, 5, HW_ID, "Root CA");
+        if wide {
+            b[0x20..0x28].copy_from_slice(&phoff.to_le_bytes());
+        } else {
+            b[0x1c..0x20].copy_from_slice(&(phoff as u32).to_le_bytes());
+        }
+        assert!(matches!(check(&d, &b, None), Verdict::NotAProgrammer { .. }), "{phoff:#x}");
+    }
+}
+
+/// A HW_ID that names the SoC's hardware family (IN_USE_SOC_HW_VERSION) is
+/// not an msm id and never fits one.
+#[test]
+fn a_soc_hardware_version_is_not_a_chip() {
+    let root_name = name("Root CA", &[]);
+    let ca_name = name("Attestation CA", &[]);
+    let attest = name("Attestation", &["02 000CC0E100290041 HW_ID", "13 0001 IN_USE_SOC_HW_VERSION"]);
+    let root = cert(&root_name, &root_name, 1);
+    let c = [cert(&ca_name, &attest, 3), cert(&root_name, &ca_name, 2), root.clone()].concat();
+    let b = elf(true, &hash_segment(5, &c, 0));
+    assert_eq!(qualcomm::read(&b).unwrap().chip, "soc-hw-version:000c");
+    let d = noteair_for(&root, OTHER);
+    match check(&d, &b, None) {
+        Verdict::WrongChipOrKey { differs, .. } => assert_eq!(differs, ["chip"]),
+        v => panic!("{v:?}"),
+    }
+}
