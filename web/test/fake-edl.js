@@ -15,7 +15,7 @@
 //   disk(p):    physical partition p's bytes, base64 (for the test's comparison)
 // Options: refuse (the boot ROM ends the upload with an error), hangAtRead (the nth read of the
 // user area gets no answer: the run is stuck mid-image, as when a tab is killed), probeHangs
-// (getstorageinfo answers the user area's numbers for a boot area, so the core searches its size,
+// (getstorageinfo answers the user area's numbers for a boot area, so its size isn't reported,
 // and a read past a boot area's end gets no answer instead of a NAK), pauseAtRead (the nth read
 // of the user area is answered only at window.__fakeEdl.release(), so a test can act mid-run),
 // bootSectors; held (a kernel driver holds the interface, as Linux's qcserial does: every

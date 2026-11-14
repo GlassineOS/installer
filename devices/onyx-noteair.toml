@@ -24,7 +24,9 @@ untried = "the stock boot loader answered getvar all with it in development (202
 key = "storage.partition.onyxconfig.size"
 equals = 33554432
 required = true
-untried = "the Onyx settings partition, 32 MiB, in every layout (device page, partition table); not yet read in a recorded run"
+# The Onyx settings partition, 32 MiB, in every layout: in the partition table
+# the emergency mode's runs read, and read with the whole user area.
+verified = { record = "GlassineOS/installer#18", state = "installed", boot_loader = "GlassineOS boot loader, abl tag glassine1" }
 
 [[identity]]
 key = "fastboot.var.hw-revision"
@@ -149,7 +151,9 @@ untried = "the stock Android with USB debugging on; not used by the installer ye
 
 # The SoC's emergency download mode: the backup reads the whole storage
 # through it, with a programmer the person supplies, before anything changes.
-# It is also the way out of a broken boot loader.
+# It is also the way out of a broken boot loader. The recorded runs identify
+# the device and read through the programmer (the partition table, a
+# partition, the whole user area, the eMMC boot areas); nothing was written.
 [[modes]]
 id = "emergency"
 kind = "emergency-download"
@@ -157,7 +161,15 @@ usb = { vendor_id = "05c6", product_id = "9008" }
 can = ["identify", "read", "write"]
 restarts_into = ["android"]
 needs = "emergency-programmer"
-untried = "its boot ROM answered and ran a supplied programmer in development (GlassineOS/installer#18, 2026-11-13); the installer's reads through the programmer aren't built yet"
+verified = { record = "GlassineOS/installer#18", state = "installed", boot_loader = "GlassineOS boot loader, abl tag glassine1" }
+
+# The programmer that works here hangs on a read one sector past the end of
+# boot area 1 (no refusal, then it doesn't take the restart either; only
+# holding the power button ends the mode). It reports every area's size with
+# getstorageinfo, so the sizes come from there and from the partition table.
+[[modes.departures]]
+kind = "sizes-reported-only"
+verified = { record = "GlassineOS/installer#18", state = "installed", boot_loader = "GlassineOS boot loader, abl tag glassine1" }
 
 [[modes]]
 id = "glassine"
@@ -178,7 +190,10 @@ id = "emergency-to-android"
 from = "emergency"
 to = "android"
 by = "installer"
-untried = "a reset through the programmer once the reads are done; the installer's programmer client isn't built yet"
+# A reset through the programmer once the reads are done: after each recorded
+# run the programmer didn't hang in, the device started its own system by
+# itself (on the installed unit, GlassineOS).
+verified = { record = "GlassineOS/installer#18", state = "installed", boot_loader = "GlassineOS boot loader, abl tag glassine1" }
 
 [[transitions]]
 id = "emergency-by-hand"
@@ -444,7 +459,7 @@ signature = { boot_rom = "test-keys-accepted", verified = { record = "GlassineOS
 
 [[supplied_files.known]]
 sha256 = "b3e409558677f9b280fed7851e8cc66f0079ad78ef0b07519a3a98d86c14d41b"
-untried = "the edl tool read and wrote the Note Air through it in development (2026-06-02); not a recorded installer run"
+verified = { record = "GlassineOS/installer#18", state = "installed", boot_loader = "GlassineOS boot loader, abl tag glassine1" }
 
 [[supplied_files.known_bad]]
 sha256 = "4c2c494e92551b1d7f06f7beece875c0ef2b9b7b2ffab347f76a3dda8fa3d20c"
@@ -545,7 +560,7 @@ escape.failure = { leaves = "previous-system-starts", way_out = { transition = "
 escape.interruption = { leaves = "previous-system-starts", way_out = { transition = "emergency-by-hand" } }
 point_of_no_return = false
 safe_stop = true
-untried = "the installer's reads through the supplied programmer aren't built yet; the edl tool read the whole storage through it in development"
+untried = "the emergency-read runs read the whole storage through the supplied programmer (GlassineOS/installer#18, 2026-11-14), but not as this step of an installation"
 
 [[steps]]
 id = "replace-boot-loader"

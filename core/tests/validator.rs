@@ -209,6 +209,28 @@ fn format_2_has_no_supplied_files() {
     rejects(&t, "supplied_files");
 }
 
+/// FR-003, FR-011: the sizes-reported-only departure is format 3's.
+#[test]
+fn format_2_has_no_sizes_reported_only_departure() {
+    let t = mutate(
+        &format2(),
+        "usb = { vendor_id = \"05c6\", product_id = \"9008\" }",
+        "usb = { vendor_id = \"05c6\", product_id = \"9008\" }\ndepartures = [{ kind = \"sizes-reported-only\", untried = \"x\" }]",
+    );
+    rejects(&t, "modes[4].departures[0].kind");
+}
+
+/// FR-011: sizes-reported-only is an emergency mode's departure only.
+#[test]
+fn sizes_reported_only_is_an_emergency_departure() {
+    assert!(noteair().contains("kind = \"sizes-reported-only\""));
+    na(
+        "kind = \"single-variables-only\"",
+        "kind = \"sizes-reported-only\"",
+        "modes[1].departures[2].kind",
+    );
+}
+
 #[test]
 fn format_2_has_no_mode_needs() {
     let t = mutate(
@@ -314,9 +336,9 @@ fn a_supplied_file_names_no_place_to_get_it() {
         "supplied_files[0].usual_name",
     );
     na(
-        "untried = \"the edl tool read and wrote",
-        "untried = \"from www.example.org; the edl tool read and wrote",
-        "supplied_files[0].known[0].untried",
+        "untried = \"edl tool, development",
+        "untried = \"from www.example.org; edl tool, development",
+        "supplied_files[0].known_bad[0].untried",
     );
     na(
         "Search for a file whose name starts",
@@ -349,9 +371,12 @@ fn a_supplied_file_says_whether_the_key_is_enforced() {
 #[test]
 fn a_known_file_is_a_sha256_tried_or_not() {
     na(&format!("sha256 = \"{KNOWN}\""), "sha256 = \"b3e40955\"", "supplied_files[0].known[0].sha256");
+    // Neither verified nor untried.
     na(
-        "untried = \"the edl tool read and wrote the Note Air through it in development (2026-06-02); not a recorded installer run\"\n",
-        "",
+        &format!(
+            "sha256 = \"{KNOWN}\"\nverified = {{ record = \"GlassineOS/installer#18\", state = \"installed\", boot_loader = \"GlassineOS boot loader, abl tag glassine1\" }}\n"
+        ),
+        &format!("sha256 = \"{KNOWN}\"\n"),
         "supplied_files[0].known[0]",
     );
 }

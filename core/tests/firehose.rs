@@ -58,14 +58,29 @@ const DESC_KNOWN: &str = "b3e409558677f9b280fed7851e8cc66f0079ad78ef0b07519a3a98
 
 /// The Note Air's description for the simulated device: its key hash the
 /// simulated boot ROM's, its known programmer the stand-in bytes.
-fn desc_text() -> String {
+/// It keeps the Note Air's `sizes-reported-only` departure ([`noteair`]).
+fn shipped_text() -> String {
     common::noteair()
         .replace(DESC_PK, &hex(&pk_hash(false)))
         .replace(DESC_KNOWN, &hex(&Sha256::digest(programmer())))
 }
 
+/// [`shipped_text`] without the `sizes-reported-only` departure: a
+/// programmer that may be searched, so the route's every path runs.
+fn desc_text() -> String {
+    let re = Regex::new(r#"\[\[modes\.departures\]\]\nkind = "sizes-reported-only"\n[^\n]*\n"#).unwrap();
+    let t = shipped_text();
+    assert_eq!(re.find_iter(&t).count(), 1, "the departure, once");
+    re.replace(&t, "").into_owned()
+}
+
 fn desc() -> Description {
     common::valid(&desc_text())
+}
+
+/// The Note Air as shipped: its programmer hangs on a read past the end.
+fn noteair() -> Description {
+    common::valid(&shipped_text())
 }
 
 fn le(v: &mut [u8], at: usize, x: u64, n: usize) {
@@ -1625,4 +1640,108 @@ fn a_programmer_that_never_refuses_gives_no_size() {
     assert!(!run.mem.files.keys().any(|k| k.starts_with("emmc-boot")), "{:?}", run.mem.files.keys());
     let m: serde_json::Value = serde_json::from_str(done.manifest.as_deref().unwrap()).unwrap();
     assert_eq!(m["not_read"].as_array().unwrap().len(), 2);
+}
+
+// ---- sizes-reported-only (spec 002 FR-011) -------------------------------------
+
+#[test]
+fn the_note_air_never_searches_for_a_size() {
+    assert!(emergency_read::sizes_reported_only(&noteair(), "emergency-programmer"));
+    assert!(!emergency_read::sizes_reported_only(&desc(), "emergency-programmer"));
+    // Only for the file its emergency mode runs.
+    assert!(!emergency_read::sizes_reported_only(&noteair(), "another-file"));
+}
+
+/// The search is refused before anything reaches the device: not even the
+/// boot ROM's HELLO is answered.
+#[test]
+fn the_size_search_is_refused_before_anything_is_sent() {
+    let f = Faults {
+        boot_sectors: 640,
+        silent_past_end: true,
+        ..lively()
+    };
+    let run = go_desc(Device::new(f), &noteair(), Scope::BootAreaSizes, Mem::default(), OPTS);
+    let f = run.r.unwrap_err();
+    assert_eq!(f.error, EmergencyError::Storage(emergency_read::NO_SEARCH.into()));
+    assert_eq!(f.restart, Restart::NotPossible);
+    assert!(run.dev.sent.is_empty(), "{} transfers sent", run.dev.sent.len());
+}
+
+/// getstorageinfo sizes the boot areas: they are read up to their reported
+/// end and no further, with a programmer that would hang past it.
+#[test]
+fn reported_sizes_are_read_and_nothing_past_them() {
+    let f = Faults {
+        boot_sectors: 640,
+        per_partition_info: true,
+        silent_past_end: true,
+        ..lively()
+    };
+    let run = go_desc(Device::new(f), &noteair(), Scope::WholeDisk, Mem::default(), OPTS);
+    let done = run.r.unwrap_or_else(|e| panic!("{e:?}"));
+    assert_eq!(done.restart, Restart::Done);
+    for p in [1, 2] {
+        let r = reads_on(&run.dev, p);
+        assert!(!r.is_empty());
+        assert!(r.iter().all(|(start, n)| start + n <= 640), "a read past the end: {r:?}");
+        assert_eq!(r.iter().filter(|(_, n)| *n == 1).count(), 2, "sector 0 and the last, once each: {r:?}");
+        assert!(run.mem.files.contains_key(&format!("emmc-boot{p}.img")));
+    }
+    assert!(reads(&run.dev).iter().all(|(start, n)| start + n <= SECTORS));
+    assert!(!run.mem.notes.iter().any(|n| n.contains("single-sector search")), "{:#?}", run.mem.notes);
+}
+
+/// getstorageinfo doesn't size the boot areas (it answers with the user
+/// area's numbers): they aren't read at all, the manifest says why, and the
+/// user area is stored.
+#[test]
+fn an_area_without_a_reported_size_is_not_read() {
+    let f = Faults {
+        boot_sectors: 640,
+        per_partition_info: false,
+        silent_past_end: true,
+        ..lively()
+    };
+    let run = go_desc(Device::new(f), &noteair(), Scope::WholeDisk, Mem::default(), OPTS);
+    let done = run.r.unwrap_or_else(|e| panic!("{e:?}"));
+    assert_eq!(done.restart, Restart::Done);
+    for p in [1, 2] {
+        assert!(reads_on(&run.dev, p).is_empty(), "{:?}", reads_on(&run.dev, p));
+    }
+    assert_eq!(run.mem.files.keys().collect::<Vec<_>>(), ["emmc-user.img"]);
+    let m: serde_json::Value = serde_json::from_str(done.manifest.as_deref().unwrap()).unwrap();
+    let not_read = m["not_read"].as_array().unwrap();
+    assert_eq!(not_read.len(), 2);
+    for k in not_read {
+        let why = k["why"].as_str().unwrap();
+        assert!(
+            why.contains("answers with the user area's") && why.contains("hangs on a read past the end"),
+            "{why}"
+        );
+    }
+}
+
+/// A damaged primary GPT and no size reported: the backup isn't looked for
+/// (its place would be a guess), the run ends with why, and the device is
+/// restarted.
+#[test]
+fn a_damaged_gpt_without_a_reported_size_ends_the_run() {
+    for wipe in [false, true] {
+        let f = Faults {
+            storage_info: false,
+            silent_past_end: true,
+            ..lively()
+        };
+        let run = go_desc(damaged(f, wipe), &noteair(), Scope::WholeDisk, Mem::default(), OPTS);
+        let f = run.r.unwrap_err();
+        let e = f.error.to_string();
+        assert!(
+            e.contains("the backup GPT isn't looked for") && e.contains("hangs on a read past the end"),
+            "{e}"
+        );
+        assert_eq!(reads(&run.dev), [(0, 34), (0, 34)]);
+        assert!(run.mem.files.is_empty() && run.mem.manifest.is_none());
+        assert_eq!(f.restart, Restart::Done);
+    }
 }

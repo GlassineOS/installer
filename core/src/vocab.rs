@@ -521,16 +521,27 @@ pub struct Kind {
 
 use ParamType as T;
 
-/// The departure kinds that exist from format 2 on; they stand last in
-/// [`DEPARTURES`], so format 1's are the ones before them.
+/// The departure kinds that exist from format 2 on; they stand after
+/// format 1's in [`DEPARTURES`].
 pub const DEPARTURES_SINCE_2: &[&str] = &["check-slot-flags"];
+
+/// The departure kinds that exist from format 3 on; they stand last in
+/// [`DEPARTURES`].
+pub const DEPARTURES_SINCE_3: &[&str] = &[SIZES_REPORTED_ONLY];
+
+/// The departure of an emergency mode whose programmer hangs on a read past
+/// the end of a physical partition (spec 002 FR-011).
+pub const SIZES_REPORTED_ONLY: &str = "sizes-reported-only";
 
 /// The departure kinds of `format`.
 pub fn departures(format: i64) -> &'static [Kind] {
-    if format >= 2 {
+    let n = DEPARTURES.len();
+    if format >= 3 {
         DEPARTURES
+    } else if format == 2 {
+        &DEPARTURES[..n - DEPARTURES_SINCE_3.len()]
     } else {
-        &DEPARTURES[..DEPARTURES.len() - DEPARTURES_SINCE_2.len()]
+        &DEPARTURES[..n - DEPARTURES_SINCE_3.len() - DEPARTURES_SINCE_2.len()]
     }
 }
 
@@ -569,7 +580,7 @@ pub const DEPARTURES: &[Kind] = &[
         modes: &["fastboot"],
         params: &[],
     },
-    // From format 2 on (DEPARTURES_SINCE_2): keep them last.
+    // From format 2 on (DEPARTURES_SINCE_2): after format 1's.
     Kind {
         id: "check-slot-flags",
         doc: "an operation that may change the A/B slot flags: before it is sent, the active slot's flags are read, and it goes on without the person's acceptance only when they show it changes nothing",
@@ -579,6 +590,14 @@ pub const DEPARTURES: &[Kind] = &[
             p("operation", T::Operation, true, "the operation"),
             p("reason", T::Text, true, "what it may change, and when, in plain words"),
         ],
+    },
+    // From format 3 on (DEPARTURES_SINCE_3): keep them last.
+    Kind {
+        id: SIZES_REPORTED_ONLY,
+        doc: "the programmer the mode runs hangs on a read past the end of a physical partition instead of refusing it, and then takes no other request: the size of each storage area comes only from what the programmer reports and from the partition table, never from reading single sectors to find its end; an area whose size neither gives isn't read",
+        backends: &["android-bootloader"],
+        modes: &["emergency-download"],
+        params: &[],
     },
 ];
 

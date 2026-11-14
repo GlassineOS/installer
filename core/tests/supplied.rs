@@ -240,11 +240,19 @@ fn a_hash_segment_version_it_doesnt_read_is_not_a_programmer() {
 fn a_known_file() {
     let (b, root) = programmer(false, 5, HW_ID, "Root CA");
     let d = noteair_for(&root, &hex(&Sha256::digest(&b)));
-    assert_eq!(check(&d, &b, None), Verdict::Known { verified: false });
+    assert_eq!(check(&d, &b, None), Verdict::Known { verified: true });
     assert_eq!(check(&d, &b, None).sendable(), Some(false));
     // the device reports what the description names: still known
     let pk = d.supplied_files[0].matches["pk_hash"].clone();
-    assert_eq!(check(&d, &b, Some(&device(CHIP, &pk))), Verdict::Known { verified: false });
+    assert_eq!(check(&d, &b, Some(&device(CHIP, &pk))), Verdict::Known { verified: true });
+    // a known file seen working only outside a recorded run: known, untried
+    let t = noteair()
+        .replace(DESC_PK, &hex(&Sha256::digest(&root)))
+        .replace(DESC_KNOWN, &hex(&Sha256::digest(&b)));
+    let v = "verified = { record = \"GlassineOS/installer#18\", state = \"installed\", boot_loader = \"GlassineOS boot loader, abl tag glassine1\" }";
+    let at = t.find("[[supplied_files.known]]").unwrap();
+    let t = format!("{}{}", &t[..at], t[at..].replacen(v, "untried = \"development only\"", 1));
+    assert_eq!(check(&valid(&t), &b, None), Verdict::Known { verified: false });
 }
 
 #[test]
@@ -313,7 +321,7 @@ fn the_devices_report_decides_first() {
     // upper case from a device is the same value
     assert_eq!(
         check(&d, &b, Some(&device(&CHIP.to_ascii_uppercase(), &pk.to_ascii_uppercase()))),
-        Verdict::Known { verified: false }
+        Verdict::Known { verified: true }
     );
 }
 
@@ -471,7 +479,7 @@ fn test_keys_accepted_makes_the_files_claims_no_evidence() {
         v => panic!("{v:?}"),
     }
     let d = noteair_for(&root, &hex(&Sha256::digest(&other_chip)));
-    assert_eq!(check(&d, &other_chip, None), Verdict::Known { verified: false });
+    assert_eq!(check(&d, &other_chip, None), Verdict::Known { verified: true });
 }
 
 // ---- files known not to work ---------------------------------------------------

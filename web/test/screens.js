@@ -378,7 +378,9 @@ async function main() {
     await pickFile('known');
     let t = await page.evaluate(() => document.body.innerText);
     assert.match(t, /A known emergency programmer/);
-    assert.match(t, /in development/, 'a file seen working only in development is said so');
+    // the description records it working in a recorded run (supplied('known').verified)
+    assert.ok(supplied('known').verified);
+    assert.doesNotMatch(t, /in development/, 'a file seen working in a recorded run is said to be development only');
     assert.ok(t.includes(supplied('known').sha256.match(/.{8}/g).join(' ')), 'the checksum isn’t the record’s');
     assert.match(await page.$eval('#use', (a) => a.getAttribute('href')), /^#\/confirm\?/);
     // fits-unknown: what the file names, and nothing until the box is ticked
