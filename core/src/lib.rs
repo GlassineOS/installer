@@ -12,8 +12,10 @@
 
 pub mod derive;
 pub mod efivar;
+pub mod emergency_read;
 pub mod facts;
 pub mod fastboot;
+pub mod firehose;
 pub mod format1;
 pub mod fsprobe;
 pub mod glassine_read;
