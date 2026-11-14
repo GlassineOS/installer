@@ -113,6 +113,15 @@ pub trait Transport {
         let _ = max;
         self.recv()
     }
+    /// Bounds the waits of the transfers that follow by `wait` instead of the
+    /// transport's own bound; `None` restores that. For a protocol that
+    /// polls (Firehose's first `configure`, [`crate::firehose`]): a timeout
+    /// must leave the transport usable. A transport where it doesn't (the
+    /// browser's closes on its first timeout) keeps this default, which
+    /// changes nothing.
+    fn set_short_wait(&mut self, wait: Option<std::time::Duration>) {
+        let _ = wait;
+    }
 }
 
 impl<T: Transport> Transport for &mut T {
@@ -124,6 +133,9 @@ impl<T: Transport> Transport for &mut T {
     }
     fn recv_max(&mut self, max: usize) -> impl Future<Output = Result<Vec<u8>, FbError>> {
         (**self).recv_max(max)
+    }
+    fn set_short_wait(&mut self, wait: Option<std::time::Duration>) {
+        (**self).set_short_wait(wait)
     }
 }
 
