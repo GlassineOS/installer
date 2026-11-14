@@ -166,7 +166,11 @@ pinned to,
   answer that tells it (FR-012). An operation can be one never to send at all, or one
   allowed only after a check of the device's state that shows it changes nothing (for
   example, booting an image only when the active slot's flags show it writes none of them);
-  in any other state it needs the person's acceptance.
+  in any other state it needs the person's acceptance. An emergency mode's departure can say
+  that the programmer it runs hangs on a read past the end of a storage area instead of
+  refusing it: then each area's size comes only from what the programmer reports and from
+  the partition table, nothing is read to find where an area ends, and an area whose size
+  neither gives isn't read (the backup lists it with why).
 - **FR-012**: A backend reaches an unrecognised device with an opening that is safe whether
   or not a departure applies. It chooses how to go on from the first answer, using the
   departures of every description it has, before matching any.

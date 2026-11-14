@@ -778,6 +778,28 @@
                   }
                 },
                 {
+                  "if": {
+                    "properties": {
+                      "kind": {
+                        "const": "sizes-reported-only"
+                      }
+                    },
+                    "required": [
+                      "kind"
+                    ]
+                  },
+                  "then": {
+                    "properties": {
+                      "params": {
+                        "additionalProperties": false,
+                        "description": "parameters of sizes-reported-only",
+                        "properties": {},
+                        "type": "object"
+                      }
+                    }
+                  }
+                },
+                {
                   "oneOf": [
                     {
                       "required": [
@@ -801,7 +823,8 @@
                     "fresh-boot-only",
                     "never-use",
                     "single-variables-only",
-                    "check-slot-flags"
+                    "check-slot-flags",
+                    "sizes-reported-only"
                   ],
                   "type": "string"
                 },
@@ -3151,6 +3174,17 @@
             "type": "Text"
           }
         ]
+      },
+      {
+        "backends": [
+          "android-bootloader"
+        ],
+        "doc": "the programmer the mode runs hangs on a read past the end of a physical partition instead of refusing it, and then takes no other request: the size of each storage area comes only from what the programmer reports and from the partition table, never from reading single sectors to find its end; an area whose size neither gives isn't read",
+        "id": "sizes-reported-only",
+        "modes": [
+          "emergency-download"
+        ],
+        "params": []
       }
     ],
     "device_data_checks": [

@@ -122,6 +122,10 @@ pub fn load(programmer: &Path, d: &Description, file: &str, accept_unknown: bool
 /// message.
 pub fn run(bytes: &[u8], d: &Description, file: &str, out: Option<&Path>, scope: &Scope) -> Result<String, String> {
     let expected = Expected { description: d, file };
+    // Before the device is opened: the route would refuse it too.
+    if *scope == Scope::BootAreaSizes && emergency_read::sizes_reported_only(d, file) {
+        return Err(format!("--find-boot-area-sizes: {}", emergency_read::NO_SEARCH));
+    }
     let mut files = match (scope, out) {
         (Scope::GptOnly | Scope::BootAreaSizes, _) => None,
         (_, Some(dir)) => Some(FileEdge::new(dir)?),
