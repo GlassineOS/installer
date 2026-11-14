@@ -2453,6 +2453,70 @@
             },
             "type": "object"
           },
+          "signature": {
+            "additionalProperties": false,
+            "allOf": [
+              {
+                "oneOf": [
+                  {
+                    "required": [
+                      "verified"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "untried"
+                    ]
+                  }
+                ]
+              }
+            ],
+            "description": "whether the device's boot ROM enforces the signing key (004 FR-004)",
+            "properties": {
+              "boot_rom": {
+                "description": "enforced, or test-keys-accepted",
+                "enum": [
+                  "enforced",
+                  "test-keys-accepted"
+                ],
+                "type": "string"
+              },
+              "untried": {
+                "description": "not tried on real hardware yet: why, or what is missing",
+                "type": "string"
+              },
+              "verified": {
+                "additionalProperties": false,
+                "description": "a recorded run on real hardware (FR-023a)",
+                "properties": {
+                  "boot_loader": {
+                    "description": "the boot loader the run was made on",
+                    "type": "string"
+                  },
+                  "record": {
+                    "description": "the record: owner/repo#number, or a page on docs.glassine.org",
+                    "pattern": "^([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[0-9]+|https://docs\\.glassine\\.org/[A-Za-z0-9_./#-]*)$",
+                    "type": "string"
+                  },
+                  "state": {
+                    "description": "the install state the run was made in",
+                    "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "record",
+                  "state",
+                  "boot_loader"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "boot_rom"
+            ],
+            "type": "object"
+          },
           "usual_name": {
             "description": "the name it is usually found under, shown for the person to copy",
             "type": "string"
@@ -2467,7 +2531,8 @@
           "id",
           "what",
           "usual_name",
-          "matches"
+          "matches",
+          "signature"
         ],
         "type": "object"
       },
@@ -3483,6 +3548,16 @@
       {
         "doc": "a whole disk the job writes to, as one object: its partition table and every partition",
         "id": "disk"
+      }
+    ],
+    "signature_rules": [
+      {
+        "doc": "the boot ROM runs only programs signed with the key it reports: a file must be made for the chip and key the description names",
+        "id": "enforced"
+      },
+      {
+        "doc": "the boot ROM runs programs signed with test keys: the chip and key a file names prove nothing, an unknown programmer is sent after the person confirms",
+        "id": "test-keys-accepted"
       }
     ],
     "step_kinds": [

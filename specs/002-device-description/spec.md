@@ -253,7 +253,10 @@ pinned to,
   [004](../004-emergency-mode/spec.md)). Each has an `id`, what it is (a text key, FR-026),
   the name it is usually found under (shown for the person to copy), the values the mode's
   backend checks it against (for an emergency mode: the chip and signing key its boot ROM
-  reports, which are also fact keys of that mode kind, FR-006), and `known`: the SHA-256 of
+  reports, which are also fact keys of that mode kind, FR-006), whether the device's boot
+  ROM enforces the signing key (`signature`: `enforced`, or `test-keys-accepted` when it
+  runs programs signed with test keys, so a file's own chip and key prove nothing,
+  004 FR-004; verified or not, FR-023a), and `known`: the SHA-256 of
   each file seen working on this device, with whether that was verified (FR-023a). It
   names no place to get a file. The file stays on the person's computer for the session
   only and is never uploaded.
