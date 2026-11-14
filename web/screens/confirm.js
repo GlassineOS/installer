@@ -2,12 +2,15 @@
 // Confirm: the whole plan once more, one confirmation (spec 001 FR-006): a tick for files that
 // are erased, a replaced system confirmed by typing its name, and where the backup goes.
 // state: noroom (the place chosen for the backup has no room; there is no record of it yet).
+// When the backup needs a file only the person can supply (spec 004), it shows the file picked
+// on Supply; without one that may be sent (known, or not known and its warning confirmed),
+// nothing can be confirmed.
 // The place is the plan's backup-to choice: changing it asks for the plan of that input.
 
 import { useState } from 'preact/hooks';
 import { html, Admonition, Actions, Page, Steps } from '../lib/parts.js';
 import { list } from '../lib/words.js';
-import { stepViews, erase, fate, keptSystems, goneSystems, backupView, targetOptions } from '../lib/model.js';
+import { stepViews, erase, fate, keptSystems, goneSystems, backupView, targetOptions, suppliedState } from '../lib/model.js';
 import { EraseNote } from './check.js';
 import { NoRecord } from './plan.js';
 
@@ -27,11 +30,13 @@ export function Confirm({ s, state }) {
   const typedOk = !word || typed.trim().toLowerCase() === word.toLowerCase();
   const noRoom = state === 'noroom';
   const ready = p.status === 'ready';
-  const ok = ready && (!needAck || ack) && typedOk && !noRoom;
+  const { need, got, ok: fileOk } = suppliedState(s);
+  const ok = ready && (!needAck || ack) && typedOk && !noRoom && fileOk;
   const pc = s.m.kind === 'pc';
   const b = backupView(s);
   const place = (v) => s.withInput({ ...s.input, choices: { ...s.input.choices, 'backup-to': v } });
   const next = !ready ? 'Nothing: this plan can’t be carried out as it is. Go back to the plan.'
+    : !fileOk ? `Nothing, until the file the backup needs is chosen and checked. Go back to it.`
     : needAck && !ack ? 'Tick the box under “Erases your files” to install.'
     : !typedOk ? `Type the name of the system that is replaced to install.`
     : noRoom ? 'Nothing, until there is a place with room for the backup.'
@@ -64,6 +69,19 @@ export function Confirm({ s, state }) {
         <p class="ins-small">${b.consequence}</p>
         <p class="ins-small ins-soft">To back up after all, go back to the plan.</p></div>`}
     </section>
+    ${need ? html`<section class="ins-stack" id="supplied">
+      <h2 class="ins-h2">The file for the backup</h2>
+      <div class=${fileOk ? 'ins-card' : 'ins-card ins-card--warn'}>
+        <span class="il-label">${need.title}</span>
+        ${got ? html`<span class="ins-card__title" style="overflow-wrap: anywhere">${got.name}</span>` : html`<span class="ins-card__title">Not chosen yet</span>`}
+        <p class="ins-small">${!got ? 'The backup reads the device through it. Choose it first: the installer checks it before it sends anything.'
+          : got.check.verdict === 'known' ? `A known file: it has worked on ${s.m.the} before. It is sent when the backup starts.`
+          : fileOk ? 'Not a known file: you confirmed its warning. It is sent when the backup starts.'
+          : got.check.verdict === 'fits-unknown' ? 'Not a known file, and its warning isn’t confirmed: it isn’t sent.'
+          : 'It doesn’t fit: it is never sent. Choose another file.'}</p>
+        ${fileOk ? null : html`<p class="ins-small"><a class="il-link" href=${s.link('supply')} id="to-supply">${got ? 'Back to the file' : 'Choose the file'}</a></p>`}
+      </div>
+    </section>` : null}
     ${word ? html`<section class="ins-stack">
       <h2 class="ins-h2">Confirm what is erased</h2>
       <label class="ins-field" for="osname">
@@ -76,7 +94,8 @@ export function Confirm({ s, state }) {
     <${Actions} next=${next} out="Go back to the plan, or stop here. Nothing has changed."
       buttons=${[
         { label: 'Install as planned', href: s.link('backup'), primary: true, disabled: !ok, id: 'install' },
-        { label: 'Back to the plan', href: s.link('plan') },
+        need ? { label: 'Back to the file', href: s.link('supply') } : { label: 'Back to the plan', href: s.link('plan') },
+        ...(need ? [{ label: 'Back to the plan', href: s.link('plan') }] : []),
         { label: 'Stop here', href: s.link('start'), push: true }]} />
   </${Page}>`;
 }

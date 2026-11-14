@@ -8,6 +8,7 @@
 'use strict';
 const assert = require('assert');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const puppeteer = require('puppeteer-core');
 const { serve } = require('./serve.js');
@@ -23,8 +24,9 @@ const SCREENS = {
   reach: [undefined, 'hand', 'debugging', 'chooser', 'waiting', 'found', 'notfresh'],
   check: [undefined],
   plan: [undefined],
+  supply: [undefined, 'nofile'],
   confirm: [undefined, 'noroom'],
-  backup: ['saving', 'verifying', 'verified', 'failed'],
+  backup: ['saving', 'verifying', 'verified', 'failed', 'refused'],
   install: ['midway', 'ponr', 'stopping', 'stopped'],
   verify: ['waiting', 'notaccepted'],
   resume: [undefined],
@@ -42,9 +44,21 @@ const SHOTS = opt('--shots'), ONLY = opt('--only');
 // capabilities, hardware, statuses). Inside <details> they are allowed (innerText skips a closed one).
 function bareIds(plan) {
   const ids = new Set(['previous-system-starts', 'glassine-starts', 'installer-can-finish', 'installer-can-undo', 'special-hardware',
-    'needs-answers', 'developer-only', 'emergency-cable', 'start-kernel', 'fallback-boot', 'trial-boot', 'keep-stock', 'secondary-recovery', 'choose-at-start']);
+    'needs-answers', 'developer-only', 'emergency-cable', 'start-kernel', 'fallback-boot', 'trial-boot', 'keep-stock', 'secondary-recovery', 'choose-at-start',
+    'emergency-programmer', 'fits-unknown', 'wrong-chip-or-key', 'known-bad', 'not-a-programmer', 'emergency-download']);
   if (plan) for (const s of plan.steps) if (s.id.includes('-')) ids.add(s.id);
   return [...ids];
+}
+
+// The synthetic files of the core's tests (web/fixtures/supplied/*.hex), written back as files
+// for the browser's file window, in a directory of their own.
+function suppliedFiles() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'glassine-supplied-'));
+  const src = path.join(ROOT, 'web/fixtures/supplied');
+  for (const f of fs.readdirSync(src).filter((x) => x.endsWith('.hex'))) {
+    fs.writeFileSync(path.join(dir, f.replace(/\.hex$/, '.bin')), Buffer.from(fs.readFileSync(path.join(src, f), 'utf8').replace(/\s/g, ''), 'hex'));
+  }
+  return dir;
 }
 
 async function main() {
@@ -67,6 +81,8 @@ async function main() {
     await page.setRequestInterception(true);
     page.on('request', (r) => {
       const u = new URL(r.url());
+      // Nothing is ever sent anywhere: a picked file stays in the page (spec 004 FR-003).
+      if (r.method() !== 'GET') problems.push(`a ${r.method()} request: ${r.url()}`);
       if (u.protocol === 'data:' || u.protocol === 'blob:' || (u.hostname === '127.0.0.1' && u.port === String(server.address().port))) r.continue();
       else { problems.push(`request to another site: ${r.url()}`); r.abort(); }
     });
@@ -85,6 +101,17 @@ async function main() {
   }
 
   const { page, problems } = await open();
+  // Every <details> open, for what is folded away (innerText skips a closed one).
+  const unfold = (p = page) => p.evaluate(() => { for (const d of document.querySelectorAll('details')) d.open = true; });
+  const SUPPLIED = path.join(ROOT, 'web/fixtures/supplied');
+  const supplied = (n) => JSON.parse(fs.readFileSync(path.join(SUPPLIED, n + '.json'), 'utf8'));
+  const FILES = suppliedFiles();
+  // Picks a file on Supply, as the browser's file window would, and waits for the core's check.
+  const pickFile = async (name) => {
+    const input = await page.$('#file-input');
+    await input.uploadFile(path.join(FILES, name + '.bin'));
+    await page.waitForFunction((v) => { const f = document.querySelector('#file'); return f && f.dataset.verdict === v; }, { timeout: 10000 }, name);
+  };
   await page.goto(base, { waitUntil: 'load' });
   await ready(page);
 
@@ -100,7 +127,8 @@ async function main() {
       h1: (document.querySelector('h1') || {}).textContent || '',
       text: document.body.innerText,
       chip: (document.querySelector('.ins-head__machine') || {}).textContent || '',
-      steps: document.querySelectorAll('li[data-step]').length,
+      // the step list itself, not the one folded under "If a step goes wrong"
+      steps: document.querySelectorAll('li[data-step]:not(details li)').length,
       owed: document.querySelectorAll('[data-owed]').length,
     }));
     assert.strictEqual(got.ready, route, `rendered ${got.ready}, not ${route}`);
@@ -176,6 +204,9 @@ async function main() {
   });
 
   await test('confirm: the erase tick and the replaced system’s name gate the install', async () => {
+    // the backup needs the file the person supplies: a known one, checked on Supply
+    await go(page, '#/supply?plan=noteair-no-stock-developer');
+    await pickFile('known');
     await go(page, '#/confirm?plan=noteair-no-stock-developer');
     const off = () => page.$eval('#install', (b) => b.tagName === 'BUTTON' && b.disabled);
     assert.ok(await off());
@@ -207,9 +238,11 @@ async function main() {
 
   await test('the backup: sizes from each disk image', async () => {
     await go(page, '#/plan?plan=noteair-no-stock-developer');
+    await unfold();
     const gib = (plans['noteair-no-stock-developer'].backup.images[0].estimate_bytes / 2 ** 30).toFixed(1);
     assert.ok((await page.$eval('#backup-images', (x) => x.innerText)).includes(`Disk 0: about ${gib} GiB.`), 'the image’s size isn’t the plan’s');
     await go(page, '#/plan?plan=pc-two-disks-first');
+    await unfold();
     const t = await page.$eval('#backup-images', (x) => x.innerText);
     assert.match(t, /Disk 0, NVME: at most 512\.0 GiB, the disk’s size\./);
     assert.ok(!/Disk 1/.test(t), 'images a disk the plan doesn’t write to');
@@ -221,6 +254,8 @@ async function main() {
     await go(page, '#/plan?plan=pc-windows-replace');
     assert.strictEqual(await page.$('#backup-off'), null);
     await pick('backup', 'off', 'choice.backup=off', '#backup-off');
+    assert.ok(await page.$eval('#choices', (d) => d.open), 'the choices stay folded with the backup off');
+    await unfold();
     const t = await page.evaluate(() => document.body.innerText);
     assert.match(t, /no way back to the maker’s system|no way back to the maker's system/);
     assert.match(t, /step 2 can’t be undone/, 'doesn’t name the step whose undo is lost');
@@ -253,6 +288,7 @@ async function main() {
     const disks = () => page.$$eval('input[name="choice-target-disk"]', (xs) => xs.map((x) => x.value + (x.checked ? '*' : '')));
     assert.deepStrictEqual(await disks(), ['first*', 'disk1']);
     await pick('choice-target-disk', 'disk1', 'choice.target-disk=disk1', '#backup-images');
+    await unfold();
     assert.deepStrictEqual(await disks(), ['first', 'disk1*']);
     assert.match(await page.$eval('#backup-images', (x) => x.innerText), /Disk 1/);
   });
@@ -271,10 +307,137 @@ async function main() {
 
   await test('the plan’s escapes come with the description’s words', async () => {
     await go(page, '#/plan?plan=noteair-cable-yes');
-    const t = await page.evaluate(() => document.querySelector('li[data-step="replace-boot-loader"]').innerText);
+    await unfold();
+    const t = await page.evaluate(() => document.querySelector('#ifwrong li[data-step="replace-boot-loader"]').innerText);
     assert.match(t, /Replace the boot loader with GlassineOS’s|Replace the boot loader with GlassineOS's/);
     assert.match(t, /emergency cable/);
     assert.match(t, /Point of no return/i);
+  });
+
+  const forget = () => page.evaluate(async () => (await import('/web/records/index.js')).forgetSupplied('noteair-stock-fastboot', 'emergency-programmer'));
+  const desc = fs.readFileSync(path.join(ROOT, 'devices/onyx-noteair.toml'), 'utf8');
+  const descText = (k) => JSON.parse(new RegExp(`^${k} = (".*")$`, 'm').exec(desc.slice(desc.indexOf('[texts.supplied_files.emergency-programmer]')))[1]);
+
+  await test('plan: in short, what you need and the folds, from the plan and the description', async () => {
+    await forget();
+    await go(page, '#/plan?plan=noteair-no-stock-developer');
+    const short = await page.$eval('#short', (x) => x.innerText);
+    // the description's own option text, and the backup in plain words
+    assert.match(short, /Don't keep Android\. It is never started again/);
+    assert.match(short, /First, a backup is made, to this computer, and checked by reading it back\./);
+    assert.match(await page.$eval('#supply', (x) => x.innerText), /The Onyx Boox Note Air’s emergency programmer\s+Not chosen yet/i);
+    assert.ok(await page.$eval('#choices', (d) => d.open), 'a replaced system leaves the choices folded');
+    assert.match(await page.$eval('#choices > summary', (x) => x.textContent), /Change the choices · Don't keep Android · With a backup/);
+    assert.ok(!(await page.$eval('#ifwrong', (d) => d.open)), 'the steps’ escapes are folded');
+    assert.match(await page.$eval('#confirm', (a) => a.getAttribute('href')), /^#\/supply\?/);
+    // no file needed: straight to Confirm, the choices folded
+    await go(page, '#/plan?plan=pc-windows-keep');
+    assert.strictEqual(await page.$('#supply'), null);
+    assert.ok(!(await page.$eval('#choices', (d) => d.open)));
+    assert.match(await page.$eval('#short', (x) => x.innerText), /Windows: keep it\. It still starts/);
+    await go(page, '#/plan?plan=pc-two-disks-first');
+    assert.match(await page.$eval('#confirm', (a) => a.getAttribute('href')), /^#\/confirm\?/);
+    // backup off: no file, the danger box, the choices open
+    await go(page, '#/plan?plan=noteair-no-backup');
+    assert.strictEqual(await page.$('#supply'), null);
+    assert.ok(await page.$('#backup-off'));
+    assert.ok(await page.$eval('#choices', (d) => d.open));
+    // the emergency cable is asked under What you need
+    await go(page, '#/plan?plan=noteair-keep-stock');
+    assert.ok(await page.$('#need input[name="hw-emergency-cable"]'));
+  });
+
+  await test('supply: the guide is the description’s, with the name to copy, and names no site', async () => {
+    await forget();
+    const origin = new URL(base).origin;
+    await browser.defaultBrowserContext().overridePermissions(origin, ['clipboard-read', 'clipboard-write', 'clipboard-sanitized-write']);
+    await go(page, '#/supply?plan=noteair-no-stock-developer');
+    const t = await page.evaluate(() => document.body.innerText);
+    for (const k of ['what', 'why', 'recognise']) assert.ok(t.includes(descText(k).replace(/'/g, '’')) || t.includes(descText(k)), `the description’s ${k} isn’t shown`);
+    assert.match(await page.$eval('#name pre', (x) => x.textContent), /^000cc0e100000000_7be49b72f9e43372_$/);
+    assert.match(await page.$eval('#matches', (x) => x.innerText), /Chip\s+000cc0e1[\s\S]*Signing key\s+7be49b72f9e4337223ccb84d6eccca4e61ce16e3602ac2008cb18b75babe6d09/);
+    // SC-002: no link but the installer's own screens, no address, nothing to search with
+    for (const href of await page.$$eval('a', (xs) => xs.map((x) => x.getAttribute('href')))) assert.match(href, /^#\//, `a link to ${href}`);
+    assert.ok(!/https?:|www\.|\.com\b|\.org\b/.test(t), 'names a site');
+    assert.strictEqual(await page.$('input[type="search"], form'), null);
+    await page.bringToFront();
+    await page.click('#copy');
+    await page.waitForFunction(() => /^(Copied|Selected: copy it)$/.test(document.querySelector('#copy').textContent), { timeout: 5000 });
+    if ((await page.$eval('#copy', (x) => x.textContent)) === 'Copied') assert.strictEqual(await page.evaluate(() => navigator.clipboard.readText()), '000cc0e100000000_7be49b72f9e43372_');
+    assert.deepStrictEqual(problems, []);
+  });
+
+  await test('supply: each verdict of the core, as the core gave it', async () => {
+    const the = 'the Onyx Boox Note Air';
+    // known: on to Confirm at once
+    await forget();
+    await go(page, '#/supply?plan=noteair-no-stock-developer');
+    await pickFile('known');
+    let t = await page.evaluate(() => document.body.innerText);
+    assert.match(t, /A known emergency programmer/);
+    assert.match(t, /in development/, 'a file seen working only in development is said so');
+    assert.ok(t.includes(supplied('known').sha256.match(/.{8}/g).join(' ')), 'the checksum isn’t the record’s');
+    assert.match(await page.$eval('#use', (a) => a.getAttribute('href')), /^#\/confirm\?/);
+    // fits-unknown: what the file names, and nothing until the box is ticked
+    await pickFile('fits-unknown');
+    assert.ok(await page.$eval('#use', (b) => b.tagName === 'BUTTON' && b.disabled), 'usable before the warning is confirmed');
+    t = await page.$eval('#unknown', (x) => x.innerText);
+    assert.match(t, /runs programs signed with test keys/);
+    assert.match(t, /Chip\s+000cc0e1\s+000cc0e1\s+The same/);
+    assert.match(t, new RegExp(`Signing key\\s+${supplied('fits-unknown').values.pk_hash.slice(0, 16)}…\\s+7be49b72f9e43372…\\s+Differs`));
+    await page.click('#trust');
+    await page.waitForFunction(() => document.querySelector('#use').tagName === 'A', { timeout: 5000 });
+    // the confirmation is the file's: a new file asks again
+    const input = await page.$('#file-input');
+    await input.uploadFile(path.join(FILES, 'fits-unknown.bin'));
+    await page.waitForFunction(() => document.querySelector('#use').tagName === 'BUTTON' && !document.querySelector('#trust').checked, { timeout: 5000 });
+    // wrong chip or key: never usable
+    await pickFile('wrong-chip-or-key');
+    t = await page.$eval('#wrong', (x) => x.innerText);
+    assert.match(t, /The device reports/i);
+    assert.match(t, /Chip\s+0014d0e1\s+000cc0e1\s+0014d0e1/);
+    assert.strictEqual(await page.$('#use'), null);
+    // known not to work: the description's reason
+    await pickFile('known-bad');
+    assert.ok((await page.$eval('#known-bad', (x) => x.innerText)).includes(supplied('known-bad').reason));
+    assert.match(await page.evaluate(() => document.body.innerText), new RegExp(`doesn’t work on ${the}`));
+    assert.strictEqual(await page.$('#use'), null);
+    // not a programmer at all
+    await pickFile('not-a-programmer');
+    await unfold();
+    assert.match(await page.$eval('#not-programmer', (x) => x.innerText), /Not an emergency programmer[\s\S]*Not an ELF file\./);
+    assert.strictEqual(await page.$('#use'), null);
+    // a file refused gates Confirm, and Plan says it doesn't fit
+    await go(page, '#/confirm?plan=noteair-no-stock-developer');
+    assert.match(await page.$eval('#supplied', (x) => x.innerText), /never sent/);
+    assert.ok(await page.$eval('#install', (b) => b.tagName === 'BUTTON' && b.disabled));
+    await go(page, '#/plan?plan=noteair-no-stock-developer');
+    assert.match(await page.$eval('#supply', (x) => x.innerText), /Chosen, doesn’t fit/i);
+    // with no file at all, Confirm can't go on either
+    await forget();
+    await go(page, '#/confirm?plan=noteair-no-stock-developer');
+    assert.match(await page.$eval('#supplied', (x) => x.innerText), /Not chosen yet/);
+    assert.ok(await page.$eval('#install', (b) => b.tagName === 'BUTTON' && b.disabled));
+    assert.deepStrictEqual(problems, []);
+  });
+
+  await test('supply: without the file, two ways on', async () => {
+    await go(page, '#/supply?plan=noteair-no-stock-developer&state=nofile');
+    const t = await page.$eval('#nofile', (x) => x.innerText);
+    assert.ok(t.includes(plans['noteair-no-stock-developer'].backup.consequence));
+    assert.match(await page.$eval('#no-backup', (a) => a.getAttribute('href')), /^#\/plan\?.*choice\.backup=off/);
+    assert.match(await page.$eval('#found', (a) => a.getAttribute('href')), /^#\/supply\?/);
+  });
+
+  await test('backup refused: the programmer didn’t work, and how the device gets out', async () => {
+    await go(page, '#/backup?plan=noteair-no-stock-developer&state=refused');
+    const t = await page.$eval('#refused', (x) => x.innerText);
+    assert.match(t, /didn’t accept the programmer, or the programmer didn’t answer the installer\. Nothing was read/);
+    assert.match(t, /Hold the power button for about 10 seconds/, 'the way out isn’t the description’s');
+    assert.match(await page.$eval('#another-file', (a) => a.getAttribute('href')), /^#\/supply\?/);
+    // only where the backup needs a supplied file
+    await go(page, '#/backup?plan=pc-windows-keep&state=refused');
+    assert.strictEqual(await page.$('#refused'), null);
   });
 
   await page.close();

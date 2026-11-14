@@ -7,6 +7,7 @@
 //   choice.<id>=<value>        a plan choice; hardware.<id>=yes|no; developer=1
 //   plan=<golden>              shorthand for the machine and input of a plan golden file (fixtures)
 //   state=, at=, pct=          which moment of a screen (the screens after Confirm have no record yet)
+// A file the person picked (Supply) is never in the address: it lives in this page's memory.
 //   voice=, scheme=, pen=      the Interleaf theme; live=1: started in the PC's live session
 // The page's own query (before the #) picks the records' source: ?fixtures=1 the core's test
 // records, else the core itself, in the browser (records/index.js).
@@ -20,6 +21,7 @@ import { Start } from './screens/start.js';
 import { Reach } from './screens/reach.js';
 import { Check } from './screens/check.js';
 import { Plan } from './screens/plan.js';
+import { Supply } from './screens/supply.js';
 import { Confirm } from './screens/confirm.js';
 import { Backup } from './screens/backup.js';
 import { Install } from './screens/install.js';
@@ -28,7 +30,7 @@ import { Resume } from './screens/resume.js';
 import { Installed } from './screens/installed.js';
 import { Done } from './screens/done.js';
 
-export const SCREENS = { start: Start, reach: Reach, check: Check, plan: Plan, confirm: Confirm, backup: Backup, install: Install, verify: Verify, resume: Resume, installed: Installed, done: Done };
+export const SCREENS = { start: Start, reach: Reach, check: Check, plan: Plan, supply: Supply, confirm: Confirm, backup: Backup, install: Install, verify: Verify, resume: Resume, installed: Installed, done: Done };
 const CARRIED = ['voice', 'scheme', 'pen', 'live'];
 
 function parse() {
@@ -88,6 +90,11 @@ async function openSession(route, q) {
   s.device = records.device;
   s.restart = records.restart;
   s.onDevice = records.onDevice;
+  // A file the person supplies (spec 004): checked by the core, kept in this page's memory only.
+  s.suppliedCheck = records.suppliedCheck;
+  s.supplied = records.supplied;
+  s.keepSupplied = records.keepSupplied;
+  s.forgetSupplied = records.forgetSupplied;
   s.param = (k, d) => (q.get(k) === null ? d : q.get(k));
   s.num = (k, d) => (q.get(k) === null || !/^\d+$/.test(q.get(k)) ? d : Number(q.get(k)));
   s.live = q.get('live') === '1';

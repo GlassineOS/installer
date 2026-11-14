@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Back up: what the plan backs up, saved and then read back, part by part.
-// state: saving | verifying | verified | failed; at: the item being saved or read (0-based);
-// pct. There is no record of a running backup yet: these show the plan's items at that moment.
+// state: saving | verifying | verified | failed | refused; at: the item being saved or read
+// (0-based); pct. There is no record of a running backup yet: these show the plan's items at that
+// moment. refused: the device didn't accept the file the person supplied, or it didn't answer
+// (spec 004 FR-006): nothing was read. It applies only where the backup needs such a file.
 
 import { html, Admonition, Actions, Page, Tick } from '../lib/parts.js';
-import { backupView } from '../lib/model.js';
+import { backupView, suppliedFor, escapeWords } from '../lib/model.js';
 import { BOOT_SETTING, human, cap } from '../lib/words.js';
 
 // One item per disk image, then the boot settings kept outside the disks, then the values unique
@@ -20,7 +22,8 @@ export function backupItems(s) {
 export function Backup({ s, state }) {
   const p = s.plan;
   if (!p) return html`<${Page} s=${s} step="backup" eyebrow="Back up" title="No plan"><p><a class="il-link" href=${s.link('plan')}>Back to the plan</a></p></${Page}>`;
-  const st = ['saving', 'verifying', 'verified', 'failed'].includes(state) ? state : 'saving';
+  const need = suppliedFor(s);
+  const st = ['saving', 'verifying', 'verified', 'failed'].includes(state) || (state === 'refused' && need) ? state : 'saving';
   const b = backupView(s);
   const items = backupItems(s), n = items.length;
   const at = st === 'verified' ? n : Math.min(s.num('at', Math.floor(n / 2)), n - 1);
@@ -30,6 +33,7 @@ export function Backup({ s, state }) {
   const unchanged = pc ? 'Nothing on the PC has changed; it starts as before.' : 'Nothing on the device has changed; it starts its system as before.';
   const total = b.on ? b.total : 'No disk image';
   const rows = items.map((it, i) => {
+    if (st === 'refused') return { ...it, status: 'Not read', cls: 'ins-yn ins-yn--no', tagCls: 'ins-tag ins-tag--soft' };
     if (st === 'failed' && i === at) return { ...it, status: 'Didn’t fit', cls: 'ins-yn ins-yn--no', tagCls: 'ins-tag ins-tag--heavy' };
     if (i < at) return { ...it, status: reading ? 'Read back · matches' : 'Saved', cls: 'ins-yn ins-yn--yes', tick: true, tagCls: 'ins-tag' };
     if (i === at) return { ...it, status: reading ? 'Reading back' : 'Saving', cls: 'ins-yn ins-yn--wait', bar: true, tagCls: 'ins-tag ins-tag--heavy' };
@@ -40,11 +44,18 @@ export function Backup({ s, state }) {
     verifying: ['Back up · checking the copy', 'Reading the backup back', `Each part is read back from the backup and compared with ${s.m.the}, before anything is written.`],
     verified: ['Back up · done', b.on ? 'The backup is complete' : 'Read and checked', `It reads back the same as ${s.m.the}.`],
     failed: ['Back up · stopped, nothing was written', 'The backup doesn’t fit', 'The installation didn’t start.'],
+    refused: ['Back up · stopped, nothing was read', need ? `The ${need.short} didn’t work` : '', 'The installation didn’t start.'],
   }[st];
+  // How the device leaves the mode the file runs in: the back-up step's own escape.
+  const leave = need ? escapeWords(s, need.step.on_failure, p.steps.indexOf(need.step)) : '';
   return html`<${Page} s=${s} step="backup" eyebrow=${T[0]} title=${T[1]} lead=${T[2]}>
     ${st === 'failed' ? html`<${Admonition} kind="warning" seal="G" label="The installation didn’t start" title="There isn’t room for the backup there" id="failed">
       <p>The place is full, or its disk was removed. Without a backup that reads back, the installer writes nothing.</p>
       <p><strong>Way out:</strong> ${unchanged} Choose another place with ${total} free, such as an external disk, and back up again, or go back to the plan and install without a backup.</p>
+    </${Admonition}>` : null}
+    ${st === 'refused' ? html`<${Admonition} kind="warning" seal="G" label="The installation didn’t start" title=${`The file didn’t work on ${s.m.the}`} id="refused">
+      <p>${cap(s.m.the)} didn’t accept the ${need.short}, or the ${need.short} didn’t answer the installer. Nothing was read, and nothing on ${s.m.the} was changed.</p>
+      <p><strong>Way out:</strong> ${leave} Then choose another file and back up again, or go back to the plan and choose to install without a backup.</p>
     </${Admonition}>` : null}
     <div class="ins-card" id="backup-target">
       <span class="il-label">The backup goes to</span>
@@ -59,7 +70,7 @@ export function Backup({ s, state }) {
       <p>Every part reads back the same as on ${s.m.the}. The installation starts now.</p>
     </div>` : null}
     <section class="ins-stack">
-      <h2 class="ins-h2">${reading ? 'Read back, part by part' : 'Saved, part by part'}</h2>
+      <h2 class="ins-h2">${st === 'refused' ? 'The parts the backup reads' : reading ? 'Read back, part by part' : 'Saved, part by part'}</h2>
       ${!n ? html`<p class="ins-small" id="backup-nothing">Nothing to read: the backup is off, and the plan names nothing outside the disks to keep.</p>` : null}
       <ul class="ins-items">${rows.map((it) => html`<li>
         <span class=${it.cls + ' ins-yn--small'} aria-hidden="true">${it.tick ? html`<${Tick} size=${12} />` : null}</span>
@@ -72,13 +83,17 @@ export function Backup({ s, state }) {
       </details>
     </section>
     <${Actions}
-      next=${st === 'failed' ? 'Nothing, until there is a backup that reads back.' : st === 'verified' ? 'The installation starts with step 2.' : 'When every part reads back, the installation starts by itself.'}
-      out=${st === 'failed' ? 'Stop here. ' + unchanged : 'Stop now. ' + unchanged + ' The backup stays where it is.'}
-      buttons=${st === 'failed'
+      next=${st === 'refused' ? `Nothing, until ${articleOf(need.short)} ${need.short} works on ${s.m.the}.` : st === 'failed' ? 'Nothing, until there is a backup that reads back.' : st === 'verified' ? 'The installation starts with step 2.' : 'When every part reads back, the installation starts by itself.'}
+      out=${st === 'failed' || st === 'refused' ? 'Stop here. ' + unchanged : 'Stop now. ' + unchanged + ' The backup stays where it is.'}
+      buttons=${st === 'refused'
+        ? [{ label: 'Choose another file', href: s.link('supply'), primary: true, id: 'another-file' }, { label: 'Back to the plan', href: s.link('plan') }, { label: 'Stop here', href: s.link('start'), push: true }]
+        : st === 'failed'
         ? [{ label: 'Choose another place', href: s.link('confirm'), primary: true }, { label: 'Back to the plan', href: s.link('plan') }, { label: 'Stop here', href: s.link('start'), push: true }]
         : st === 'verified' ? [{ label: 'Continue', href: s.link('install', { state: p.steps.some((x) => x.point_of_no_return) ? 'ponr' : 'midway' }), primary: true }]
         : [{ label: 'Stop', href: s.link('start') }]} />
   </${Page}>`;
 }
+
+const articleOf = (w) => (/^[aeiou]/.test(w) ? 'an' : 'a');
 
 export { cap };
