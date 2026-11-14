@@ -32,10 +32,29 @@ answers nothing else once the session is closed). Only with the device owner's g
 <textarea id="facts" spellcheck="false" placeholder="facts snapshot JSON: inspect, or paste one"></textarea>
 <h2>Plan answers</h2>
 <textarea id="answers" spellcheck="false">{"choices": {}, "hardware": {}, "developer": false}</textarea>
+<h2>Emergency read</h2>
+<p>Reads the device in its emergency download mode (USB 05c6:9008) through the programmer you
+pick, into a new folder inside the folder you pick, as the Back up screen does but without a plan.
+Read-only. A programmer that isn't known is sent only with the box ticked. Only with the device
+owner's go.</p>
+<p>
+  <label>Device <input id="er-device" value="onyx-noteair" size="14"></label>
+  <label>File <input id="er-file" value="emergency-programmer" size="20"></label>
+  <label>Scope <select id="er-scope"><option>boot-areas</option><option>partitions:devinfo</option><option>whole-disk</option></select></label>
+  <label><input type="checkbox" id="er-unknown"> send an unknown programmer</label>
+</p>
+<p>
+  <input type="file" id="er-programmer">
+  <button id="er-folder">Choose the folder</button>
+  <button id="er-start" disabled>Start</button>
+  <button id="er-stop" disabled>Stop</button>
+</p>
+<pre id="er-progress"></pre>
 <h2>Record</h2>
 <pre id="out"></pre>
 <script type="module">
-  import init, { inspect, check, plan } from "../pkg/glassine_installer_web.js";
+  import init, { inspect, check, plan, emergency_read } from "../pkg/glassine_installer_web.js";
+  import { pickFolder, folderName, newFolder, folderStore } from "../lib/store.js";
   await init();
   const $ = (id) => document.getElementById(id);
   const show = (text, ms) => {
@@ -70,6 +89,44 @@ answers nothing else once the session is closed). Only with the device owner's g
     const [r, ms] = await run(() => plan($("facts").value, $("answers").value));
     if (r) show(r, ms);
   };
+  let folder = null, store = null;
+  const erReady = () => { $("er-start").disabled = !(folder && $("er-programmer").files.length) || !!store; };
+  $("er-programmer").onchange = erReady;
+  $("er-folder").onclick = async () => {
+    try { folder = await pickFolder(); } catch (e) { show(String(e)); }
+    erReady();
+  };
+  $("er-start").onclick = async () => {
+    const bytes = new Uint8Array(await $("er-programmer").files[0].arrayBuffer());
+    const device = $("er-device").value, t0 = performance.now();
+    const lines = [];
+    const at = {};
+    const progress = () => {
+      const s = (performance.now() - t0) / 1000;
+      const imgs = Object.entries(at).map(([n, v]) => `${n}: ${v.phase} ${(v.done / 1048576).toFixed(1)} MiB${v.size ? ` of ${(v.size / 1048576).toFixed(1)}` : ""}, ${(v.done / 1e6 / Math.max(s - v.t, 0.001)).toFixed(2)} MB/s`);
+      $("er-progress").textContent = `${s.toFixed(1)} s\n` + imgs.concat(lines.slice(-20)).join("\n");
+    };
+    const on = (ev) => {
+      const s = (performance.now() - t0) / 1000;
+      if (ev.kind === "begin") at[ev.name] = { phase: "saving", done: 0, size: null, t: s };
+      else if (ev.kind === "saved" && at[ev.name]) Object.assign(at[ev.name], { done: ev.done, size: ev.size });
+      else if (ev.kind === "checking" && at[ev.name]) Object.assign(at[ev.name], { phase: "checking", done: ev.done, t: at[ev.name].t });
+      else if (ev.kind === "kept" || ev.kind === "incomplete") { if (at[ev.name]) at[ev.name].phase = ev.kind; lines.push(`${ev.name}: ${ev.kind} as ${ev.file}`); }
+      else if (ev.kind === "note") lines.push(ev.line);
+      else if (ev.kind === "manifest") lines.push("manifest stored");
+      progress();
+    };
+    const name = folderName(device);
+    store = folderStore(() => newFolder(folder, name), on);
+    $("er-start").disabled = true; $("er-stop").disabled = false;
+    const leave = (e) => { e.preventDefault(); e.returnValue = ""; };
+    addEventListener("beforeunload", leave);
+    const [r, ms] = await run(() => emergency_read(device, $("er-file").value, bytes, $("er-unknown").checked, $("er-scope").value, store));
+    removeEventListener("beforeunload", leave);
+    if (r) show(r, ms);
+    store = null; $("er-stop").disabled = true; erReady();
+  };
+  $("er-stop").onclick = () => { if (store) { store.stop(); $("er-stop").disabled = true; } };
 </script>
 </body>
 </html>
