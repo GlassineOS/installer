@@ -15,3 +15,6 @@ nusb = "0.2"
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
+# The device object the page asks for itself, handed to nusb (its WebUSB
+# bindings are unstable: .cargo/config.toml sets web_sys_unstable_apis).
+web-sys = { version = "0.3", features = ["UsbDevice"] }

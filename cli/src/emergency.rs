@@ -56,11 +56,13 @@ fn open_message(e: usb::OpenError) -> String {
         }
         usb::OpenError::Busy(e) => format!(
             "the device's emergency download interface is busy ({e}); close other programs that use it \
-             (edl, QFIL, a browser tab; on Linux ModemManager can hold its serial port) and try again"
+             (edl, QFIL, a browser tab) and try again; on Linux ModemManager may probe it until this computer \
+             is set up once: sudo glassine-install host-setup"
         ),
         usb::OpenError::Permission(e) => format!(
-            "not allowed to open the device ({e}): on Linux a udev rule for 05c6:9008 (or root) gives access; \
-             on Windows the device needs the WinUSB driver (install it with Zadig)"
+            "not allowed to open the device ({e}): on Linux set this computer up once with \
+             sudo glassine-install host-setup (or run this as root); on Windows the device needs the WinUSB \
+             driver (glassine-install host-setup says how)"
         ),
         usb::OpenError::Usb(e) => format!("usb: {e}"),
     }

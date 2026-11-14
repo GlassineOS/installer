@@ -90,6 +90,34 @@ export const MODE = {
   installer: 'The installer',
 };
 
+// When the browser couldn't open or claim a device's USB mode (the core's error kinds permission
+// and busy; lib/host.js): why, and the host setup that is the way out (core/src/host_setup.rs).
+// busyHeld: Linux, for a mode a kernel driver takes as soon as it appears (its record entry
+// names the driver the setup lets go of).
+export const HOST_ACCESS = {
+  cause: {
+    permission: 'This computer didn’t let the browser open the device.',
+    busy: 'Something on this computer holds the device, so the browser couldn’t take it.',
+  },
+  linux: {
+    permission: 'On Linux only root may open a device in this mode until the computer is set up for it.',
+    busy: 'Close any other program or browser tab that uses the device, unplug it, plug it in again, and choose it again.',
+    busyHeld: 'In this mode that is most likely the system’s own serial driver: it takes the device as soon as it is connected, and a browser can’t take it back (another program or browser tab using it does the same: close it).',
+    setup: (held) => `Set this computer up once: open a terminal, paste this line and press Enter. It asks for your password. Afterwards you can open the device in each of its USB modes without being root${held ? ', the modem manager leaves it alone, and the serial driver lets go of it' : ' and the modem manager leaves it alone'}.`,
+    label: 'One line for a terminal',
+    shows: (path) => `What it writes: ${path}`,
+    after: 'Then unplug the device, plug it in again, and choose it again.',
+  },
+  windows: {
+    setup: (ids) => `On Windows the device needs the WinUSB driver in this mode, installed once with Zadig: in its Options menu choose List All Devices, pick the device whose USB ID is ${list(ids)}, choose WinUSB and click Install Driver (or Replace Driver).`,
+    after: 'Then unplug the device, plug it in again, and choose it again.',
+  },
+  other: 'Close any other program or browser tab that uses the device, unplug it, plug it in again, and choose it again.',
+  copy: 'Copy',
+  copied: 'Copied',
+  selected: 'Selected: copy it',
+};
+
 // The partition an artifact role goes to, for a least size the release states
 // (plan space.minimums[].role; vocab ARTIFACT_ROLES).
 export const PARTITION_FOR = {

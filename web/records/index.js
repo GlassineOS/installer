@@ -5,6 +5,9 @@
 //   inspect(machine)          -> the check report of that machine
 //   plan(machine, input)      -> the dry-run plan for that input, or null when there is none
 //   description(id)           -> { id, name, backend, texts } of a device description, or null
+//   hostSetup()               -> what a computer needs once to reach the descriptions' USB modes
+//                                (host_setup_format 1): the screens' way out when the browser
+//                                couldn't open or claim a device
 //   connect(kind)             -> the machine "connecting" gives at once, or null (a live device)
 //   connectDevice()           -> a live device: the browser's chooser, then the core's inspect
 //   device()                  -> the live device's session: { machine, state, error }, or null
@@ -50,7 +53,8 @@
 //
 // - Fixtures (?fixtures=1, for the screen tests): `machine` names a facts snapshot of the
 //   core's tests (core/tests/fixtures/facts/), and the records are the core's own output for
-//   it: the plan golden files (core/tests/golden/*.json, written by core/tests/plan.rs) and the
+//   it: the plan golden files (core/tests/golden/*.json, written by core/tests/plan.rs), the host
+//   setup record (web/fixtures/host-setup.json, written by core/tests/host_setup.rs) and the
 //   check reports of web/fixtures/reports/ (written by `make web-records`, checked against the
 //   program by `make descriptions`). A picked file is answered with the record of the core's
 //   tests (web/fixtures/supplied/, written by core/tests/supplied.rs) whose file has the same
@@ -295,6 +299,12 @@ export async function description(id) {
 
 // The test records of web/fixtures/supplied/: one per verdict, and a wrong key where the boot ROM
 // enforces it (no device report).
+// What a computer needs once to reach the descriptions' USB modes: the core's record.
+export async function hostSetup() {
+  if (FIXTURES) return load(at('../fixtures/host-setup.json'), 'json');
+  return JSON.parse((await wasm()).host_setup());
+}
+
 export const SUPPLIED_RECORDS = ['known', 'fits-unknown', 'wrong-chip-or-key', 'wrong-key-enforced', 'known-bad', 'not-a-programmer'];
 
 const hexOf = (buf) => [...new Uint8Array(buf)].map((x) => x.toString(16).padStart(2, '0')).join('');

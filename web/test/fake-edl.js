@@ -18,8 +18,11 @@
 // (getstorageinfo answers the user area's numbers for a boot area, so the core searches its size,
 // and a read past a boot area's end gets no answer instead of a NAK), pauseAtRead (the nth read
 // of the user area is answered only at window.__fakeEdl.release(), so a test can act mid-run),
-// bootSectors. A bulk IN with nothing to read waits until there is (as a real one does), so a
-// transfer the page keeps after its own timeout gets the next answer.
+// bootSectors; held (a kernel driver holds the interface, as Linux's qcserial does: every
+// claimInterface is refused the way Chromium refuses it, NetworkError "Unable to claim
+// interface."), denied (the system doesn't let the browser open it: open() is refused with
+// Chromium's SecurityError "Access denied."). A bulk IN with nothing to read waits until there is
+// (as a real one does), so a transfer the page keeps after its own timeout gets the next answer.
 //
 // installFakeDir: window.showDirectoryPicker resolves with a folder that behaves as Chromium's
 // File System Access does where the test can tell: createWritable() writes to a swap and the bytes
@@ -31,7 +34,7 @@
 // its body.
 'use strict';
 
-function installFakeEdl({ refuse = false, hangAtRead = 0, pauseAtRead = 0, probeHangs = false, bootSectors = 64, programmerSize, pkHash }) {
+function installFakeEdl({ refuse = false, hangAtRead = 0, pauseAtRead = 0, probeHangs = false, bootSectors = 64, held = false, denied = false, programmerSize, pkHash }) {
   const SECTOR = 512, SECTORS = 16384, ID = 0x0d;
   const enc = new TextEncoder(), dec = new TextDecoder();
   const le = (v, at, x, n) => { for (let i = 0; i < n; i++) { v[at + i] = Number(BigInt.asUintN(64, BigInt(x)) >> BigInt(8 * i) & 0xffn); } };
@@ -170,9 +173,17 @@ function installFakeEdl({ refuse = false, hangAtRead = 0, pauseAtRead = 0, probe
     usbVersionMajor: 2, usbVersionMinor: 0, usbVersionSubminor: 0,
     manufacturerName: 'Qualcomm CDMA Technologies MSM', productName: 'QUSB__BULK', serialNumber: null,
     opened: false, configuration: config, configurations: [config],
-    async open() { called('open'); this.opened = true; },
+    async open() {
+      called('open');
+      if (denied) throw new DOMException('Access denied.', 'SecurityError');
+      this.opened = true;
+    },
     async close() { called('close'); this.opened = false; },
-    async claimInterface() { called('claimInterface'); iface.claimed = true; },
+    async claimInterface() {
+      called('claimInterface');
+      if (held) throw new DOMException('Unable to claim interface.', 'NetworkError');
+      iface.claimed = true;
+    },
     async releaseInterface() {
       called('releaseInterface');
       cancel(new DOMException('The transfer was cancelled.', 'AbortError'));

@@ -326,6 +326,7 @@ dependencies = [
  "js-sys",
  "nusb",
  "wasm-bindgen-futures",
+ "web-sys",
 ]
 
 [[package]]

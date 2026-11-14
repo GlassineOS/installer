@@ -5,7 +5,8 @@
 //! fastboot session, the only command besides getvar it can send; `check(facts)`
 //! a report (`report_format`), `plan(facts, input)` a plan (`plan_format`),
 //! `description(id)` the source of a shipped description (TOML), for the
-//! texts the screens show, `supplied_check(device, file, bytes, reported)` the
+//! texts the screens show, `host_setup()` what a computer needs once to reach
+//! the descriptions' USB modes (`host_setup_format`), `supplied_check(device, file, bytes, reported)` the
 //! check of a file the person picked for a mode (`supplied_check_format`),
 //! made in the page: the file's bytes never leave it.
 //! `emergency_read(device, file, bytes, accept_unknown, scope, store)` reads a
@@ -50,6 +51,15 @@ pub fn description_source(id: &str) -> Option<&'static str> {
         Loaded::Valid(d) => d.id == id,
         _ => false,
     })
+}
+
+/// The host setup record (`host_setup_format`) of the shipped descriptions:
+/// what a computer needs once to reach their USB modes, for the screens'
+/// way out when the browser couldn't open or claim a device.
+pub fn host_setup_record() -> String {
+    let ds = descriptions();
+    let refs: Vec<&Description> = ds.iter().collect();
+    serde_json::to_string(&glassine_installer::host_setup::record(&refs)).unwrap()
 }
 
 pub fn error(kind: &str, message: impl std::fmt::Display) -> String {
@@ -616,6 +626,12 @@ mod web {
         description_source(id).map(str::to_string)
     }
 
+    /// The host setup record; see `host_setup_record`.
+    #[wasm_bindgen]
+    pub fn host_setup() -> String {
+        host_setup_record()
+    }
+
     /// The check record of a file the person picked (a `Uint8Array`), made
     /// here in the page; see `supplied_record`.
     #[wasm_bindgen]
@@ -630,6 +646,17 @@ mod tests {
 
     fn fixture(name: &str) -> String {
         std::fs::read_to_string(format!("{}/../core/tests/fixtures/facts/{name}.json", env!("CARGO_MANIFEST_DIR"))).unwrap()
+    }
+
+    /// The page's host setup record is the one the screens' tests read
+    /// (web/fixtures/host-setup.json, written by core/tests/host_setup.rs).
+    #[test]
+    fn the_host_setup_record_is_the_screens_fixture() {
+        let got: Value = serde_json::from_str(&host_setup_record()).unwrap();
+        let want: Value =
+            serde_json::from_str(&std::fs::read_to_string(format!("{}/../web/fixtures/host-setup.json", env!("CARGO_MANIFEST_DIR"))).unwrap()).unwrap();
+        assert_eq!(got, want);
+        assert_eq!(got["host_setup_format"], 1);
     }
 
     #[test]
