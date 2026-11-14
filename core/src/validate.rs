@@ -480,6 +480,18 @@ fn check_supplied_files(ck: &mut Ck) {
                 strings.push((format!("{kp}.verified.boot_loader"), v.boot_loader.as_str()));
             }
         }
+        for (j, k) in f.known_bad.iter().enumerate() {
+            let kp = format!("{path}.known_bad[{j}]");
+            strings.push((format!("{kp}.sha256"), k.sha256.as_str()));
+            strings.push((format!("{kp}.reason"), k.reason.as_str()));
+            if let Some(u) = &k.untried {
+                strings.push((format!("{kp}.untried"), u.as_str()));
+            }
+            if let Some(v) = &k.verified {
+                strings.push((format!("{kp}.verified.record"), v.record.as_str()));
+                strings.push((format!("{kp}.verified.boot_loader"), v.boot_loader.as_str()));
+            }
+        }
         if let Some(u) = &f.signature.untried {
             strings.push((format!("{path}.signature.untried"), u.as_str()));
         }
@@ -503,6 +515,20 @@ fn check_supplied_files(ck: &mut Ck) {
         unique(ck, f.known.iter().map(|k| k.sha256.as_str()), &format!("{path}.known"), "sha256");
         for (j, k) in f.known.iter().enumerate() {
             check_tried(ck, &k.verified, &format!("{path}.known[{j}]"));
+        }
+        unique(ck, f.known_bad.iter().map(|k| k.sha256.as_str()), &format!("{path}.known_bad"), "sha256");
+        for (j, k) in f.known_bad.iter().enumerate() {
+            let kp = format!("{path}.known_bad[{j}]");
+            check_tried(ck, &k.verified, &kp);
+            if k.reason.trim().is_empty() {
+                ck.p(format!("{kp}.reason"), "is empty");
+            }
+            if let Some(why) = markup(&k.reason) {
+                ck.p(format!("{kp}.reason"), format!("plain text only, no markup ({why})"));
+            }
+            if f.known.iter().any(|g| g.sha256.eq_ignore_ascii_case(&k.sha256)) {
+                ck.p(format!("{kp}.sha256"), "is also in known: a checksum is either known to work or known not to");
+            }
         }
         check_tried(ck, &f.signature.verified, &format!("{path}.signature"));
 
@@ -545,7 +571,7 @@ fn check_supplied_files(ck: &mut Ck) {
 }
 
 /// The hashes a description may hold (format 3): a supplied file's known
-/// checksums and the values its route checks it against, and the boot ROM's
+/// and known-bad checksums and the values its route checks it against, and the boot ROM's
 /// key hash an identity signal or condition tests (FR-018b).
 fn allowed_hashes(d: &Description) -> BTreeSet<String> {
     let mut out = BTreeSet::new();
@@ -554,6 +580,7 @@ fn allowed_hashes(d: &Description) -> BTreeSet<String> {
     }
     for f in &d.supplied_files {
         out.extend(f.known.iter().map(|k| k.sha256.to_ascii_lowercase()));
+        out.extend(f.known_bad.iter().map(|k| k.sha256.to_ascii_lowercase()));
         out.extend(f.matches.values().map(|v| v.to_ascii_lowercase()));
     }
     let keys: BTreeSet<&str> = vocab::SUPPLIED_MATCHES.iter().map(|m| m.fact_key).collect();

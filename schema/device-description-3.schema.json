@@ -2443,6 +2443,76 @@
             },
             "type": "array"
           },
+          "known_bad": {
+            "description": "the files known not to work on this device, by checksum (FR-023a)",
+            "items": {
+              "additionalProperties": false,
+              "allOf": [
+                {
+                  "oneOf": [
+                    {
+                      "required": [
+                        "verified"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "untried"
+                      ]
+                    }
+                  ]
+                }
+              ],
+              "description": "a file seen not working on this device; it is never sent (004 FR-004)",
+              "properties": {
+                "reason": {
+                  "description": "what goes wrong with it, in plain words shown to the person",
+                  "type": "string"
+                },
+                "sha256": {
+                  "description": "its SHA-256, lower-case hex",
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                "untried": {
+                  "description": "not tried on real hardware yet: why, or what is missing",
+                  "type": "string"
+                },
+                "verified": {
+                  "additionalProperties": false,
+                  "description": "a recorded run on real hardware (FR-023a)",
+                  "properties": {
+                    "boot_loader": {
+                      "description": "the boot loader the run was made on",
+                      "type": "string"
+                    },
+                    "record": {
+                      "description": "the record: owner/repo#number, or a page on docs.glassine.org",
+                      "pattern": "^([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[0-9]+|https://docs\\.glassine\\.org/[A-Za-z0-9_./#-]*)$",
+                      "type": "string"
+                    },
+                    "state": {
+                      "description": "the install state the run was made in",
+                      "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "record",
+                    "state",
+                    "boot_loader"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "sha256",
+                "reason"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
           "matches": {
             "additionalProperties": {
               "type": "string"
