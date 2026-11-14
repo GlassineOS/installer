@@ -582,23 +582,23 @@ async function main() {
     await page.close();
   });
 
-  await test('a programmer that hangs on a read past a boot area’s end: the 5 s probe wait ends the run, the user area kept', async () => {
+  await test('a programmer that hangs on a read past a boot area’s end: the Note Air never searches, the boot areas getstorageinfo doesn’t size aren’t read', async () => {
     const { page, problems } = await open({ vars: answers('noteair-stock-fastboot') }, { edl: edlOpts({ probeHangs: true }), dir: {} });
     await toBackup(page);
     await page.click('#start-backup');
-    await page.waitForFunction(() => window.__fakeEdl.hung, { timeout: 60000 });
-    await page.waitForSelector('#failed-run', { timeout: 30000 });
-    const waited = await page.evaluate(() => Date.now() - window.__fakeEdl.hungAt);
-    assert.ok(waited < 9000, `the probe waited ${waited} ms: the transfer bound, not the 5 s probe wait`);
+    await page.waitForSelector('#backup-done', { timeout: 60000 });
+    assert.ok(!(await page.evaluate(() => window.__fakeEdl.hung)), 'a read went past a boot area’s end');
     const run = await records(page, 'backupRun', 'live-1');
-    assert.deepStrictEqual([run.record.outcome, run.record.error], ['failed', 'probe-hangs']);
+    assert.deepStrictEqual([run.record.outcome, run.record.restart], ['done', 'done']);
     const names = files(await tree(page));
     const folder = names[0].split('/')[0];
     assert.deepStrictEqual(names.map((n) => n.slice(folder.length + 1)), ['emmc-user.img.gz', 'manifest.json']);
     const manifest = JSON.parse(Buffer.from(await page.evaluate((p) => window.__fakeDir.bytes(p), `${folder}/manifest.json`), 'base64').toString());
     assert.deepStrictEqual(manifest.disks.map((d) => d.name), ['emmc-user']);
-    assert.ok(manifest.not_read.some((k) => k.name === 'emmc-boot1'), 'the manifest doesn’t say emmc-boot1 wasn’t read');
-    readsOnly(await edlLog(page));
+    assert.deepStrictEqual(manifest.not_read.map((k) => k.name), ['emmc-boot1', 'emmc-boot2']);
+    assert.ok(manifest.not_read.every((k) => /hangs on a read past the end/.test(k.why)), 'the manifest doesn’t say why');
+    const reads = readsOnly(await edlLog(page)).filter(({ xml: x }) => x.cmd === 'read');
+    assert.ok(reads.length > 0 && reads.every(({ xml: x }) => x.attrs.physical_partition_number === '0'), 'a boot area was read');
     assert.deepStrictEqual(problems, []);
     await page.close();
   });

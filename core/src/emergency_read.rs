@@ -18,7 +18,11 @@
 //!    size is noted with where it came from: `getstorageinfo`, a GPT header,
 //!    or the single-sector search, whose every read is bounded by
 //!    [`PROBE_WAIT`] (a programmer that hangs instead of refusing a read
-//!    past the end stops the run, and the device is still restarted).
+//!    past the end stops the run, and the device is still restarted). A
+//!    description whose emergency mode has the `sizes-reported-only`
+//!    departure ([`sizes_reported_only`]) never gets the search: its sizes
+//!    come only from `getstorageinfo` and the GPT, and an area neither sizes
+//!    isn't read (it is listed with why).
 //! 5. The images [`Scope`] asks for, each read twice range by range and
 //!    compared, then the stored copy read back (FR-008); a mismatch makes the
 //!    image incomplete. The whole disk (001 FR-009) is the user area and,
@@ -48,6 +52,7 @@ use crate::glassine_read::{self, Disk, DiskRecord};
 use crate::sahara::{self, DoneStatus, EmergencyFacts, Sahara, SaharaError};
 use crate::supplied::{self, Unsendable};
 use crate::table::{self, ReadAt, Table};
+use crate::vocab;
 use sha2::{Digest, Sha256};
 use std::fmt;
 use std::time::Duration;
@@ -563,6 +568,21 @@ pub async fn run_checked<T: Transport, E: AsyncImageEdge>(
     run_for(t, programmer, Some(expected), scope, opts, edge).await
 }
 
+/// Whether the emergency mode that runs the supplied file `file` has the
+/// `sizes-reported-only` departure (spec 002 FR-011): its programmer hangs on
+/// a read past the end of a physical partition, so no size is ever found by
+/// reading single sectors. [`run_checked`] honours it; a caller may ask
+/// first, to refuse [`Scope::BootAreaSizes`] before opening the device.
+pub fn sizes_reported_only(d: &Description, file: &str) -> bool {
+    d.modes
+        .iter()
+        .any(|m| m.kind == "emergency-download" && m.needs.as_deref() == Some(file) && m.departures.iter().any(|x| x.kind == vocab::SIZES_REPORTED_ONLY))
+}
+
+/// Why [`Scope::BootAreaSizes`] is refused for a description with the
+/// `sizes-reported-only` departure.
+pub const NO_SEARCH: &str = "this device's programmer hangs on a read past the end of a physical partition (its description's sizes-reported-only), so sizes are never searched for here; nothing was sent";
+
 /// [`run_checked`] without a description: only a chip this installer doesn't
 /// know is refused; the device's report isn't compared with anything. A
 /// route that has the description (the command line, the browser) uses
@@ -584,6 +604,10 @@ async fn run_for<T: Transport, E: AsyncImageEdge>(
         restart,
         manifest: None,
     };
+    let no_search = expected.is_some_and(|x| sizes_reported_only(x.description, x.file));
+    if no_search && *scope == Scope::BootAreaSizes {
+        return Err(fail(EmergencyError::Storage(NO_SEARCH.into()), Restart::NotPossible));
+    }
     let mut s = Sahara::connect(t).await.map_err(|e| fail(EmergencyError::BootRom(e), Restart::NotPossible))?;
     let facts: EmergencyFacts = sahara::emergency_info(&mut s)
         .await
@@ -660,7 +684,7 @@ async fn run_for<T: Transport, E: AsyncImageEdge>(
         }
     ));
     let mut found = Found::default();
-    let body = read_all(&mut fh, scope, opts, edge, &mut found).await;
+    let body = read_all(&mut fh, scope, opts, no_search, edge, &mut found).await;
     let Found {
         images,
         incomplete,
@@ -845,10 +869,14 @@ impl ReadAt for Tail<'_> {
 
 /// The GPT and the disk's size, and where the size came from: the primary
 /// at LBA 1 when it checks out, else the backup at the last LBA.
+/// With `no_search` (the `sizes-reported-only` departure) the disk's size for
+/// the backup comes only from `getstorageinfo`: no sector at a damaged
+/// header's backup LBA is read, nor any found by searching.
 async fn read_gpt<T: Transport, E: AsyncImageEdge>(
     fh: &mut Firehose<T>,
     sector: u32,
     storage: Option<&StorageInfo>,
+    no_search: bool,
     edge: &mut E,
 ) -> Result<(Table, u64, String), EmergencyError> {
     let s = sector as u64;
@@ -894,6 +922,11 @@ async fn read_gpt<T: Transport, E: AsyncImageEdge>(
     // GPT header is found there, else searched for.
     let (size, source) = match reported {
         Some(z) => (z, "getstorageinfo".to_string()),
+        None if no_search => {
+            return Err(EmergencyError::Storage(format!(
+                "{why}, and the disk's size isn't reported (getstorageinfo); this device's programmer hangs on a read past the end, so the backup GPT isn't looked for; nothing more is read"
+            )));
+        }
         None => {
             let mut hinted = None;
             if let Some(lba) = header.as_ref().map(|g| g.alternate_lba).filter(|l| *l > GPT_SECTORS && *l < PROBE_MAX)
@@ -959,7 +992,10 @@ async fn read_gpt<T: Transport, E: AsyncImageEdge>(
 /// last sector reads; else found by reading single sectors (which relies on
 /// a refusal past the end). With `search`, the facts are only noted beside
 /// the search's result, which is always taken (only a partition the
-/// programmer names RPMB is still never touched).
+/// programmer names RPMB is still never touched). With `no_search` (the
+/// `sizes-reported-only` departure) there is no search: an area whose size
+/// the facts don't give, or whose last sector doesn't read, isn't read, and
+/// nothing past the reported end is ever read.
 async fn boot_area_size<T: Transport>(
     fh: &mut Firehose<T>,
     physical: u32,
@@ -967,6 +1003,7 @@ async fn boot_area_size<T: Transport>(
     sector: u32,
     user: Option<&StorageInfo>,
     search: bool,
+    no_search: bool,
 ) -> Result<Result<(u64, String), String>, EmergencyError> {
     let s = sector as u64;
     let info = fh.storage_info(physical).await?;
@@ -976,18 +1013,31 @@ async fn boot_area_size<T: Transport>(
     if !search && info.as_ref().and_then(|i| i.total_blocks) == Some(0) {
         return Ok(Err("the programmer reports it empty: the device has none".into()));
     }
-    if sector_at(fh, name, physical, sector, 0).await?.is_none() {
-        return Ok(Err("the programmer refuses reading it: the device has none, or it isn't readable".into()));
-    }
     let blocks = info.as_ref().and_then(|i| i.total_blocks);
     let users = user.and_then(|u| u.total_blocks);
     // Facts equal to the user area's are the user area's, not this one's.
     let reported = blocks.filter(|n| *n > 0 && n.saturating_mul(s) <= BOOT_AREA_MAX && Some(*n) != users);
-    if !search
-        && let Some(n) = reported
-        && sector_at(fh, name, physical, sector, n - 1).await?.is_some()
-    {
-        return Ok(Ok((n * s, format!("getstorageinfo ({n} sectors; its last sector reads)"))));
+    const HANGS: &str = "this device's programmer hangs on a read past the end, so its size isn't searched for";
+    if no_search && reported.is_none() {
+        let said = match blocks {
+            None => "getstorageinfo reports no size for it".to_string(),
+            Some(b) if Some(b) == users => format!("getstorageinfo answers with the user area's {b} sectors"),
+            Some(b) => format!("getstorageinfo reports {b} sectors, more than an eMMC boot area has"),
+        };
+        return Ok(Err(format!("{said}; {HANGS}")));
+    }
+    if sector_at(fh, name, physical, sector, 0).await?.is_none() {
+        return Ok(Err("the programmer refuses reading it: the device has none, or it isn't readable".into()));
+    }
+    if !search && let Some(n) = reported {
+        if sector_at(fh, name, physical, sector, n - 1).await?.is_some() {
+            return Ok(Ok((n * s, format!("getstorageinfo ({n} sectors; its last sector reads)"))));
+        }
+        if no_search {
+            return Ok(Err(format!(
+                "getstorageinfo reports {n} sectors, but the programmer refuses the last of them; {HANGS}"
+            )));
+        }
     }
     let found = probe_end(fh, name, physical, sector, BOOT_AREA_MAX / s).await?;
     let said = found.said();
@@ -1019,6 +1069,7 @@ async fn read_all<T: Transport, E: AsyncImageEdge>(
     fh: &mut Firehose<T>,
     scope: &Scope,
     opts: Options,
+    no_search: bool,
     edge: &mut E,
     found: &mut Found,
 ) -> Result<Read, EmergencyError> {
@@ -1055,7 +1106,7 @@ async fn read_all<T: Transport, E: AsyncImageEdge>(
         }
     };
     let s = sector as u64;
-    let (t, disk_size, source) = read_gpt(fh, sector, storage.as_ref(), edge).await?;
+    let (t, disk_size, source) = read_gpt(fh, sector, storage.as_ref(), no_search, edge).await?;
     edge.note(&format!(
         "GPT: {} partitions, disk {} bytes ({} sectors of {sector})",
         t.entries.len(),
@@ -1118,7 +1169,7 @@ async fn read_all<T: Transport, E: AsyncImageEdge>(
             edge.note("finding the boot areas' sizes by reading single sectors, whatever getstorageinfo reports; nothing is stored");
         }
         for (physical, name) in BOOT_AREAS {
-            let size = match boot_area_size(fh, physical, name, sector, storage.as_ref(), search).await {
+            let size = match boot_area_size(fh, physical, name, sector, storage.as_ref(), search, no_search).await {
                 Ok(z) => z,
                 Err(e) => {
                     skipped.push(Skipped {

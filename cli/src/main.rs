@@ -84,8 +84,11 @@ its two boot areas when the device has them (emmc-boot1, emmc-boot2; RPMB never)
 first); a device that has neither ends the run with why. The size of each area is printed with
 where it came from: getstorageinfo, a GPT header, or the single-sector search (reads past the
 end must be refused; each search read waits at most 5 s, and one not answered ends the run).
---find-boot-area-sizes stores nothing: it reads the partition table and finds the boot areas'
-sizes by that search whatever getstorageinfo reports, printing both, then restarts the device.
+A device whose description says its programmer hangs on a read past the end
+(sizes-reported-only) never gets the search: an area getstorageinfo and the GPT don't size isn't
+read, and the manifest says why. --find-boot-area-sizes stores nothing: it reads the partition
+table and finds the boot areas' sizes by that search whatever getstorageinfo reports, printing
+both, then restarts the device; for such a device it is refused before anything is sent.
 Each image is read twice range by range, compared, stored as NAME.img.gz.partial, read back and
 checked, and only then renamed to NAME.img.gz; one that fails becomes NAME.img.gz.incomplete. manifest.json, written last, lists
 them; a run that stopped before it leaves no NAME.img.gz that wasn't checked. At the end the
