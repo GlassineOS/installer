@@ -23,7 +23,8 @@ pub const TIMEOUT: Duration = Duration::from_secs(10);
 const RESTART_BY_HAND: &str = "restart the device by hand: hold the power key ~10 s";
 
 /// The scope the options ask for: `--only-gpt`, `--partition NAME...`, or
-/// the whole user area; storing needs `--out`.
+/// the whole disk (the user area and the eMMC boot areas the device has);
+/// storing needs `--out`.
 pub fn scope(only_gpt: bool, partitions: &[String], out: Option<&str>) -> Result<Scope, String> {
     match (only_gpt, partitions.is_empty(), out) {
         (true, false, _) => Err("--only-gpt reads the partition table only; it doesn't go with --partition".into()),
@@ -44,7 +45,10 @@ impl ImageEdge for NoStore {
     fn write(&mut self, _: &[u8]) -> Result<(), String> {
         Err("nothing is stored with --only-gpt".into())
     }
-    fn end(&mut self, _: &Disk) -> Result<String, String> {
+    fn end(&mut self, _: &Disk) -> Result<(), String> {
+        Err("nothing is stored with --only-gpt".into())
+    }
+    fn keep(&mut self, _: &Disk) -> Result<String, String> {
         Err("nothing is stored with --only-gpt".into())
     }
     fn reopen(&mut self, _: &Disk) -> Result<(), String> {
