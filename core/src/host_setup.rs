@@ -126,9 +126,11 @@ ENV{DEVTYPE}==\"usb_device\", ENV{ID_USB_INTERFACES}==\"\", IMPORT{builtin}=\"us
         ));
         if let Some(drv) = &m.release_driver {
             // On its bind event, and on any later event while it is still
-            // bound (udevadm trigger after installing this file).
+            // bound (udevadm trigger after installing this file). The add and
+            // bind events both carry the driver, so the second finds it gone:
+            // the test keeps that from logging a failed command.
             out.push_str(&format!(
-                "ENV{{DEVTYPE}}==\"usb_interface\", DRIVER==\"{drv}\", ATTRS{{idVendor}}==\"{v}\", ATTRS{{idProduct}}==\"{p}\", RUN+=\"/bin/sh -c 'echo %k > /sys/bus/usb/drivers/{drv}/unbind'\"\n"
+                "ENV{{DEVTYPE}}==\"usb_interface\", DRIVER==\"{drv}\", ATTRS{{idVendor}}==\"{v}\", ATTRS{{idProduct}}==\"{p}\", RUN+=\"/bin/sh -c 'test ! -e /sys/bus/usb/drivers/{drv}/%k || echo %k > /sys/bus/usb/drivers/{drv}/unbind'\"\n"
             ));
         }
     }

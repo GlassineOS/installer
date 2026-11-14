@@ -78,7 +78,7 @@ fn only_the_emergency_mode_lets_go_of_qcserial() {
     assert_eq!(
         unbinds[0],
         format!(
-            "ENV{{DEVTYPE}}==\"usb_interface\", DRIVER==\"qcserial\", ATTRS{{idVendor}}==\"{}\", ATTRS{{idProduct}}==\"{}\", RUN+=\"/bin/sh -c 'echo %k > /sys/bus/usb/drivers/qcserial/unbind'\"",
+            "ENV{{DEVTYPE}}==\"usb_interface\", DRIVER==\"qcserial\", ATTRS{{idVendor}}==\"{}\", ATTRS{{idProduct}}==\"{}\", RUN+=\"/bin/sh -c 'test ! -e /sys/bus/usb/drivers/qcserial/%k || echo %k > /sys/bus/usb/drivers/qcserial/unbind'\"",
             u.vendor_id, u.product_id
         )
     );
