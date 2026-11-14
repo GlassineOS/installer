@@ -10,6 +10,7 @@
 
 use glassine_installer::emergency_read::{self, Done, EmergencyError, Failure, ImageEdge, Options, Restart, Scope};
 use glassine_installer::fastboot::{FbError, Transport};
+use glassine_installer::firehose;
 use glassine_installer::glassine_read::Disk;
 use glassine_installer::sahara::{self, cmd};
 use glassine_installer::table::crc32;
@@ -27,6 +28,7 @@ const OPTS: Options = Options {
     chunk: 64 << 10,
     range: 256 << 10,
     listen_first: true,
+    resend_configure: true,
 };
 
 /// The partitions of the synthetic disk: name, first and last LBA.
@@ -129,6 +131,13 @@ struct Faults {
     cap: usize,
     /// Drops every request until its start-up logs were read.
     deaf_until_logged: bool,
+    /// Answers only from this configure on (1st, 2nd, ...; 0 as 1).
+    answer_from: u32,
+    /// Ignores the 1st configure and answers it with the 2nd: two answers.
+    late_pair: bool,
+    /// Like `late_pair`, but the extra answer comes only before the answer to
+    /// the next request.
+    late_split: bool,
 }
 
 struct Device {
@@ -143,6 +152,11 @@ struct Device {
     stuck: bool,
     /// Transfers still to be read before it listens ([`Faults::deaf_until_logged`]).
     deaf_pops: usize,
+    configures: u32,
+    /// A late answer to push before the next answer ([`Faults::late_split`]).
+    late: Option<Vec<u8>>,
+    /// Every short wait the computer asked for, in order.
+    waits: Vec<Option<std::time::Duration>>,
 }
 
 fn doc(body: &str) -> Vec<u8> {
@@ -190,6 +204,9 @@ impl Device {
             reads_covering: BTreeMap::new(),
             stuck: false,
             deaf_pops: 0,
+            configures: 0,
+            late: None,
+            waits: vec![],
         }
     }
 
@@ -213,9 +230,18 @@ impl Device {
         if self.f.silent || self.deaf_pops > 0 || self.stuck && name != "power" {
             return;
         }
+        if name != "configure"
+            && let Some(l) = self.late.take()
+        {
+            self.out.push_back(l);
+        }
         match name.as_str() {
             "configure" => {
                 assert_eq!(attrs.get("MemoryName").map(String::as_str), Some("eMMC"));
+                self.configures += 1;
+                if self.configures < self.f.answer_from || (self.f.late_pair || self.f.late_split) && self.configures == 1 {
+                    return;
+                }
                 let size = num("MaxPayloadSizeToTargetInBytes");
                 if self.f.wants_auth {
                     let a = log("ERROR: Only nop and sig tag can be received before authentication.");
@@ -232,7 +258,14 @@ impl Device {
                         "<response value=\"ACK\" MinVersionSupported=\"1\" MemoryName=\"eMMC\" MaxPayloadSizeFromTargetInBytes=\"4096\" \
                          MaxPayloadSizeToTargetInBytes=\"{size}\" MaxPayloadSizeToTargetInBytesSupported=\"{size}\" MaxXMLSizeInBytes=\"4096\" Version=\"1\" TargetName=\"8953\" />"
                     );
-                    self.push(vec![doc(&r)]);
+                    if self.configures == 2 && self.f.late_pair {
+                        self.push(vec![doc(&r), doc(&r)]);
+                    } else if self.configures == 2 && self.f.late_split {
+                        self.push(vec![doc(&r)]);
+                        self.late = Some(doc(&r));
+                    } else {
+                        self.push(vec![doc(&r)]);
+                    }
                 }
             }
             "getstorageinfo" => {
@@ -322,6 +355,10 @@ impl Transport for Device {
 
     async fn recv(&mut self) -> Result<Vec<u8>, FbError> {
         self.recv_max(4096).await
+    }
+
+    fn set_short_wait(&mut self, wait: Option<std::time::Duration>) {
+        self.waits.push(wait);
     }
 
     async fn recv_max(&mut self, max: usize) -> Result<Vec<u8>, FbError> {
@@ -574,9 +611,18 @@ fn a_programmer_that_listens_only_after_its_logs() {
     assert_eq!(done.configured.logs[0], "INFO: Binary build date: synthetic");
     assert!(done.configured.logs.iter().all(|l| !l.contains("serial")));
     assert!(run.mem.notes.iter().any(|n| n == "the programmer started and logged 2 line(s)"));
-    // Without listening first, configure goes unanswered: what a browser,
-    // which can't listen, would meet with such a programmer.
-    let run = go_opts(f, Scope::GptOnly, Mem::default(), Options { listen_first: false, ..OPTS });
+    // Without listening first, resending configure gets it too.
+    let run = go_opts(f.clone(), Scope::GptOnly, Mem::default(), Options { listen_first: false, ..OPTS });
+    run.r.unwrap();
+    assert!(commands(&run.dev).iter().filter(|c| *c == "configure").count() >= 2);
+    // With neither, configure goes unanswered: what a browser, which can't
+    // wait out a timeout, would meet with such a programmer.
+    let no = Options {
+        listen_first: false,
+        resend_configure: false,
+        ..OPTS
+    };
+    let run = go_opts(f, Scope::GptOnly, Mem::default(), no);
     let e = run.r.unwrap_err();
     assert!(matches!(e.error, EmergencyError::NotWorking(_)), "{:?}", e.error);
     assert_eq!(commands(&run.dev), ["configure"]);
@@ -609,8 +655,74 @@ fn a_silent_programmer_is_not_working() {
     assert!(matches!(f.error, EmergencyError::NotWorking(_)), "{:?}", f.error);
     assert!(f.error.to_string().contains("isn't working on this device"));
     assert_eq!(f.restart, Restart::NotPossible);
-    // One configure, nothing read, nothing more.
+    // configure every short wait for about 5 s, nothing read, nothing more.
+    assert_eq!(commands(&run.dev), vec!["configure"; firehose::RESEND_TRIES as usize]);
+    assert_eq!(run.dev.waits, [Some(firehose::RESEND_EVERY), None]);
+    // Without resending: one configure.
+    let silent = Faults {
+        silent: true,
+        ..Default::default()
+    };
+    let run = go_opts(
+        silent,
+        Scope::GptOnly,
+        Mem::default(),
+        Options {
+            resend_configure: false,
+            ..OPTS
+        },
+    );
+    assert!(matches!(run.r.unwrap_err().error, EmergencyError::NotWorking(_)));
     assert_eq!(commands(&run.dev), ["configure"]);
+    assert!(run.dev.waits.is_empty());
+}
+
+#[test]
+fn a_programmer_that_answers_only_the_third_configure() {
+    // lively(): its answer is the payload-size NAK, then the reconfigure.
+    let run = go(Faults { answer_from: 3, ..lively() }, Scope::Partitions(vec!["devinfo".into()]));
+    let done = run.r.unwrap();
+    assert!(done.configured.renegotiated);
+    assert_eq!(done.configured.payload_to_target, 65536);
+    assert_eq!(run.mem.files["devinfo.img"], slice(64, 191));
+    let c = commands(&run.dev);
+    assert_eq!(&c[..5], ["configure", "configure", "configure", "configure", "getstorageinfo"]);
+    // The short waits end before the reads.
+    assert_eq!(run.dev.waits, [Some(firehose::RESEND_EVERY), None]);
+    // Without the size NAK.
+    let run = go(
+        Faults {
+            answer_from: 3,
+            ..Default::default()
+        },
+        Scope::Partitions(vec!["devinfo".into()]),
+    );
+    assert!(!run.r.unwrap().configured.renegotiated);
+    assert_eq!(commands(&run.dev)[..4], ["configure", "configure", "configure", "getstorageinfo"]);
+}
+
+#[test]
+fn a_programmer_that_answers_twice() {
+    let pair = Faults {
+        late_pair: true,
+        ..Default::default()
+    };
+    let split = Faults {
+        late_split: true,
+        ..Default::default()
+    };
+    let pair_nak = Faults { late_pair: true, ..lively() };
+    for (f, what) in [
+        (pair, "both ACKs together"),
+        (split, "the second ACK before the next answer"),
+        (pair_nak, "both size NAKs together"),
+    ] {
+        let run = go(f, Scope::Partitions(vec!["devinfo".into(), "boot_a".into()]));
+        let done = run.r.unwrap_or_else(|e| panic!("{what}: {e:?}"));
+        assert_eq!(run.mem.files["devinfo.img"], slice(64, 191), "{what}");
+        assert_eq!(run.mem.files["boot_a.img"], slice(256, 2303), "{what}");
+        assert_eq!(done.restart, Restart::Done, "{what}");
+    }
 }
 
 #[test]

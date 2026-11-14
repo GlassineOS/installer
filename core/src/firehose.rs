@@ -65,6 +65,10 @@ const EMPTY_MAX: u32 = 16;
 /// Documents (logs) before the response; more is a programmer that talks
 /// and never answers.
 const DOCS_MAX: usize = 4096;
+/// How long one wait for the first answer lasts before `configure` is sent
+/// again, and how many times it is sent: about 5 s in all, as `qdl` does.
+pub const RESEND_EVERY: std::time::Duration = std::time::Duration::from_millis(100);
+pub const RESEND_TRIES: u32 = 50;
 /// Log lines kept for an error message.
 const LOGS_KEPT: usize = 32;
 
@@ -357,6 +361,11 @@ pub struct Configured {
     pub logs: Vec<String>,
 }
 
+/// Whether a response carries what only an answer to `configure` does.
+fn configure_answer(e: &Element) -> bool {
+    e.attr("MaxPayloadSizeToTargetInBytes").is_some() || e.attr("MemoryName").is_some()
+}
+
 fn needs_auth(logs: &[String]) -> bool {
     logs.iter()
         .any(|l| l.contains("Only nop and sig tag") || l.to_ascii_lowercase().contains("authenticat"))
@@ -370,6 +379,9 @@ pub struct Firehose<T: Transport> {
     broken: bool,
     /// What [`Firehose::listen`] read.
     early_logs: Vec<String>,
+    /// `configure` requests sent and not answered yet: a programmer that
+    /// started late may answer several of them.
+    unanswered: u32,
 }
 
 impl<T: Transport> Firehose<T> {
@@ -382,6 +394,7 @@ impl<T: Transport> Firehose<T> {
             configured: None,
             broken: false,
             early_logs: Vec::new(),
+            unanswered: 0,
         }
     }
 
@@ -432,18 +445,40 @@ impl<T: Transport> Firehose<T> {
     /// `MaxPayloadSizeToTargetInBytes`), `configure` is sent once more with
     /// that size, and only an ACK goes on. After a NAK the session can still
     /// [`Firehose::reset`].
-    pub async fn configure(&mut self) -> Result<&Configured, FirehoseError> {
+    ///
+    /// With `resend` (`qdl`'s way, for a programmer that isn't listening yet
+    /// when the first one comes): while no answer has come, `configure` is
+    /// sent again every [`RESEND_EVERY`], up to [`RESEND_TRIES`] times, its
+    /// logs read in between; the transport must survive a timeout
+    /// ([`Transport::set_short_wait`]). The answers to the extra requests
+    /// that come after the first are read and dropped, and one that comes
+    /// later still is recognised by its `configure` attributes and skipped.
+    pub async fn configure(&mut self, resend: bool) -> Result<&Configured, FirehoseError> {
         if self.configured.is_some() || self.broken {
             return Err(FirehoseError::Refused("configure is sent once, first".into()));
         }
         let first = Request::Configure { payload: PAYLOAD_TO_TARGET };
-        self.request(&first).await?;
-        let mut a = match self.answer(&first).await {
-            Err(FirehoseError::Transport(FbError::Timeout(_))) if self.rx.is_empty() => {
-                self.broken = true;
-                return Err(FirehoseError::NoAnswer);
+        let mut a = if resend {
+            self.t.set_short_wait(Some(RESEND_EVERY));
+            let r = match self.first_answer_resending(&first).await {
+                Ok(a) => self.drain_stale().await.map(|logs| Answer {
+                    logs: [a.logs, logs].concat(),
+                    response: a.response,
+                }),
+                e => e,
+            };
+            self.t.set_short_wait(None);
+            r?
+        } else {
+            self.request(&first).await?;
+            self.unanswered += 1;
+            match self.answer(&first).await {
+                Err(FirehoseError::Transport(FbError::Timeout(_))) if self.rx.is_empty() => {
+                    self.broken = true;
+                    return Err(FirehoseError::NoAnswer);
+                }
+                r => r?,
             }
-            r => r?,
         };
         let mut c = Configured {
             payload_to_target: PAYLOAD_TO_TARGET,
@@ -472,6 +507,7 @@ impl<T: Transport> Firehose<T> {
             };
             let again = Request::Configure { payload: size };
             self.request(&again).await?;
+            self.unanswered += 1;
             a = self.answer(&again).await?;
             logs.extend(a.logs.iter().cloned());
             if !a.ack() {
@@ -493,6 +529,65 @@ impl<T: Transport> Firehose<T> {
         c.version = a.response.attr("Version").map(str::to_string);
         c.logs = shown_logs(&logs);
         Ok(self.configured.insert(c))
+    }
+
+    /// Sends `r` until a response comes: see [`Firehose::configure`].
+    async fn first_answer_resending(&mut self, r: &Request) -> Result<Answer, FirehoseError> {
+        let mut logs = Vec::new();
+        for _ in 0..RESEND_TRIES {
+            self.request(r).await?;
+            self.unanswered += 1;
+            for _ in 0..DOCS_MAX {
+                let elements = match self.document().await {
+                    Ok(e) => e,
+                    // Nothing within the short wait: send it again. A
+                    // document begun stays in the buffer.
+                    Err(FirehoseError::Transport(FbError::Timeout(_))) => break,
+                    Err(e) => return Err(e),
+                };
+                for e in elements {
+                    match (e.name.as_str(), e.attr("value")) {
+                        ("log", v) => logs.push(v.unwrap_or_default().to_string()),
+                        ("response", Some("ACK" | "NAK")) => {
+                            self.unanswered -= 1;
+                            return Ok(Answer { response: e, logs });
+                        }
+                        ("response", v) => {
+                            self.broken = true;
+                            return Err(FirehoseError::Unexpected(format!("a response {v:?} to {}", r.during())));
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        self.broken = true;
+        Err(FirehoseError::NoAnswer)
+    }
+
+    /// After the first answer: reads (and drops) the answers to the other
+    /// `configure` requests until a wait passes without anything; their
+    /// logs are kept.
+    async fn drain_stale(&mut self) -> Result<Vec<String>, FirehoseError> {
+        let mut logs = Vec::new();
+        for _ in 0..DOCS_MAX {
+            if self.unanswered == 0 {
+                break;
+            }
+            let elements = match self.document().await {
+                Ok(e) => e,
+                Err(FirehoseError::Transport(FbError::Timeout(_))) => break,
+                Err(e) => return Err(e),
+            };
+            for e in elements {
+                match e.name.as_str() {
+                    "log" => logs.push(e.attr("value").unwrap_or_default().to_string()),
+                    "response" => self.unanswered = self.unanswered.saturating_sub(1),
+                    _ => {}
+                }
+            }
+        }
+        Ok(logs)
     }
 
     /// What `configure` settled, once it did.
@@ -554,7 +649,18 @@ impl<T: Transport> Firehose<T> {
                 match e.name.as_str() {
                     "log" => logs.push(e.attr("value").unwrap_or_default().to_string()),
                     "response" => match e.attr("value") {
-                        Some("ACK" | "NAK") => return Ok(Answer { response: e, logs }),
+                        // A late answer to an earlier configure (see
+                        // Firehose::configure): skipped, unless it can be
+                        // this request's own.
+                        Some(v) if self.unanswered > 0 && configure_answer(&e) && (!matches!(r, Request::Configure { .. }) || v == "NAK") => {
+                            self.unanswered -= 1;
+                        }
+                        Some("ACK" | "NAK") => {
+                            if matches!(r, Request::Configure { .. }) {
+                                self.unanswered = self.unanswered.saturating_sub(1);
+                            }
+                            return Ok(Answer { response: e, logs });
+                        }
                         v => {
                             self.broken = true;
                             return Err(FirehoseError::Unexpected(format!("a response {v:?} to {}", r.during())));

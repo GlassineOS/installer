@@ -75,6 +75,10 @@ pub struct Options {
     /// timeout before `configure` ([`Firehose::listen`]). Only for a
     /// transport that survives a timeout (native USB, not the browser's).
     pub listen_first: bool,
+    /// Send `configure` again while it isn't answered, as `qdl` does
+    /// ([`Firehose::configure`]). Only for a transport that survives a
+    /// timeout.
+    pub resend_configure: bool,
 }
 
 impl Default for Options {
@@ -83,6 +87,7 @@ impl Default for Options {
             chunk: firehose::READ_CHUNK,
             range: RANGE,
             listen_first: false,
+            resend_configure: false,
         }
     }
 }
@@ -421,7 +426,7 @@ pub async fn run<T: Transport, E: ImageEdge>(t: T, programmer: &[u8], scope: &Sc
             Err(e) => return Err(fail(EmergencyError::NotWorking(e.to_string()), Restart::NotPossible)),
         }
     }
-    let c = match fh.configure().await {
+    let c = match fh.configure(opts.resend_configure).await {
         Ok(c) => c.clone(),
         Err(FirehoseError::NoAnswer) => {
             return Err(fail(
