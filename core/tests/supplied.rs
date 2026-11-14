@@ -571,3 +571,56 @@ fn the_screens_records() {
 fn hex_lines(b: &[u8]) -> String {
     b.chunks(32).map(|c| hex(c) + "\n").collect()
 }
+
+// ---- once the device is in the mode: before sending (004 FR-004) --------------
+
+/// On the Note Air's boot ROM (test keys accepted) a file naming another chip
+/// and key is no refusal; the device's own report still must be the
+/// description's.
+#[test]
+fn before_sending_with_test_keys_accepted() {
+    let (_, root) = programmer(false, 5, HW_ID, "Root CA");
+    let (b, _) = programmer(false, 5, "0014D0E100000000", "Another root");
+    let d = noteair_for(&root, OTHER);
+    let pk = d.supplied_files[0].matches["pk_hash"].clone();
+    assert!(matches!(check(&d, &b, None), Verdict::FitsUnknown { .. }));
+    assert_eq!(supplied::before_sending(&d, "emergency-programmer", &b, &device(CHIP, &pk)), Ok(()));
+    for (chip, key, differs) in [("0014d0e1", pk.as_str(), "chip"), (CHIP, OTHER, "pk_hash")] {
+        match supplied::before_sending(&d, "emergency-programmer", &b, &device(chip, key)) {
+            Err(supplied::Unsendable::OtherDevice {
+                reported,
+                expected,
+                differs: dif,
+            }) => {
+                assert_eq!(dif, [differs]);
+                assert_eq!(reported["chip"], chip);
+                assert_eq!(expected["chip"], CHIP);
+                assert_eq!(expected["pk_hash"], pk);
+            }
+            r => panic!("{r:?}"),
+        }
+    }
+    // Nothing reported for a key is a difference, not a pass.
+    let mut half = device(CHIP, &pk);
+    half.remove("pk_hash");
+    assert!(matches!(
+        supplied::before_sending(&d, "emergency-programmer", &b, &half),
+        Err(supplied::Unsendable::OtherDevice { .. })
+    ));
+}
+
+/// Where the boot ROM enforces the key, a file for another key is refused
+/// even when the device is the described one.
+#[test]
+fn before_sending_with_the_key_enforced() {
+    let (_, root) = programmer(false, 5, HW_ID, "Root CA");
+    let (b, _) = programmer(false, 5, HW_ID, "Another root");
+    let d = enforced(&root, OTHER);
+    let pk = d.supplied_files[0].matches["pk_hash"].clone();
+    match supplied::before_sending(&d, "emergency-programmer", &b, &device(CHIP, &pk)) {
+        Err(u @ supplied::Unsendable::File(_)) => assert!(u.to_string().contains("enforces"), "{u}"),
+        r => panic!("{r:?}"),
+    }
+    let (good, _) = programmer(false, 5, HW_ID, "Root CA");
+    assert_eq!(supplied::before_sending(&d, "emergency-programmer", &good, &device(CHIP, &pk)), Ok(()));
+}

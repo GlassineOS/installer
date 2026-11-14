@@ -10,7 +10,7 @@
 //! `GLASSINE_USB_TRACE=1` logs every bulk transfer (the USB edge does it).
 
 use crate::backup::FileEdge;
-use glassine_installer::emergency_read::{self, Failure, ImageEdge, Options, Restart, Scope};
+use glassine_installer::emergency_read::{self, Expected, Failure, ImageEdge, Options, Restart, Scope};
 use glassine_installer::format1::Description;
 use glassine_installer::glassine_read::Disk;
 use glassine_installer::supplied;
@@ -24,10 +24,17 @@ pub const TIMEOUT: Duration = Duration::from_secs(10);
 
 const RESTART_BY_HAND: &str = "restart the device by hand: hold the power key ~10 s";
 
-/// The scope the options ask for: `--only-gpt`, `--only-boot-areas`,
-/// `--partition NAME...`, or the whole disk (the user area and the eMMC boot
-/// areas the device has); storing needs `--out`.
-pub fn scope(only_gpt: bool, only_boot_areas: bool, partitions: &[String], out: Option<&str>) -> Result<Scope, String> {
+/// The scope the options ask for: `--only-gpt`, `--find-boot-area-sizes`,
+/// `--only-boot-areas`, `--partition NAME...`, or the whole disk (the user
+/// area and the eMMC boot areas the device has); storing needs `--out`.
+pub fn scope(only_gpt: bool, find_sizes: bool, only_boot_areas: bool, partitions: &[String], out: Option<&str>) -> Result<Scope, String> {
+    if find_sizes {
+        return match (only_gpt, only_boot_areas, partitions.is_empty(), out) {
+            (false, false, true, None) => Ok(Scope::BootAreaSizes),
+            (_, _, _, Some(_)) => Err("--find-boot-area-sizes stores nothing; it doesn't go with --out".into()),
+            _ => Err("--find-boot-area-sizes is a run of its own; it doesn't go with --only-gpt, --only-boot-areas or --partition".into()),
+        };
+    }
     match (only_gpt, only_boot_areas, partitions.is_empty(), out) {
         (true, true, _, _) => Err("--only-gpt and --only-boot-areas are two different runs; choose one".into()),
         (true, false, false, _) => Err("--only-gpt reads the partition table only; it doesn't go with --partition".into()),
@@ -40,33 +47,33 @@ pub fn scope(only_gpt: bool, only_boot_areas: bool, partitions: &[String], out: 
     }
 }
 
-/// For `--only-gpt`: nothing is stored.
+/// For `--only-gpt` and `--find-boot-area-sizes`: nothing is stored.
 struct NoStore;
 
 impl ImageEdge for NoStore {
     fn begin(&mut self, _: &Disk) -> Result<(), String> {
-        Err("nothing is stored with --only-gpt".into())
+        Err("nothing is stored in this run".into())
     }
     fn write(&mut self, _: &[u8]) -> Result<(), String> {
-        Err("nothing is stored with --only-gpt".into())
+        Err("nothing is stored in this run".into())
     }
     fn end(&mut self, _: &Disk) -> Result<(), String> {
-        Err("nothing is stored with --only-gpt".into())
+        Err("nothing is stored in this run".into())
     }
     fn keep(&mut self, _: &Disk) -> Result<String, String> {
-        Err("nothing is stored with --only-gpt".into())
+        Err("nothing is stored in this run".into())
     }
     fn reopen(&mut self, _: &Disk) -> Result<(), String> {
-        Err("nothing is stored with --only-gpt".into())
+        Err("nothing is stored in this run".into())
     }
     fn fill(&mut self, _: &mut [u8]) -> Result<usize, String> {
-        Err("nothing is stored with --only-gpt".into())
+        Err("nothing is stored in this run".into())
     }
     fn incomplete(&mut self, _: &Disk) -> Result<String, String> {
-        Err("nothing is stored with --only-gpt".into())
+        Err("nothing is stored in this run".into())
     }
     fn manifest(&mut self, _: &str) -> Result<(), String> {
-        Err("nothing is stored with --only-gpt".into())
+        Err("nothing is stored in this run".into())
     }
     fn progress(&mut self, _: &Disk, _: u64) {}
     fn note(&mut self, line: &str) {
@@ -109,11 +116,14 @@ pub fn load(programmer: &Path, d: &Description, file: &str, accept_unknown: bool
     }
 }
 
-/// Runs the route with the programmer [`load`] returned; what goes to
-/// stdout comes back, the failure as its message.
-pub fn run(bytes: &[u8], out: Option<&Path>, scope: &Scope) -> Result<String, String> {
+/// Runs the route with the programmer [`load`] returned, for the device `d`
+/// describes (its boot ROM's report is compared with `d` before the
+/// programmer is sent); what goes to stdout comes back, the failure as its
+/// message.
+pub fn run(bytes: &[u8], d: &Description, file: &str, out: Option<&Path>, scope: &Scope) -> Result<String, String> {
+    let expected = Expected { description: d, file };
     let mut files = match (scope, out) {
-        (Scope::GptOnly, _) => None,
+        (Scope::GptOnly | Scope::BootAreaSizes, _) => None,
         (_, Some(dir)) => Some(FileEdge::new(dir)?),
         (_, None) => return Err("no --out DIR".into()),
     };
@@ -125,8 +135,8 @@ pub fn run(bytes: &[u8], out: Option<&Path>, scope: &Scope) -> Result<String, St
     let (mut t, _ids) = crate::emergency::open()?;
     t.set_timeout(TIMEOUT);
     let r = match files.as_mut() {
-        Some(f) => pollster::block_on(emergency_read::run(t, bytes, scope, opts, f)),
-        None => pollster::block_on(emergency_read::run(t, bytes, scope, opts, &mut NoStore)),
+        Some(f) => pollster::block_on(emergency_read::run_checked(t, bytes, expected, scope, opts, f)),
+        None => pollster::block_on(emergency_read::run_checked(t, bytes, expected, scope, opts, &mut NoStore)),
     };
     match r {
         Ok(done) => {
@@ -134,6 +144,11 @@ pub fn run(bytes: &[u8], out: Option<&Path>, scope: &Scope) -> Result<String, St
             if *scope == Scope::GptOnly {
                 o += &format!("partition table ({} sectors of {} bytes):\n", done.disk_size / done.sector as u64, done.sector);
                 o += &emergency_read::render_table(&done.table, done.sector);
+            }
+            if *scope == Scope::BootAreaSizes {
+                for z in &done.sizes {
+                    o += &format!("{} (physical partition {}): {} bytes, size from {}\n", z.name, z.physical, z.bytes, z.source);
+                }
             }
             for (rec, _, file) in &done.images {
                 o += &format!("{file}: {} bytes, sha256 {}, read twice and checked\n", rec.disk.size, rec.sha256_hex());
@@ -161,6 +176,7 @@ mod tests {
 
     #[test]
     fn options() {
+        let scope = |g, b, p: &[String], o| scope(g, false, b, p, o);
         assert_eq!(scope(true, false, &[], None), Ok(Scope::GptOnly));
         assert_eq!(scope(true, false, &[], Some("d")), Ok(Scope::GptOnly));
         assert!(scope(true, false, &["devinfo".into()], Some("d")).is_err());
@@ -176,6 +192,16 @@ mod tests {
         assert!(scope(false, true, &[], None).unwrap_err().contains("--out"));
         assert!(scope(true, true, &[], Some("d")).is_err());
         assert!(scope(false, true, &["devinfo".into()], Some("d")).is_err());
+    }
+
+    /// `--find-boot-area-sizes`: read-only, alone, without --out.
+    #[test]
+    fn the_size_search_is_a_run_of_its_own() {
+        assert_eq!(scope(false, true, false, &[], None), Ok(Scope::BootAreaSizes));
+        assert!(scope(false, true, false, &[], Some("d")).unwrap_err().contains("--out"));
+        assert!(scope(true, true, false, &[], None).is_err());
+        assert!(scope(false, true, true, &[], None).is_err());
+        assert!(scope(false, true, false, &["devinfo".into()], None).is_err());
     }
 
     use glassine_installer::validate::{self, Loaded};
