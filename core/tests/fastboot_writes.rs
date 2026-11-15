@@ -197,6 +197,8 @@ fn abl_takes_16_transfers_and_not_17() {
 #[test]
 fn the_partition_table_is_never_flashed() {
     for name in [
+        "avb_custom_key",
+        "AVB_custom_key_a",
         "partition",
         "PARTITION",
         "Partition",
@@ -494,7 +496,7 @@ fn fail_on_flash_says_the_partition_may_have_changed() {
     let mut s = connect(&mut sim, EQ);
     let e = flash(&mut s, &rules(), "misc", &image(16 * L, 1)).unwrap_err();
     assert!(e.partition_may_have_changed());
-    assert!(matches!(e, WriteError::Flash(FbError::Fail(_))), "{e:?}");
+    assert!(matches!(e, WriteError::Flash(FbError::Fail(ref w)) if w.contains("Device Error")), "{e:?}");
     drop(s);
     assert_ne!(sim.parts["misc"], image(MIB, 12));
 }
@@ -552,4 +554,35 @@ fn reboot_bootloader_restarts_into_fastboot() {
     sim.boot_again();
     let mut s = connect(&mut sim, EQ);
     flash(&mut s, &rules(), "misc", &image(L, 3)).unwrap();
+}
+
+/// `flash:` reached the device, and no answer came back.
+fn flash_unanswered(sim: &mut FbSim) -> WriteError {
+    let mut s = connect(sim, EQ);
+    let e = flash(&mut s, &rules(), "misc", &image(16 * L, 1)).unwrap_err();
+    assert!(e.partition_may_have_changed());
+    assert!(s.ended().is_some(), "{e:?}");
+    let n = s.transport().log.len();
+    assert!(matches!(block(s.getvar("product")), Err(FbError::Ended(_))));
+    assert_eq!(s.transport().log.len(), n);
+    drop(s);
+    assert_eq!(sim.commands.last().unwrap(), "flash:misc");
+    assert_ne!(sim.parts["misc"], image(MIB, 12));
+    e
+}
+
+#[test]
+fn a_device_that_dies_mid_flash() {
+    let mut sim = FbSim::stock_noteair(&parts());
+    sim.faults.die_mid_flash = true;
+    let e = flash_unanswered(&mut sim);
+    assert!(matches!(e, WriteError::Flash(FbError::Usb(_))), "{e:?}");
+}
+
+#[test]
+fn a_flash_that_never_answers() {
+    let mut sim = FbSim::stock_noteair(&parts());
+    sim.faults.hang_on_flash = true;
+    let e = flash_unanswered(&mut sim);
+    assert!(matches!(e, WriteError::Flash(FbError::Timeout(_))), "{e:?}");
 }

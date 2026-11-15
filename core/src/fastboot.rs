@@ -15,6 +15,9 @@
 //! before anything is sent. `erase` doesn't exist. `flash:partition` (any name
 //! that starts with `partition`) is never sent: both Note Air boot loaders
 //! rewrite the partition table from it after erasing the WHOLE eMMC.
+//!
+//! A transport error or a malformed reply on any command (reads and `reboot`
+//! too) ends the session: nothing more is sent on it ([`FbError::Ended`]).
 
 use crate::table::ReadAt;
 use std::fmt;
@@ -325,7 +328,20 @@ impl<T: Transport> Session<T> {
                 Reply::Okay(v) => return Ok(Some(v)),
                 Reply::Fail(_) => return Ok(None),
                 Reply::Info(_) | Reply::Text(_) => {}
-                Reply::Data(_) => return Err(FbError::Malformed(b"DATA to a read".to_vec())),
+                Reply::Data(_) => return Err(self.end(FbError::Malformed(b"DATA where OKAY or FAIL is due".to_vec()))),
+            }
+        }
+    }
+
+    /// Like [`Session::finish`], with FAIL as [`FbError::Fail`] carrying what
+    /// the boot loader said.
+    async fn done(&mut self, what: &str) -> Result<(), FbError> {
+        loop {
+            match self.reply().await? {
+                Reply::Okay(_) => return Ok(()),
+                Reply::Fail(w) => return Err(FbError::Fail(format!("{what}: {w}"))),
+                Reply::Info(_) | Reply::Text(_) => {}
+                Reply::Data(_) => return Err(self.end(FbError::Malformed(b"DATA where OKAY or FAIL is due".to_vec()))),
             }
         }
     }
@@ -350,10 +366,7 @@ impl<T: Transport> Session<T> {
     /// `reboot-bootloader`: restarts into this fastboot mode, freshly started.
     pub async fn reboot_bootloader(&mut self) -> Result<(), FbError> {
         self.command("reboot-bootloader").await?;
-        match self.finish().await? {
-            Some(_) => Ok(()),
-            None => Err(FbError::Fail("reboot-bootloader".into())),
-        }
+        self.done("reboot-bootloader").await
     }
 
     /// `oem <verb>`: only a verb on `rules.oem` (the description's list), as
@@ -364,10 +377,7 @@ impl<T: Transport> Session<T> {
         }
         rules.check_framing(self.framing)?;
         self.command(&format!("oem {verb}")).await?;
-        match self.finish().await? {
-            Some(_) => Ok(()),
-            None => Err(FbError::Fail(format!("oem {verb}"))),
-        }
+        self.done(&format!("oem {verb}")).await
     }
 
     /// Writes `len` bytes of `src` (from offset 0) to partition `part`: one
@@ -434,10 +444,10 @@ impl<T: Transport> Session<T> {
             return Err(WriteError::BeforeFlash(self.end(e)));
         }
         self.command(&format!("flash:{part}")).await.map_err(WriteError::Flash)?;
-        match self.finish().await {
-            Ok(Some(_)) => Ok(()),
-            Ok(None) => Err(WriteError::Flash(FbError::Fail(format!("flash:{part}")))),
-            Err(e) => Err(WriteError::Flash(e)),
+        match self.done(&format!("flash:{part}")).await {
+            Ok(()) => Ok(()),
+            // No answer: the write may still be going on. Nothing more is sent.
+            Err(e) => Err(WriteError::Flash(self.end(e))),
         }
     }
 
@@ -478,9 +488,9 @@ impl<T: Transport> Session<T> {
             self.send(&buf[..n]).await?;
             off += n as u64;
         }
-        match self.finish().await? {
-            Some(_) => Ok(()),
-            None => Err(self.end(FbError::Fail("download: the boot loader refused the data".into()))),
+        match self.done("download: the boot loader refused the data").await {
+            Ok(()) => Ok(()),
+            Err(e) => Err(self.end(e)),
         }
     }
 
@@ -584,23 +594,30 @@ pub struct WriteRules {
     pub oem: Vec<String>,
 }
 
-/// The boot loader's name for the partition table: `flash:` of any name that
-/// starts with it rewrites the table after erasing the whole eMMC (both Note
-/// Air boot loaders; abl `FastbootCmds.c`, `UpdatePartitionTable`).
-pub const PARTITION_TABLE_NAME: &str = "partition";
+/// Names abl's `flash` takes for something other than a partition, by
+/// prefix (abl `FastbootCmds.c`, `CmdFlash`): never sent, whatever the rules.
+pub const NOT_PARTITIONS: &[(&str, &str)] = &[
+    (
+        "partition",
+        "the boot loader takes any name that starts with \"partition\" for the partition table and erases the whole eMMC first",
+    ),
+    (
+        "avb_custom_key",
+        "the boot loader stores a name that starts with \"avb_custom_key\" as a verified-boot key, not in a partition",
+    ),
+];
 
 impl WriteRules {
     /// Refuses `part` unless it is one plain partition name the rules allow:
-    /// never one that starts with `partition` (any case), never one on
+    /// never one that starts like one of [`NOT_PARTITIONS`] (any case: the
+    /// partition table, a verified-boot key), never one on
     /// [`WriteRules::never_write`] (any case), and never a name without a
     /// slot suffix whose `_a` or `_b` is on it (an A/B boot loader adds the
     /// active slot's suffix to such a name).
     pub fn check_partition(&self, part: &str) -> Result<(), FbError> {
         let lower = part.to_ascii_lowercase();
-        if lower.starts_with(PARTITION_TABLE_NAME) {
-            return Err(FbError::RefusedWrite(format!(
-                "flash:{part}: the boot loader takes any name that starts with \"partition\" for the partition table and erases the whole eMMC first"
-            )));
+        if let Some((_, why)) = NOT_PARTITIONS.iter().find(|(p, _)| lower.starts_with(p)) {
+            return Err(FbError::RefusedWrite(format!("flash:{part}: {why}")));
         }
         if !plain_name(part) || "flash:".len() + part.len() > COMMAND_MAX {
             return Err(FbError::RefusedWrite(format!("{part:?} is not one partition name")));

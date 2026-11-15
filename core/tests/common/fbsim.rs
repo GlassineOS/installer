@@ -43,6 +43,10 @@ pub struct Faults {
     pub vanish_after: Option<usize>,
     /// `flash:` writes the first half of the download, then answers FAIL.
     pub fail_flash: bool,
+    /// The device dies during `flash:`: half written, no answer, gone.
+    pub die_mid_flash: bool,
+    /// `flash:` writes, then never answers (the host's wait runs out).
+    pub hang_on_flash: bool,
     /// `download:` is answered OKAY where DATA is due.
     pub okay_for_data: bool,
     /// OKAY after this many data transfers, before the download is complete;
@@ -220,6 +224,16 @@ impl FbSim {
         if img.len() > part.len() {
             self.download = img;
             return self.reply("FAILimage too large");
+        }
+        if self.faults.die_mid_flash {
+            let h = img.len() / 2;
+            part[..h].copy_from_slice(&img[..h]);
+            self.gone = true;
+            return;
+        }
+        if self.faults.hang_on_flash {
+            part[..img.len()].copy_from_slice(&img);
+            return;
         }
         if self.faults.fail_flash {
             let h = img.len() / 2;
