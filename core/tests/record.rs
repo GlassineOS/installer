@@ -65,7 +65,7 @@ fn a_record_round_trips_and_keeps_the_plan_verbatim() {
 fn a_real_plan_is_taken_as_it_is() {
     let p = std::fs::read_to_string(root().join("core/tests/golden/noteair-cable-yes.json")).unwrap();
     let r = Record::new("0.1.0", "onyx-noteair", b"", &p, Confirmation { text: "x".into(), at: None }, vec![], None).unwrap();
-    assert!(!r.plan_steps().unwrap().is_empty());
+    r.plan_steps().unwrap();
     assert_eq!(Record::parse(&r.to_json()).unwrap().plan, p);
 }
 

@@ -243,7 +243,7 @@ impl<S: ArtifactSource> Artifacts<S> {
     /// gets the bytes read so far.
     pub fn verify(&mut self, role: &str, progress: &mut dyn FnMut(u64)) -> Result<Artifact, ArtifactError> {
         let mut r = self.reader(role)?;
-        let mut buf = vec![0u8; PIECE.min(r.artifact.size as usize)];
+        let mut buf = vec![0u8; r.artifact.size.min(PIECE as u64) as usize];
         while r.at < r.artifact.size {
             let n = (r.artifact.size - r.at).min(buf.len() as u64) as usize;
             let at = r.at;
