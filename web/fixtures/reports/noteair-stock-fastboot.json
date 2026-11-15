@@ -127,9 +127,7 @@
   ],
   "plan": {
     "status": "needs-answers",
-    "keeps": [
-      "stock system"
-    ],
+    "keeps": [],
     "backs_up": [
       "disk 0 (whole disk)"
     ],

@@ -227,8 +227,9 @@ pinned to,
   disk's space as at least what is known, and never refuses for it.
 - **FR-014b**: Renaming a partition is not an action: it is a parameter of the step that
   writes the partition table (old name = new name), and that step writes the table. The
-  rules select a renamed partition by both its names. A step names a partition by the name
-  inspecting finds, even when it runs after the rename.
+  rules select a renamed partition by both its names. A step may name a renamed partition
+  by either name; the plan resolves it through the table step's renames, whichever table
+  inspecting finds.
 - **FR-015**: A `resize` or `remove` says whether it destroys what's on the partition. The plan
   shows a destroying change as the loss of the person's files, never as a technical step.
 - **FR-016**: A change to how the machine starts (a boot slot's flags, a firmware boot entry,
@@ -315,7 +316,9 @@ pinned to,
   it comes after (the order; the list's own order means nothing), the choices it depends
   on, and a `done` condition (so an interrupted installation knows where it stands). The
   installer observes it on the device or, for a step whose result the device can't show,
-  in its own record (FR-009b).
+  in its own record (FR-009b). A step that writes an artifact the release doesn't have
+  (one a capability `needs`, such as a recovery not built yet) is left out of a developer's
+  plan (001 FR-016a); a step that comes after it waits only for the steps the plan keeps.
 - **FR-023**: Each step says how it is escaped, separately for a failure during it and for an
   interruption after it: the state that leaves the device in (its previous system starts,
   GlassineOS starts, the installer can finish, the installer can undo, or only special

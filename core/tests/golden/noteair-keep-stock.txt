@@ -11,7 +11,7 @@ Choices:
   backup-to = computer (default)
 
 Systems:
-  stock system: kept and still startable
+  stock system: not kept
 
 Partitions:
   abl (replace, 1.0 MiB): writes
@@ -55,7 +55,7 @@ Afterwards the device:
   have fallback-boot [untried]
   lack trial-boot [untried]
   needs recovery (the GlassineOS recovery, which isn't built yet) [untried]
-  have keep-stock [untried]
+  needs keep-stock (slot A's boot image changed to mount its own slot's vendor partition, which the installation doesn't do yet) [untried]
   lack secondary-recovery [untried]
   needs choose-at-start (a way to pick a slot at start-up, which isn't decided) [untried]
 
