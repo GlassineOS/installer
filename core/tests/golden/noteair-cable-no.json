@@ -7,14 +7,13 @@
   "job": "install",
   "status": "refused",
   "reasons": [
-    "steps replace-boot-loader, partition-table can only be escaped with the emergency-cable, which you don't have"
+    "steps replace-boot-loader can only be escaped with the emergency-cable, which you don't have"
   ],
   "questions": [
     {
       "hardware": "emergency-cable",
       "steps": [
-        "replace-boot-loader",
-        "partition-table"
+        "replace-boot-loader"
       ],
       "answer": false
     }
@@ -53,6 +52,19 @@
       "loses_files": false,
       "steps": [
         "replace-boot-loader"
+      ]
+    },
+    {
+      "partition": "recovery",
+      "class": "replace",
+      "actions": [
+        "writes"
+      ],
+      "size": 67108864,
+      "loses_files": false,
+      "steps": [
+        "write-ram-environment",
+        "write-recovery"
       ]
     },
     {
@@ -99,12 +111,14 @@
       "partition": "vendor_b",
       "class": "create",
       "actions": [
-        "creates"
+        "creates",
+        "writes"
       ],
       "size": null,
       "loses_files": false,
       "steps": [
-        "partition-table"
+        "partition-table",
+        "write-vendor"
       ]
     },
     {
@@ -120,20 +134,20 @@
       ]
     },
     {
-      "partition": "recovery",
-      "class": "replace",
+      "partition": "vendor",
+      "class": "never-write",
       "actions": [
-        "writes"
+        "reads"
       ],
-      "size": 67108864,
+      "size": 838860800,
       "loses_files": false,
       "steps": [
-        "write-recovery"
+        "write-vendor"
       ]
     }
   ],
   "untouched_partitions": 0,
-  "imaged_partitions": 45,
+  "imaged_partitions": 44,
   "boot_settings": [
     {
       "id": "boot-loader",
@@ -210,6 +224,7 @@
       "boot-loader",
       "kernel",
       "partition-layout",
+      "ram-environment",
       "recovery"
     ],
     "total_at_least": 9200000000,
@@ -311,18 +326,38 @@
       }
     },
     {
-      "id": "partition-table",
-      "kind": "write-partition-table",
+      "id": "write-ram-environment",
+      "kind": "write-image",
       "mode": "fastboot",
       "done": "false",
+      "writes": true,
+      "tried": false,
+      "point_of_no_return": false,
+      "safe_stop": true,
+      "on_failure": {
+        "leaves": "previous-system-starts",
+        "hardware": null,
+        "way_out": "transition fastboot-to-android"
+      },
+      "on_interruption": {
+        "leaves": "previous-system-starts",
+        "hardware": null,
+        "way_out": "transition fastboot-to-android"
+      }
+    },
+    {
+      "id": "partition-table",
+      "kind": "write-partition-table",
+      "mode": "ram",
+      "done": "undetermined",
       "writes": true,
       "tried": false,
       "point_of_no_return": true,
       "safe_stop": true,
       "on_failure": {
-        "leaves": "special-hardware",
-        "hardware": "emergency-cable",
-        "way_out": "transition cable-to-emergency"
+        "leaves": "installer-can-finish",
+        "hardware": null,
+        "way_out": "step partition-table"
       },
       "on_interruption": {
         "leaves": "installer-can-finish",
@@ -333,7 +368,7 @@
     {
       "id": "write-kernel",
       "kind": "write-image",
-      "mode": "fastboot",
+      "mode": "ram",
       "done": "false",
       "writes": true,
       "tried": false,
@@ -353,7 +388,7 @@
     {
       "id": "write-base",
       "kind": "write-base",
-      "mode": "fastboot",
+      "mode": "ram",
       "done": "false",
       "writes": true,
       "tried": false,
@@ -367,13 +402,13 @@
       "on_interruption": {
         "leaves": "installer-can-finish",
         "hardware": null,
-        "way_out": "step write-recovery"
+        "way_out": "step write-vendor"
       }
     },
     {
-      "id": "write-recovery",
-      "kind": "write-image",
-      "mode": "fastboot",
+      "id": "write-vendor",
+      "kind": "copy-partition",
+      "mode": "ram",
       "done": "false",
       "writes": true,
       "tried": false,
@@ -382,7 +417,27 @@
       "on_failure": {
         "leaves": "installer-can-finish",
         "hardware": null,
+        "way_out": "step write-vendor"
+      },
+      "on_interruption": {
+        "leaves": "installer-can-finish",
+        "hardware": null,
         "way_out": "step write-recovery"
+      }
+    },
+    {
+      "id": "write-recovery",
+      "kind": "write-image",
+      "mode": "ram",
+      "done": "false",
+      "writes": true,
+      "tried": false,
+      "point_of_no_return": false,
+      "safe_stop": true,
+      "on_failure": {
+        "leaves": "installer-can-finish",
+        "hardware": null,
+        "way_out": "step write-ram-environment"
       },
       "on_interruption": {
         "leaves": "installer-can-finish",
@@ -393,7 +448,7 @@
     {
       "id": "set-slot",
       "kind": "set-boot-slot",
-      "mode": "fastboot",
+      "mode": "ram",
       "done": "false",
       "writes": true,
       "tried": false,
@@ -407,15 +462,17 @@
       "on_interruption": {
         "leaves": "glassine-starts",
         "hardware": null,
-        "way_out": "transition fastboot-to-glassine"
+        "way_out": "transition ram-to-glassine"
       }
     }
   ],
   "untried_steps": [
     "replace-boot-loader",
+    "write-ram-environment",
     "partition-table",
     "write-kernel",
     "write-base",
+    "write-vendor",
     "write-recovery",
     "set-slot"
   ]

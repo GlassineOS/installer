@@ -463,7 +463,18 @@ pub const MODE_KINDS: &[ModeKind] = &[
         id: "fastboot",
         doc: "the boot loader's fastboot protocol over USB",
         backends: &["android-bootloader"],
-        operations: &["getvar", "download", "flash", "erase", "boot-image", "reboot", "set-active", "fetch"],
+        operations: &[
+            "getvar",
+            "download",
+            "flash",
+            "erase",
+            "boot-image",
+            "reboot",
+            "set-active",
+            "fetch",
+            "reboot-recovery",
+            "flash-partition-table",
+        ],
     },
     ModeKind {
         id: "android-adb",
@@ -479,9 +490,9 @@ pub const MODE_KINDS: &[ModeKind] = &[
     },
     ModeKind {
         id: "glassine-ram",
-        doc: "a GlassineOS environment the boot loader starts from memory (the ram-environment artifact), over USB; it reads the device's storage and changes nothing (not built yet)",
+        doc: "a GlassineOS environment the boot loader starts from memory (the ram-environment artifact), over USB; it reads the device's storage, and writes only ranges the installer armed in that start",
         backends: &["android-bootloader"],
-        operations: &["read", "reboot", "reboot-bootloader"],
+        operations: &["read", "write", "reboot", "reboot-bootloader"],
     },
     ModeKind {
         id: "glassine-usb",
@@ -527,11 +538,19 @@ pub const DEPARTURES_SINCE_2: &[&str] = &["check-slot-flags"];
 
 /// The departure kinds that exist from format 3 on; they stand last in
 /// [`DEPARTURES`].
-pub const DEPARTURES_SINCE_3: &[&str] = &[SIZES_REPORTED_ONLY];
+pub const DEPARTURES_SINCE_3: &[&str] = &[SIZES_REPORTED_ONLY, OEM_REBOOT_RECOVERY, STARTED_FROM_PARTITION];
 
 /// The departure of an emergency mode whose programmer hangs on a read past
 /// the end of a physical partition (spec 002 FR-011).
 pub const SIZES_REPORTED_ONLY: &str = "sizes-reported-only";
+
+/// The departure of a boot loader that restarts into its recovery partition
+/// on its own `oem` verb, not the protocol's reboot-recovery (spec 002 FR-011).
+pub const OEM_REBOOT_RECOVERY: &str = "oem-reboot-recovery";
+
+/// The departure of a RAM environment the boot loader can't start sent over
+/// USB: it is written to a partition the boot loader starts (spec 002 FR-011).
+pub const STARTED_FROM_PARTITION: &str = "started-from-partition";
 
 /// The departure kinds of `format`.
 pub fn departures(format: i64) -> &'static [Kind] {
@@ -598,6 +617,25 @@ pub const DEPARTURES: &[Kind] = &[
         backends: &["android-bootloader"],
         modes: &["emergency-download"],
         params: &[],
+    },
+    Kind {
+        id: OEM_REBOOT_RECOVERY,
+        doc: "the boot loader restarts into its recovery partition on its own `oem reboot-recovery`, not on the protocol's reboot-recovery; it is the only `oem` verb sent, and only for the operation reboot-recovery",
+        backends: &["android-bootloader"],
+        modes: &["fastboot"],
+        params: &[],
+    },
+    Kind {
+        id: STARTED_FROM_PARTITION,
+        doc: "the boot loader can't start the environment sent over USB: a step writes it to `partition`, and the installer reaches the mode by restarting the boot loader into that partition (a mode of kind fastboot whose operation reboot-recovery it can send)",
+        backends: &["android-bootloader"],
+        modes: &["glassine-ram"],
+        params: &[p(
+            "partition",
+            T::Text,
+            true,
+            "the partition the boot loader starts it from, and the step that writes it writes",
+        )],
     },
 ];
 
@@ -817,7 +855,7 @@ pub const ARTIFACT_ROLES: &[Entry] = &[
     e("partition-layout", "the partition layout the installation makes"),
     e(
         "ram-environment",
-        "a GlassineOS environment the boot loader starts from memory, writing nothing",
+        "a GlassineOS environment the boot loader starts from memory; it writes only the ranges the installer arms",
     ),
 ];
 
@@ -841,9 +879,9 @@ pub const STEP_KINDS: &[Kind] = &[
     },
     Kind {
         id: "write-partition-table",
-        doc: "writes a new partition table from the layout artifact: its backup copy first, then the primary",
+        doc: "writes a new partition table from the layout artifact: its backup copy first, then the primary; never through a boot loader verb its mode marks never-use",
         backends: &["android-bootloader"],
-        modes: &["fastboot", "emergency-download"],
+        modes: &["fastboot", "emergency-download", "glassine-ram"],
         params: &[
             p("artifact", T::Artifact, true, "the layout"),
             p("renames", T::Renames, false, "partitions the layout renames in place, old = new"),
@@ -860,14 +898,14 @@ pub const STEP_KINDS: &[Kind] = &[
         id: "write-image",
         doc: "writes an artifact as a raw image to one partition",
         backends: &["android-bootloader", "uefi-pc"],
-        modes: &["fastboot", "emergency-download", "local"],
+        modes: &["fastboot", "emergency-download", "glassine-ram", "local"],
         params: &[p("artifact", T::Artifact, true, "what is written"), p("partition", T::Partition, true, "where")],
     },
     Kind {
         id: "write-base",
         doc: "puts the base and the first deployment on the system partition",
         backends: &["android-bootloader", "uefi-pc"],
-        modes: &["fastboot", "local", "glassine-usb"],
+        modes: &["fastboot", "local", "glassine-ram", "glassine-usb"],
         params: &[
             p("artifact", T::Artifact, true, "the base"),
             p("partition", T::Partition, true, "the system partition"),
@@ -875,13 +913,23 @@ pub const STEP_KINDS: &[Kind] = &[
     },
     Kind {
         id: "set-boot-slot",
-        doc: "changes the A/B slot flags",
+        doc: "changes the A/B slot flags (in a glassine-ram mode: the flags in the partition table's entries, backup copy first)",
         backends: &["android-bootloader"],
-        modes: &["fastboot"],
+        modes: &["fastboot", "glassine-ram"],
         params: &[
             p("slot", T::Slot, true, "the slot"),
             p("pin", T::Bool, false, "active, highest priority, marked successful"),
             p("unbootable", T::Bool, false, "marked unbootable, so it is never fallen back to"),
+        ],
+    },
+    Kind {
+        id: "copy-partition",
+        doc: "copies one partition of the device to another of the same size on the device, and checks the copy by reading it back",
+        backends: &["android-bootloader"],
+        modes: &["glassine-ram"],
+        params: &[
+            p("from", T::Text, true, "the partition copied, which the step reads"),
+            p("partition", T::Partition, true, "the partition it goes to"),
         ],
     },
     Kind {

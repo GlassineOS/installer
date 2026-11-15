@@ -171,6 +171,17 @@ pinned to,
   refusing it: then each area's size comes only from what the programmer reports and from
   the partition table, nothing is read to find where an area ends, and an area whose size
   neither gives isn't read (the backup lists it with why).
+- **FR-011a**: A boot loader operation whose source shows it erases more than it writes
+  (a partition-table write that erases the whole storage first) is marked never to send,
+  on every mode of that boot loader; no step, no plan and no developer run sends it. Where
+  a boot loader can't start a GlassineOS RAM environment sent over USB, the RAM
+  environment's mode says which partition the boot loader starts it from: a step writes it
+  there through the boot loader, and the installer reaches the mode by restarting the boot
+  loader into that partition (with the boot loader's own verb for that restart, where its
+  mode's departure names one). Where a boot loader's own partition-table write is unsafe,
+  the description's steps write the table, the partitions it creates and the slot flags
+  through that RAM environment. The RAM environment writes only the ranges the installer
+  names for that start, and reads each write back.
 - **FR-012**: A backend reaches an unrecognised device with an opening that is safe whether
   or not a departure applies. It chooses how to go on from the first answer, using the
   departures of every description it has, before matching any.
@@ -216,7 +227,8 @@ pinned to,
   disk's space as at least what is known, and never refuses for it.
 - **FR-014b**: Renaming a partition is not an action: it is a parameter of the step that
   writes the partition table (old name = new name), and that step writes the table. The
-  rules select a renamed partition by both its names.
+  rules select a renamed partition by both its names. A step names a partition by the name
+  inspecting finds, even when it runs after the rename.
 - **FR-015**: A `resize` or `remove` says whether it destroys what's on the partition. The plan
   shows a destroying change as the loss of the person's files, never as a technical step.
 - **FR-016**: A change to how the machine starts (a boot slot's flags, a firmware boot entry,
@@ -274,10 +286,15 @@ pinned to,
   layout), never by version or address: the installer's release supplies each role and
   checks its integrity. A size is marked unknown until the release supplies it.
 - **FR-019a**: The installer's release has a manifest, a JSON object whose
-  `release_format` is 1, that states per artifact role what the plan reads:
-  `artifacts.<role>.min_partition_bytes`, the least size in bytes of the partition that
-  role's artifact goes to. A reader ignores keys it doesn't know and refuses a later
-  `release_format`. The installer only reads the number; how it is worked out is the
+  `release_format` is 1, that states per artifact role what the installer reads: the
+  artifact's `file` (a name inside the release), its `size` in bytes, its `sha256`, its
+  `kind` (what the bytes are, so the step that writes it knows how: a raw image, a base's
+  send stream, ...), and `min_partition_bytes`, the least size in bytes of the partition
+  that role's artifact goes to. The installer checks each artifact's size and checksum
+  before its first write and writes nothing of a release that fails them. A reader ignores
+  keys it doesn't know and refuses a later `release_format`. A release is either published
+  or a folder on the person's computer that they name (for testing), holding the manifest
+  and the files it names; both are read the same way. The installer only reads the number; how it is worked out is the
   release's rule, owned by the release side (GlassineOS/images, which builds the base and
   records it in its artifacts folder, produces it with each release; the installer never
   computes it). For `base` the rule is: the system partition holds the base snapshots
@@ -367,8 +384,8 @@ pinned to,
 - **Partition rule**: a selection and the most any job may do; unselected means never
   written. The rule for the role `disk` says how the whole-disk backup is read.
 - **Step**: a kind from the backend, its parameters, its `done` condition and its escape.
-- **Release manifest**: what the installer's release states per artifact role, such as
-  the least size of the partition the base goes to.
+- **Release manifest**: what the installer's release states per artifact role: its file,
+  size, checksum and kind, and the least size of the partition it goes to.
 - **Lock entry**: which version of a device repository's description the installer ships.
 - **Installed description**: the copy on the installed system, and the files derived from
   it for the system's own tools.

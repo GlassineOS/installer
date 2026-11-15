@@ -3,7 +3,7 @@ State: stock. Job: install.
 Status: ready
 
 Questions:
-  Do you have the emergency-cable? Only it gets the device out if step replace-boot-loader, partition-table goes wrong. Answer: yes
+  Do you have the emergency-cable? Only it gets the device out if step replace-boot-loader goes wrong. Answer: yes
 
 Choices:
   keep-stock = yes (default)
@@ -15,14 +15,15 @@ Systems:
 
 Partitions:
   abl (replace, 1.0 MiB): writes
+  recovery (replace, 64.0 MiB): writes
   partition table (replace): writes
   boot_b (create): creates, writes
   system_b (create): creates, writes
-  vendor_b (create): creates
+  vendor_b (create): creates, writes
   userdata (resize, 24.0 GiB): resizes
     Everything on it is deleted: files on it are lost.
-  recovery (replace, 64.0 MiB): writes
-  45 other partitions are not touched.
+  vendor (never-write, 800.0 MiB): reads
+  44 other partitions are not touched.
 
 Backup: off (your choice).
   Without the backup there is no way back to the maker's system and no repair from the backup. The values unique to the device are still kept.
@@ -42,7 +43,7 @@ Kept from the device:
 
 Space on the computer:
   backup 0 B
-  artifacts 0 B plus base, boot-loader, kernel, partition-layout, recovery of unknown size
+  artifacts 0 B plus base, boot-loader, kernel, partition-layout, ram-environment, recovery of unknown size
   at least 0 B
 
 Least sizes from the release:
@@ -66,23 +67,31 @@ Steps:
      Replace the boot loader with GlassineOS's. From here there is no way back without the backup, and if this step fails only the emergency-mode cable helps.
      if it fails: special-hardware (emergency-cable) via transition cable-to-emergency
      if cut off after it: previous-system-starts via transition fastboot-to-android
-  3. partition-table (write-partition-table, in fastboot) [untried, point of no return, safe stop]
+  3. write-ram-environment (write-image, in fastboot) [untried, safe stop]
+     Put the installer's helper on the device, in place of the stock recovery. The device restarts into it to write the rest.
+     if it fails: previous-system-starts via transition fastboot-to-android
+     if cut off after it: previous-system-starts via transition fastboot-to-android
+  4. partition-table (write-partition-table, in ram) [untried, point of no return, safe stop]
      Give the device a second slot for GlassineOS. The data partition is made smaller: everything on it is deleted.
-     if it fails: special-hardware (emergency-cable) via transition cable-to-emergency
+     if it fails: installer-can-finish via step partition-table
      if cut off after it: installer-can-finish via step write-kernel
-  4. write-kernel (write-image, in fastboot) [untried, safe stop]
+  5. write-kernel (write-image, in ram) [untried, safe stop]
      Write the GlassineOS kernel to slot B.
      if it fails: installer-can-finish via step write-kernel
      if cut off after it: installer-can-finish via step write-base
-  5. write-base (write-base, in fastboot) [untried, safe stop]
+  6. write-base (write-base, in ram) [untried, safe stop]
      Write GlassineOS to slot B.
      if it fails: installer-can-finish via step write-base
+     if cut off after it: installer-can-finish via step write-vendor
+  7. write-vendor (copy-partition, in ram) [untried, safe stop]
+     Copy the device's own vendor files to slot B.
+     if it fails: installer-can-finish via step write-vendor
      if cut off after it: installer-can-finish via step write-recovery
-  6. write-recovery (write-image, in fastboot) [untried, safe stop]
+  8. write-recovery (write-image, in ram) [untried, safe stop]
      Write the GlassineOS recovery.
-     if it fails: installer-can-finish via step write-recovery
+     if it fails: installer-can-finish via step write-ram-environment
      if cut off after it: installer-can-finish via step set-slot
-  7. set-slot (set-boot-slot, in fastboot) [untried, safe stop]
+  9. set-slot (set-boot-slot, in ram) [untried, safe stop]
      Start GlassineOS by default.
      if it fails: installer-can-finish via step set-slot
-     if cut off after it: glassine-starts via transition fastboot-to-glassine
+     if cut off after it: glassine-starts via transition ram-to-glassine
