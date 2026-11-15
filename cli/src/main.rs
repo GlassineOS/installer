@@ -19,6 +19,7 @@ mod emergency;
 mod emergency_read;
 mod emergency_try;
 mod host_setup;
+mod install;
 mod supplied_check;
 
 include!(concat!(env!("OUT_DIR"), "/embedded.rs"));
@@ -38,6 +39,9 @@ pub(crate) const USAGE: &str = "usage:
                                  (--only-gpt | --find-boot-area-sizes | --out DIR [--only-boot-areas | --partition NAME...])
   glassine-install supplied-check [--device ID] [--file ID] [--reported KEY=VALUE]... [--json] [--devices DIR] FILE
   glassine-install host-setup [--print]
+  glassine-install install --description FILE --release-dir DIR [--backup DIR] [--developer] [--record PATH]
+                           [--facts FACTS.json] [--choice K=V]... [--hardware H=yes|no]... [--job JOB]
+  glassine-install resume --record PATH [--backup DIR]
   glassine-install schema
   glassine-install lock-unpinned LOCKFILE
 
@@ -104,6 +108,19 @@ the file only and sends nothing anywhere. Exit status 0: a known file; 2: it fit
 (sent only after the person confirms); 1: refused (known not to work, with why; another chip or
 key; or not a programmer).
 
+install plans the job for the description's device (from --facts, or the connected device's
+boot loader, restarted afterwards), shows the plan and the release's artifacts (release.json in
+--release-dir) and runs it only after the person types \"install\". A plan with untried write
+steps runs only with --developer. The record (default install-record.json; beside it
+PATH.inputs.json) holds every step's intent before it starts and its outcome with evidence; it is
+replaced whole on every change. Creating PATH.cancel stops the run after the next step that is safe
+to stop after. resume --record PATH goes on from the record: it refuses another plan, description
+or artifact, checks a cut step before running it again, and never rewrites a boot loader that
+already answers as the new one. The installer restarts the device itself where it can (adb reboot
+bootloader from stock Android when adb is on PATH) and otherwise says what to press; a running adb
+server can hold the boot loader's interface (adb kill-server frees it). After the last restart the
+installer can't see GlassineOS yet: it says what to check.
+
 host-setup sets this computer up once to reach the devices' USB modes, from the descriptions'
 modes. On Linux, as root (sudo glassine-install host-setup), it writes the udev rules file
 /etc/udev/rules.d/70-glassine-installer.rules, reloads udev and re-triggers the USB devices
@@ -127,6 +144,8 @@ fn main() -> ExitCode {
         Some("emergency-try-program") => emergency_try_cmd(&args[1..]),
         Some("supplied-check") => supplied_check::cmd(&args[1..]),
         Some("host-setup") => host_setup_cmd(&args[1..]),
+        Some("install") => install::install_cmd(&args[1..]),
+        Some("resume") => install::resume_cmd(&args[1..]),
         Some("schema") => {
             println!("{}", serde_json::to_string_pretty(&format1::json_schema()).unwrap());
             Ok(ExitCode::SUCCESS)
