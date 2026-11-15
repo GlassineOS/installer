@@ -253,7 +253,8 @@ pub mod web {
     /// - `write_temp(bytes)`, `commit()`, `read()`: the record's file in the
     ///   folder (a whole copy under a temporary name, then renamed over it).
     /// - `back_up(step)`: `{location, manifest: bytes|null, user_area: bool}`
-    ///   of the backup folder.
+    ///   of the backup folder; it only reads (a resume asks it, step `""`,
+    ///   for the manifest the record's hash is checked against).
     /// - `backup_bytes(offset, len)`: bytes of the backed-up user area.
     /// - `keep(name, bytes)`, `kept(name)`: a step's original, beside the record.
     #[wasm_bindgen]
@@ -468,6 +469,12 @@ pub mod web {
                 location,
                 manifest_sha256: Some(sha256_hex(&manifest)),
             })
+        }
+
+        async fn backup_manifest(&mut self) -> Result<Option<String>, String> {
+            // The host's back_up only reads the folder (the backup's manifest).
+            let v = settle(self.host.back_up("")).await?;
+            Ok(bytes(&get(&v, "manifest")).map(|m| sha256_hex(&m)))
         }
 
         async fn backup_bytes(&mut self, offset: u64, len: usize) -> Result<Vec<u8>, String> {

@@ -10,7 +10,8 @@
 //! the record only holds as hashes: the description file, the release
 //! folder, the backup folder and whether it is a developer's run. A resume
 //! checks them against the record's hashes (the executor refuses another
-//! plan, description or artifact).
+//! plan, description, artifact or backup: `--backup` on a resume must name
+//! the backup the record holds).
 
 use super::{Opts, USAGE, opts, plan_input, read};
 use flate2::read::GzDecoder;
@@ -288,6 +289,13 @@ impl InstallEdge for CliEdge<'_> {
         let mut b = vec![0u8; len];
         z.read_exact(&mut b).map_err(|e| format!("{}: {e}", p.display()))?;
         Ok(b)
+    }
+
+    async fn backup_manifest(&mut self) -> Result<Option<String>, String> {
+        let Some(dir) = &self.backup else { return Ok(None) };
+        let m = dir.join("manifest.json");
+        let bytes = std::fs::read(&m).map_err(|e| format!("{}: {e} (a finished backup has its manifest)", m.display()))?;
+        Ok(Some(sha256_hex(&bytes)))
     }
 
     async fn keep(&mut self, name: &str, bytes: &[u8]) -> Result<(), String> {
