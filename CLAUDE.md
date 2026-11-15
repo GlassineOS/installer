@@ -8,8 +8,9 @@ sections say what has been run on a device); the specs are in `specs/`, starting
 
 - Inspecting and planning never write to the machine. A change that adds a write needs a
   test of its failure case (cut write, read-back mismatch, an interruption) before it merges.
-- Nothing vendor-owned: no firmware, boot loader binaries, partition dumps, keys or serials.
-  Vendor files are read from the person's own device and never uploaded or cached.
+- Nothing copied from a device or a vendor's own images (decision 0016): no firmware
+  files, boot loader binaries, partition dumps, keys or serials in the repository. Such
+  files are read from the person's own device and never uploaded or cached.
 - Never run the installer against a real device without the owner's go.
 - Commits carry an `Assisted-by:` or `Co-Authored-By:` trailer. Never add
   `Signed-off-by`. Run `.glassine/org/scripts/safety-scan.sh --staged` before committing.
