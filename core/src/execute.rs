@@ -104,6 +104,10 @@ pub trait InstallEdge {
     /// Bytes of the backed-up disk the partition table is on (the verified
     /// backup's image), from `offset`.
     fn backup_bytes(&mut self, offset: u64, len: usize) -> impl Future<Output = Result<Vec<u8>, String>>;
+    /// The SHA-256 of the manifest of the backup [`InstallEdge::backup_bytes`]
+    /// reads, or `None` when the edge has no backup to read: a resume reads
+    /// only the backup the record holds.
+    fn backup_manifest(&mut self) -> impl Future<Output = Result<Option<String>, String>>;
     /// Keeps `bytes` on the computer under `name`, whole before it returns:
     /// what a step read before it first wrote (a boot image's original).
     fn keep(&mut self, name: &str, bytes: &[u8]) -> impl Future<Output = Result<(), String>>;
@@ -252,6 +256,9 @@ impl<F: Transport, R: Transport> Here<F, R> {
 
 const MAX_HOPS: usize = 8;
 
+/// The release's partition layout: read by every step in the RAM environment.
+const LAYOUT_ROLE: &str = "partition-layout";
+
 /// Runs (or resumes) the plan of `record`. `plan` must be the record's plan,
 /// byte for byte.
 pub async fn run<E: InstallEdge, S: ArtifactSource>(
@@ -365,6 +372,7 @@ impl<E: InstallEdge, S: ArtifactSource> Exec<'_, E, S> {
             return self.finish().await;
         }
         self.check_artifacts(&order).await?;
+        self.check_backup(&order).await?;
         for id in &order {
             let ps = pv.steps.iter().find(|s| s.id == *id).unwrap().clone();
             let st = self.step(id)?.clone();
@@ -414,8 +422,26 @@ impl<E: InstallEdge, S: ArtifactSource> Exec<'_, E, S> {
         Ok(out)
     }
 
-    /// Every artifact a step still to run uses: the one the record holds,
-    /// read whole and checked, before anything is sent to the device.
+    /// True when a step still to run works in the RAM environment: it reads
+    /// the partition layout (the table's sector size, the new table) and the
+    /// backed-up table, whether or not the table's own step is done.
+    fn ram_steps_left(&self, order: &[String]) -> Result<bool, Stopped> {
+        for id in order {
+            if self.record.state(id) == StepState::Done {
+                continue;
+            }
+            let st = self.step(id)?;
+            if st.kind != "back-up" && self.mode(&st.mode)?.kind == crate::ram_backup::RAM_MODE_KIND {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// Every artifact a step still to run uses or consults: the one the
+    /// record holds, read whole and checked, before anything is sent to the
+    /// device. The partition layout is consulted by every step in the RAM
+    /// environment, its own step done or not.
     async fn check_artifacts(&mut self, order: &[String]) -> Result<(), Stopped> {
         let mut roles = BTreeSet::new();
         for id in order {
@@ -425,6 +451,9 @@ impl<E: InstallEdge, S: ArtifactSource> Exec<'_, E, S> {
             if let Some(r) = self.step(id)?.params.get("artifact").and_then(|v| v.as_str()) {
                 roles.insert(r.to_string());
             }
+        }
+        if self.ram_steps_left(order)? {
+            roles.insert(LAYOUT_ROLE.to_string());
         }
         for role in roles {
             let a = self.artifacts.artifact(&role).map_err(|e| stop(e.to_string()))?;
@@ -445,6 +474,27 @@ impl<E: InstallEdge, S: ArtifactSource> Exec<'_, E, S> {
                 .map_err(|e| stop(e.to_string()))?;
         }
         Ok(())
+    }
+
+    /// The backup the edge reads is the one the record holds (its manifest's
+    /// hash), checked before anything is sent to the device. Steps in the
+    /// RAM environment read the backed-up table, so they need it there.
+    async fn check_backup(&mut self, order: &[String]) -> Result<(), Stopped> {
+        let Some(want) = self.record.backup.as_ref().and_then(|b| b.manifest_sha256.clone()) else {
+            return Ok(());
+        };
+        let location = self.record.backup.as_ref().map(|b| b.location.clone()).unwrap_or_default();
+        let got = self.edge.backup_manifest().await.map_err(|e| stop(format!("the backup: {e}")))?;
+        match got {
+            Some(g) if g == want => Ok(()),
+            Some(g) => Err(stop(format!(
+                "the backup's manifest is {g}, the record's {want} (made in {location}): not the backup this installation rests on; resume with that backup"
+            ))),
+            None if self.ram_steps_left(order)? => Err(stop(format!(
+                "the steps left read the backup the record holds (manifest {want}, made in {location}), and none is given: resume with that backup"
+            ))),
+            None => Ok(()),
+        }
     }
 
     fn now(&mut self) -> Option<String> {
@@ -576,7 +626,16 @@ impl<E: InstallEdge, S: ArtifactSource> Exec<'_, E, S> {
             .begin(&st.id, &self.d.texts.steps.get(&st.id).cloned().unwrap_or_default(), at)
             .map_err(|e| self.fail(st, e, false, false))?;
         self.save(Some(st)).await?;
-        let b = match self.edge.back_up(st).await {
+        let held = self.record.backup.as_ref().and_then(|b| b.manifest_sha256.clone());
+        // A backup the record holds already stays the one.
+        let got = self.edge.back_up(st).await.and_then(|b| match &held {
+            Some(h) if b.manifest_sha256.as_ref() != Some(h) => Err(format!(
+                "the backup's manifest is {}, the record's {h}: not the backup this installation rests on",
+                b.manifest_sha256.as_deref().unwrap_or("not verified")
+            )),
+            _ => Ok(b),
+        });
+        let b = match got {
             Ok(b) if b.manifest_sha256.is_some() => b,
             Ok(_) => return Err(self.fail(st, "the backup isn't verified", false, false)),
             Err(e) => {
@@ -994,9 +1053,22 @@ impl<E: InstallEdge, S: ArtifactSource> Exec<'_, E, S> {
         Ok((src, s))
     }
 
+    /// The partition layout: only the one the record holds.
     async fn layout_bytes(&mut self, st: &Step) -> Result<Vec<u8>, Stopped> {
-        let role = "partition-layout";
+        let role = LAYOUT_ROLE;
         let a = self.artifacts.artifact(role).map_err(|e| self.fail(st, e.to_string(), false, false))?;
+        match self.record.artifacts.iter().find(|r| r.role == role) {
+            Some(r) if *r == a => {}
+            Some(r) => {
+                return Err(self.fail(
+                    st,
+                    format!("the release's {role} is {}, the record's {}: not the confirmed artifact", a.sha256, r.sha256),
+                    false,
+                    false,
+                ));
+            }
+            None => return Err(self.fail(st, format!("the record has no {role}: it wasn't confirmed"), false, false)),
+        }
         let d = self.d;
         let mut r = self.artifacts.reader(role).await.map_err(|e| fail_in(d, st, e.to_string(), false, false))?;
         let mut b = vec![0u8; a.size as usize];

@@ -17,7 +17,11 @@
 //
 // A browser writes a file through a swap file of its own and puts the bytes under the file's
 // name only when it is closed, so a page closed in the middle of a save leaves the record of
-// the save before it.
+// the save before it. Nothing forces the bytes to the disk, though: a power cut or a crash of
+// the computer's system can lose a save and a kept original (spec 001, Assumptions).
+//
+// The backup is only read; a resume checks its manifest against the record's hash
+// (back_up, asked with step "").
 //
 // The release is a folder the person picked: its release.json and the files it names, read in
 // slices when the core asks (nothing is read whole, nothing is uploaded or kept).
