@@ -235,6 +235,12 @@ pinned to,
 - **FR-016**: A change to how the machine starts (a boot slot's flags, a firmware boot entry,
   the boot loader itself) is its own planned object, of a kind the backend defines, never
   hidden in a partition write.
+  Where the installer writes a boot setting itself rather than through the boot loader (the
+  slot flags in the partition table's entries, through the RAM environment), the boot
+  setting's parameters say where it lives and what it holds: for slot flags, the entry that
+  holds a slot's flags (with the slot letter in its name), the attribute bits they occupy,
+  and the values for a pinned slot, the other slots' fallback and an unbootable slot. No
+  such value is written in the installer's code.
 
 ### What it keeps
 

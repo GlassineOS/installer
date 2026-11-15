@@ -152,6 +152,8 @@ struct World {
     abl_never_takes: bool,
     erased_whole_disk: bool,
     reaches: usize,
+    /// Each fastboot session's commands, in order.
+    sessions: Vec<Vec<String>>,
 }
 
 impl World {
@@ -178,6 +180,7 @@ impl World {
             abl_never_takes: false,
             erased_whole_disk: false,
             reaches: 0,
+            sessions: vec![],
         }
     }
 
@@ -195,6 +198,7 @@ impl World {
     fn sync(&mut self) {
         if let Some(fb) = self.fb.take() {
             let s = fb.borrow();
+            self.sessions.push(s.commands.clone());
             if !self.abl_never_takes {
                 self.abl = s.parts["abl"].clone();
             }
@@ -544,9 +548,18 @@ fn the_whole_job_installs_and_waits_for_the_persons_check() {
     assert!(k.intent.summary.contains(&rec.artifacts.iter().find(|a| a.role == "kernel").unwrap().sha256));
     let ev = &k.outcome.as_ref().unwrap().evidence;
     assert!(ev["read-back"].contains("match"), "{ev:?}");
-    // the RAM environment was entered through a fresh boot loader start
-    // (reboot-bootloader after the flash, then the oem verb)
     assert!(edge.notes.iter().any(|n| n.contains("armed")));
+    // the RAM environment was entered by oem reboot-recovery in the same
+    // session as the RAM environment's flash, nothing between them
+    let s = edge
+        .w
+        .sessions
+        .iter()
+        .find(|c| c.iter().any(|x| x == "oem reboot-recovery"))
+        .expect("an oem reboot-recovery");
+    let flash = s.iter().position(|x| x == "flash:recovery").expect("the flash in that session");
+    let oem = s.iter().position(|x| x == "oem reboot-recovery").unwrap();
+    assert_eq!(oem, flash + 1, "{s:?}");
 }
 
 #[test]
@@ -734,6 +747,34 @@ fn a_boot_image_the_change_refuses_is_left_and_the_run_goes_on() {
     go(&d, &plan, &mut rec, src, &mut edge).unwrap();
     let e = rec.journal.iter().find(|e| e.step == "patch-stock-boot").unwrap();
     assert!(e.outcome.as_ref().unwrap().evidence["found"].contains("already"));
+}
+
+#[test]
+fn a_refused_boot_image_doesnt_hold_a_resume_after_the_final_restart() {
+    let img = boot_image(b"wait,verify", 5000);
+    let (d, plan, src, mut rec, mut edge) = fresh_keeping(&img);
+    go(&d, &plan, &mut rec, src.clone(), &mut edge).unwrap();
+    let n = edge.saves;
+    // resumed after the run ended: the check, the device left alone
+    let mut again = Record::parse(edge.saved.as_ref().unwrap()).unwrap();
+    let reaches = edge.w.reaches;
+    let r = go(&d, &plan, &mut again, src.clone(), &mut edge);
+    assert!(matches!(r, Ok(Outcome::WaitingForAcceptance { .. })), "{r:?}");
+    assert_eq!(edge.w.reaches, reaches);
+    // cut at the restart's two saves (before it is sent, after)
+    for cut in [n - 1, n] {
+        let (d, plan, src, mut rec, mut edge) = fresh_keeping(&img);
+        edge.cut_at_save = Some(cut);
+        assert!(go(&d, &plan, &mut rec, src.clone(), &mut edge).is_err());
+        edge.cut_at_save = None;
+        let mut rec = Record::parse(edge.saved.as_ref().unwrap()).unwrap();
+        let r = go(&d, &plan, &mut rec, src, &mut edge);
+        assert!(matches!(r, Ok(Outcome::WaitingForAcceptance { .. })), "cut at save {cut}: {r:?}");
+        edge.w.sync();
+        assert_eq!(edge.w.at, At::Glassine);
+        installed_as(&edge.w, true);
+        assert_eq!(rec.state("patch-stock-boot"), StepState::Failed);
+    }
 }
 
 #[test]
