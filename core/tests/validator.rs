@@ -978,3 +978,54 @@ fn copy_partition_runs_in_a_ram_environment_only() {
         "steps[6].mode",
     );
 }
+
+/// The index of the `[[<table>]]` entry whose text holds `marker`.
+fn index_of(t: &str, table: &str, marker: &str) -> usize {
+    t[..t.find(marker).unwrap_or_else(|| panic!("{marker}"))]
+        .matches(&format!("[[{table}]]\n"))
+        .count()
+        - 1
+}
+
+/// FR-003: the RAM environment's writes are format 3's. A format 1 or 2
+/// description has no copy-partition step, no step in a glassine-ram mode
+/// besides the backup, and no departure about the operations format 3 added.
+#[test]
+fn formats_1_and_2_have_none_of_the_ram_environments_writes() {
+    for (f, t) in [(1, text("core/tests/fixtures/descriptions/onyx-noteair-format1.toml")), (2, format2())] {
+        assert_eq!(valid(&t).format, f);
+        // copy-partition
+        let n = t.matches("[[steps]]\n").count();
+        let copy = "\n[[steps]]\nid = \"copy\"\njob = \"install\"\nkind = \"copy-partition\"\nmode = \"fastboot\"\nparams = { from = \"vendor\", partition = \"vendor_b\" }\nwrites = [\"vendor_b\"]\ndone = [{ key = \"installer.step.copy\", present = true, mode = \"installer\" }]\nescape.failure = { leaves = \"installer-can-finish\", way_out = { step = \"copy\" } }\nescape.interruption = { leaves = \"installer-can-finish\", way_out = { step = \"copy\" } }\npoint_of_no_return = false\nsafe_stop = true\nuntried = \"x\"\n";
+        let at = t.find("\n[texts]").unwrap();
+        rejects(&format!("{}{copy}{}", &t[..at], &t[at..]), &format!("steps[{n}].kind"));
+        // a write in a glassine-ram mode
+        if t.contains("kind = \"glassine-ram\"") {
+            let i = index_of(&t, "steps", "id = \"write-kernel\"");
+            let w = t.replacen(
+                "mode = \"fastboot\"\nafter = [\"partition-table\"]\nparams = { artifact = \"kernel\"",
+                "mode = \"ram\"\nafter = [\"partition-table\"]\nparams = { artifact = \"kernel\"",
+                1,
+            );
+            assert_ne!(w, t, "format {f}");
+            rejects(&w, &format!("steps[{i}].mode"));
+        }
+        // never-use of an operation format 3 added
+        let m = index_of(&t, "modes", "id = \"fastboot\"\nkind = \"fastboot\"");
+        let marker = "id = \"fastboot\"\nkind = \"fastboot\"";
+        let j = t[t.find(marker).unwrap()..]
+            .split("\n[[modes]]")
+            .next()
+            .unwrap()
+            .matches("[[modes.departures]]")
+            .count();
+        let at = t.find(marker).unwrap();
+        let end = at + t[at..].find("\n[[modes]]").unwrap();
+        let w = format!(
+            "{}\n[[modes.departures]]\nkind = \"never-use\"\nparams = {{ operation = \"flash-partition-table\", reason = \"x\" }}\nuntried = \"x\"\n{}",
+            &t[..end],
+            &t[end..]
+        );
+        rejects(&w, &format!("modes[{m}].departures[{j}].params.operation"));
+    }
+}

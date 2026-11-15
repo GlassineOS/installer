@@ -1120,7 +1120,7 @@ pub fn shape_for(format: i64) -> Table {
                 tried(vec![
                     f("id", sp(ID_PATTERN, "stable id")),
                     f("job", se(&ids(vocab::JOBS), "")),
-                    f("kind", se(&kinds_ids(vocab::STEP_KINDS), "a step kind of the description's backend")),
+                    f("kind", se(&kinds_ids(vocab::step_kinds(format)), "a step kind of the description's backend")),
                     f("mode", sp(ID_PATTERN, "the mode it needs")),
                     opt("after", arr(sp(ID_PATTERN, ""), "the steps it comes after")),
                     opt("when", arr(when(), "the choices it depends on (all must hold)")),
@@ -1148,7 +1148,7 @@ pub fn shape_for(format: i64) -> Table {
                 ]),
             ),
             "kind",
-            vocab::STEP_KINDS,
+            vocab::step_kinds(format),
             format,
         )
         .one_of(&["verified", "untried"]),
@@ -1281,9 +1281,12 @@ pub fn vocabularies_json(format: i64) -> serde_json::Value {
     };
     let mut v = json!({
         "fact_keys": vocab::FACT_KEYS.iter().filter(|k| k.since <= format).map(|k| json!({ "key": k.pattern, "type": format!("{:?}", k.ty), "kind": k.kind.name(), "modes": k.modes, "unit_unique": k.unit_unique, "doc": k.doc })).collect::<Vec<_>>(),
-        "mode_kinds": vocab::MODE_KINDS.iter().map(|m| json!({ "id": m.id, "doc": m.doc, "backends": m.backends, "operations": m.operations })).collect::<Vec<_>>(),
+        "mode_kinds": vocab::MODE_KINDS.iter().map(|m| json!({ "id": m.id, "doc": vocab::doc_in(&format!("mode:{}", m.id), m.doc, format), "backends": m.backends, "operations": vocab::operations(m, format) })).collect::<Vec<_>>(),
         "departures": kinds(vocab::departures(format)),
-        "step_kinds": kinds(vocab::STEP_KINDS),
+        "step_kinds": vocab::step_kinds(format).iter().map(|k| {
+            json!({ "id": k.id, "doc": vocab::doc_in(&format!("step:{}", k.id), k.doc, format), "backends": k.backends, "modes": vocab::step_modes(k, format),
+                "params": k.params.iter().filter(|p| p.since <= format).map(|p| json!({ "name": p.name, "type": format!("{:?}", p.ty), "required": p.required, "doc": p.doc })).collect::<Vec<_>>() })
+        }).collect::<Vec<_>>(),
         "boot_setting_kinds": kinds(vocab::BOOT_SETTING_KINDS),
         "backup_means": kinds(vocab::BACKUP_MEANS),
         "capabilities": vocab::CAPABILITIES.iter().map(|c| json!({ "id": c.id, "doc": c.doc, "needed_to_boot_safely": c.safe_boot })).collect::<Vec<_>>(),

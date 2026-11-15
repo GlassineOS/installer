@@ -923,16 +923,6 @@ pub const STEP_KINDS: &[Kind] = &[
         ],
     },
     Kind {
-        id: "copy-partition",
-        doc: "copies one partition of the device to another of the same size on the device, and checks the copy by reading it back",
-        backends: &["android-bootloader"],
-        modes: &["glassine-ram"],
-        params: &[
-            p("from", T::Text, true, "the partition copied, which the step reads"),
-            p("partition", T::Partition, true, "the partition it goes to"),
-        ],
-    },
-    Kind {
         id: "create-partitions",
         doc: "creates partitions in the target disk's free space",
         backends: &["uefi-pc"],
@@ -963,7 +953,89 @@ pub const STEP_KINDS: &[Kind] = &[
         modes: &["local"],
         params: &[p("partition", T::Partition, true, "the partition the entry starts from")],
     },
+    // From format 3 on (STEP_KINDS_SINCE_3): keep them last.
+    Kind {
+        id: "copy-partition",
+        doc: "copies one partition of the device to another of the same size on the device, and checks the copy by reading it back",
+        backends: &["android-bootloader"],
+        modes: &["glassine-ram"],
+        params: &[
+            p("from", T::Text, true, "the partition copied, which the step reads"),
+            p("partition", T::Partition, true, "the partition it goes to"),
+        ],
+    },
 ];
+
+/// The step kinds that exist from format 3 on; they stand last in [`STEP_KINDS`].
+pub const STEP_KINDS_SINCE_3: &[&str] = &["copy-partition"];
+
+/// The step kinds of `format`.
+pub fn step_kinds(format: i64) -> &'static [Kind] {
+    let n = STEP_KINDS.len();
+    if format >= 3 {
+        STEP_KINDS
+    } else {
+        &STEP_KINDS[..n - STEP_KINDS_SINCE_3.len()]
+    }
+}
+
+/// The mode kinds a step kind runs in from format 3 on only, as (step kind,
+/// mode kind): the RAM environment writes from format 3.
+pub const STEP_MODES_SINCE_3: &[(&str, &str)] = &[
+    ("write-partition-table", "glassine-ram"),
+    ("write-image", "glassine-ram"),
+    ("write-base", "glassine-ram"),
+    ("set-boot-slot", "glassine-ram"),
+];
+
+/// The mode kinds a step of kind `k` runs in, in `format`.
+pub fn step_modes(k: &Kind, format: i64) -> Vec<&'static str> {
+    k.modes
+        .iter()
+        .copied()
+        .filter(|m| format >= 3 || !STEP_MODES_SINCE_3.contains(&(k.id, *m)))
+        .collect()
+}
+
+/// The operations of a mode kind that exist from format 3 on only, as (mode
+/// kind, operation).
+pub const OPERATIONS_SINCE_3: &[(&str, &str)] = &[
+    ("fastboot", "reboot-recovery"),
+    ("fastboot", "flash-partition-table"),
+    ("glassine-ram", "write"),
+];
+
+/// The operations of mode kind `m` a departure may name in `format`.
+pub fn operations(m: &ModeKind, format: i64) -> Vec<&'static str> {
+    m.operations
+        .iter()
+        .copied()
+        .filter(|o| format >= 3 || !OPERATIONS_SINCE_3.contains(&(m.id, *o)))
+        .collect()
+}
+
+/// What an entry meant before format 3, where format 3 changed its meaning
+/// (`mode:<id>` for a mode kind, `step:<id>` for a step kind): an earlier
+/// format's schema keeps the earlier text.
+pub const DOCS_BEFORE_3: &[(&str, &str)] = &[
+    (
+        "mode:glassine-ram",
+        "a GlassineOS environment the boot loader starts from memory (the ram-environment artifact), over USB; it reads the device's storage and changes nothing (not built yet)",
+    ),
+    (
+        "step:write-partition-table",
+        "writes a new partition table from the layout artifact: its backup copy first, then the primary",
+    ),
+    ("step:set-boot-slot", "changes the A/B slot flags"),
+];
+
+/// The meaning of entry `key` (`mode:<id>` or `step:<id>`) in `format`.
+pub fn doc_in(key: &str, doc: &'static str, format: i64) -> &'static str {
+    match DOCS_BEFORE_3.iter().find(|(k, _)| *k == key) {
+        Some((_, d)) if format < 3 => d,
+        _ => doc,
+    }
+}
 
 pub fn step_kind(id: &str) -> Option<&'static Kind> {
     STEP_KINDS.iter().find(|k| k.id == id)
