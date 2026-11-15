@@ -38,8 +38,12 @@
 //                             -> a backup folder made before (manifest.json and the user area)
 //   installFolder(machine)    -> the backup folder the installation rests on: this page's finished
 //                                backup, or the earlier one chosen; { name, from }
-//   startInstall(machine, input, confirmation)
-//                             -> the record of the confirmed plan into that folder, then the run
+//   confirmPlan(machine, input, text) / confirmed(machine, input)
+//                             -> the person confirmed this plan on Confirm (its button), for this
+//                                input and release; kept in this page's memory only
+//   startInstall(machine, input)
+//                             -> the record of the confirmed plan into that folder, then the run;
+//                                refused unless confirmPlan was given for the same plan
 //   openInstall()             -> a folder with an installation record (call from a click): the
 //                                record's view, to resume it after a reload or another day
 //   chooseRunRelease()        -> the release folder for that resume
@@ -58,14 +62,16 @@
 // - Live (the default): the core itself, built for the browser (web/pkg, `make web-pkg`). The
 //   person picks the device in the browser's chooser; the core inspects it over WebUSB (reads
 //   only: getvar) and gives a facts snapshot, kept in this page's memory as machine `live-N`,
-//   with the fastboot session still open. The one command besides getvar ever sent is
-//   `reboot`, in that session: when the person clicks Restart it, or, best effort, when the
+//   with the fastboot session still open. The one command besides getvar ever sent in that
+//   session is `reboot`: when the person clicks Restart it, or, best effort, when the
 //   page is closed or reloaded while the session is open (pagehide). The session is kept
 //   because the Note Air's boot loader only answers a fresh start: once it is closed, the page
 //   can't restart the device any more, and it stays in its USB mode until its power button is
 //   held. Every check report and plan is the core's answer for those facts and
 //   the person's choices. The descriptions are the copies the core carries. Nothing is fetched
 //   but the core: the site works without the rest of the repository.
+//   The writes of an installation are the core executor's (install_run), in its own sessions,
+//   after Confirm, with the release and the backup the person chose (startInstall).
 //
 // - Fixtures (?fixtures=1, for the screen tests): `machine` names a facts snapshot of the
 //   core's tests (core/tests/fixtures/facts/), and the records are the core's own output for
@@ -80,7 +86,7 @@
 
 import { descriptionTexts } from './description-texts.js';
 import { storeSupported, pickFolder, newFolder, folderName, folderStore } from '../lib/store.js';
-import { openRelease, folderState, readRecord, saveNewRecord, installHost } from '../lib/install.js';
+import { openRelease, folderState, readRecord, readInputs, saveNewRecord, installHost } from '../lib/install.js';
 
 const at = (path) => new URL(path, import.meta.url);
 
@@ -478,6 +484,25 @@ export async function startBackup(machine, device, file, scope = 'whole-disk') {
 const releases = new Map(); // machine -> the release folder picked for it (lib/install.js openRelease)
 const earlier = new Map(); // machine -> a backup folder made before, picked by the person
 
+// The confirmations given on Confirm: machine -> { key, text }. The key is the input without
+// the release's name and the release itself (a reload forgets both, and the answers they rest on).
+const confirmations = new Map();
+const confirmKey = (machine, input) => {
+  const { release: _name, ...rest } = normalInput(input);
+  const rel = releases.get(machine);
+  return JSON.stringify([rest.choices, rest.hardware, rest.developer, rel ? rel.manifest : null]);
+};
+
+export function confirmPlan(machine, input, text) {
+  confirmations.set(machine, { key: confirmKey(machine, input), text });
+}
+
+export function confirmed(machine, input) {
+  const c = confirmations.get(machine);
+  return !!c && c.key === confirmKey(machine, input) && !!releases.get(machine);
+}
+
+let releaseCount = 0;
 export async function chooseRelease(machine) {
   let dir;
   try { dir = await globalThis.showDirectoryPicker({ id: 'glassine-release', mode: 'read' }); } catch (e) {
@@ -485,12 +510,14 @@ export async function chooseRelease(machine) {
     throw e;
   }
   releases.set(machine, await openRelease(dir));
+  releaseCount += 1;
   return release(machine);
 }
 
 export function release(machine) {
   const r = releases.get(machine);
-  return r ? { name: r.name, artifacts: r.artifacts } : null;
+  // tag: the release's place in the address (`release=`): which choice, never the folder's name.
+  return r ? { name: r.name, artifacts: r.artifacts, tag: `chosen-${releaseCount}` } : null;
 }
 
 async function backupFolder(dir) {
@@ -586,11 +613,9 @@ async function runIt() {
   Object.assign(r, { state: 'running', result: null, error: null, progress: null, prompt: null });
   instChanged(true);
   const record = await readRecord(r.dir);
-  // Untried write steps run only for a developer who asked for them, and the plan says whether
-  // that was asked: it is developer-only, or ready although it has untried steps (a plan for
-  // anyone else with untried steps is refused, and no record is made of it).
-  const pl = r.view.plan;
-  const developer = pl.status === 'developer-only' || (pl.status === 'ready' && (pl.untried_steps || []).length > 0);
+  // Untried write steps run only for a developer who asked for them: the person's answer, kept
+  // beside the record (lib/install.js); without it, no.
+  const developer = !!r.developer;
   try {
     r.result = JSON.parse(await m.install_run(record, developer, r.rel.files, r.host));
     r.view = view(m, r.result.record);
@@ -606,8 +631,10 @@ async function runIt() {
 }
 
 // Makes the record of the confirmed plan in the backup folder, then runs it (call from a click).
-export async function startInstall(machine, input, confirmation) {
+export async function startInstall(machine, input) {
   if (busy()) return installRun();
+  if (!confirmed(machine, input)) throw new Error('Confirm the plan first: the installation runs only the plan you confirmed, with this release.');
+  const confirmation = confirmations.get(machine).text;
   const f = folderOf(machine);
   if (!f) throw new Error('Choose the backup the installation rests on first.');
   const rel = releases.get(machine);
@@ -619,8 +646,9 @@ export async function startInstall(machine, input, confirmation) {
   const p = await plan(machine, input);
   if (!p || !p.description) throw new Error('There is no plan for this device.');
   const text = (() => { try { return m.install_new(p.description, got.facts, JSON.stringify(answers), rel.manifest, confirmation, new Date().toISOString().replace(/\.\d+Z$/, 'Z')); } catch (e) { throw failure(e); } })();
-  await saveNewRecord(f.dir, text);
-  inst = { state: 'found', dir: f.dir, folder: f.name, rel, release: rel.name, view: view(m, text), result: null, error: null, progress: null, prompt: null, notes: [] };
+  const developer = !!normalInput(input).developer;
+  await saveNewRecord(f.dir, text, { developer });
+  inst = { state: 'found', dir: f.dir, folder: f.name, rel, release: rel.name, developer, view: view(m, text), result: null, error: null, progress: null, prompt: null, notes: [] };
   return runIt();
 }
 
@@ -633,9 +661,10 @@ export async function openInstall() {
     throw e;
   }
   const text = await readRecord(dir);
+  const inputs = text ? await readInputs(dir) : null;
   if (!text) throw new Error(`${dir.name} holds no installation record (${'install-record.json'}): choose the backup folder the installation used`);
   const m = await wasm();
-  inst = { state: 'found', dir, folder: dir.name, rel: null, release: null, view: view(m, text), result: null, error: null, progress: null, prompt: null, notes: [] };
+  inst = { state: 'found', dir, folder: dir.name, rel: null, release: null, developer: !!(inputs && inputs.developer === true), view: view(m, text), result: null, error: null, progress: null, prompt: null, notes: [] };
   instChanged(true);
   return installRun();
 }

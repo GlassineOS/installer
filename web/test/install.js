@@ -14,6 +14,7 @@
 
 const assert = require('assert');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const puppeteer = require('puppeteer-core');
 const { serve } = require('./serve.js');
@@ -29,6 +30,9 @@ function vars() {
 }
 const PLAN_Q = 'machine=live-1&choice.keep-stock=no&hardware.emergency-cable=yes&developer=1';
 const BACKUP = 'Backups/onyx-noteair-backup-2026-11-15-120000';
+// The programmer file of the core's tests (a synthetic one): Confirm needs it for the backup
+// step even when the backup was made earlier.
+const PROGRAMMER = Buffer.from(fs.readFileSync(path.join(ROOT, 'web/fixtures/supplied/fits-unknown.hex'), 'utf8').replace(/\s/g, ''), 'hex');
 
 async function main() {
   if (!fs.existsSync(path.join(SITE, 'pkg/glassine_installer_web_bg.wasm'))) throw new Error(`${SITE}: no site with the core (make web-site)`);
@@ -78,12 +82,51 @@ async function main() {
     return [...new Set(r.journal.filter((e) => e.outcome && e.outcome.result === 'done').map((e) => e.step))];
   };
 
-  function setting() {
+  // without: release roles left out (the images' release folder may carry no recovery).
+  function setting({ without = [] } = {}) {
     const world = new World({ vars: vars() });
     const files = {};
+    for (const role of without) {
+      delete world.release.files[`${role}.img`];
+      const m = JSON.parse(world.release.files['release.json']);
+      delete m.artifacts[role];
+      world.release.files['release.json'] = Buffer.from(JSON.stringify(m));
+    }
     for (const [k, v] of Object.entries(world.release.files)) files[`Release/${k}`] = v;
     Object.assign(files, backupFiles(world, BACKUP));
     return { world, tree: new Tree(files) };
+  }
+
+  // From the check to the start, as a person goes: Supply (the programmer, its warning
+  // confirmed), Confirm (the release, the erase tick, the replaced system's name, Install as
+  // planned), Back up (a backup made earlier), Install (that folder, Start).
+  async function confirmAndStart(page, tree) {
+    await go(page, `#/supply?${PLAN_Q}`, 'supply');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'glassine-install-'));
+    fs.writeFileSync(path.join(dir, 'programmer.elf'), PROGRAMMER);
+    await (await page.$('#file-input')).uploadFile(path.join(dir, 'programmer.elf'));
+    await page.waitForFunction(() => { const f = document.querySelector('#file'); return f && f.dataset.verdict === 'fits-unknown'; }, { timeout: 15000 });
+    await page.click('#trust');
+    await go(page, `#/confirm?${PLAN_Q}`, 'confirm');
+    assert.match(await page.$eval('#release-name', (x) => x.textContent), /Not chosen yet/);
+    tree.pick = 'Release';
+    await page.click('#choose-release');
+    await page.waitForFunction(() => /[?&]release=chosen-\d+/.test(location.hash) && document.documentElement.dataset.ready === 'confirm' && document.documentElement.dataset.hash === location.hash, { timeout: 15000 });
+    assert.strictEqual(await page.$eval('#release-name', (x) => x.textContent), 'Release');
+    assert.doesNotMatch(await page.evaluate(() => location.hash), /Release/, 'the folder’s name is in the address');
+    if (await page.$('#erase-ack')) await page.click('#erase-ack');
+    if (await page.$('#osname')) await page.type('#osname', await page.$eval('label[for="osname"] strong', (x) => x.textContent));
+    assert.ok(!(await page.$eval('#install', (x) => x.disabled)), 'Confirm can’t be given');
+    await page.click('#install');
+    await rendered(page, 'backup');
+    await page.click('#use-earlier');
+    await rendered(page, 'install');
+    assert.strictEqual(await page.$('#not-confirmed'), null);
+    assert.ok(await page.$eval('#start-install', (x) => x.disabled), 'it starts before the backup is chosen');
+    tree.pick = BACKUP;
+    await page.click('#backup-folder-choose');
+    await page.waitForFunction(() => !document.querySelector('#start-install').disabled, { timeout: 15000 });
+    await page.click('#start-install');
   }
 
   // From Start to the moment the run waits for the RAM environment: the check, the restart, the
@@ -103,19 +146,7 @@ async function main() {
     await new Promise((r) => setTimeout(r, 400));
     assert.strictEqual(world.at, 'android');
 
-    await go(page, `#/confirm?${PLAN_Q}`, 'confirm');
-    assert.match(await page.$eval('#release-name', (x) => x.textContent), /Not chosen yet/);
-    tree.pick = 'Release';
-    await page.click('#choose-release');
-    await page.waitForFunction(() => /[?&]release=Release/.test(location.hash) && document.documentElement.dataset.ready === 'confirm' && document.documentElement.dataset.hash === location.hash, { timeout: 15000 });
-    assert.strictEqual(await page.$eval('#release-name', (x) => x.textContent), 'Release');
-
-    await go(page, `#/install?${PLAN_Q}&release=Release`, 'install');
-    assert.ok(await page.$eval('#start-install', (x) => x.disabled), 'it starts before the backup is chosen');
-    tree.pick = BACKUP;
-    await page.click('#backup-folder-choose');
-    await page.waitForFunction(() => !document.querySelector('#start-install').disabled, { timeout: 15000 });
-    await page.click('#start-install');
+    await confirmAndStart(page, tree);
 
     // The device isn't on the bus (Android, no USB debugging for a browser): the person says where it is.
     await waitFor(page, '#prompt[data-kind="already"][data-mode="fastboot-stock"]');
@@ -242,8 +273,8 @@ async function main() {
     await page.close();
   });
 
-  await test('Stop at the next safe point: the run stops after the step, says so, and offers Resume', async () => {
-    const { world, tree } = setting();
+  await test('Stop at the next safe point, with a release without a recovery: the run stops after the step, says so, and offers Resume; without the developer’s answer beside the record, Resume refuses the untried steps', async () => {
+    const { world, tree } = setting({ without: ['recovery'] });
     const { page, problems } = await open(world, tree);
     await page.goto(base + '#/start', { waitUntil: 'load' });
     await rendered(page, 'start');
@@ -252,15 +283,7 @@ async function main() {
     await page.click('#choose');
     await rendered(page, 'check');
     await records(page, 'restart');
-    await go(page, `#/confirm?${PLAN_Q}`, 'confirm');
-    tree.pick = 'Release';
-    await page.click('#choose-release');
-    await page.waitForFunction(() => /[?&]release=Release/.test(location.hash) && document.documentElement.dataset.ready === 'confirm', { timeout: 15000 });
-    await go(page, `#/install?${PLAN_Q}&release=Release`, 'install');
-    tree.pick = BACKUP;
-    await page.click('#backup-folder-choose');
-    await page.waitForFunction(() => !document.querySelector('#start-install').disabled, { timeout: 15000 });
-    await page.click('#start-install');
+    await confirmAndStart(page, tree);
     await waitFor(page, '#prompt[data-kind="already"]');
     await page.click('#stop-install');
     await page.waitForFunction(() => /Stopping/.test(document.querySelector('#stop-install').textContent), { timeout: 5000 });
@@ -275,6 +298,21 @@ async function main() {
     assert.deepStrictEqual(stepsDone(tree), ['back-up', 'replace-boot-loader']);
     assert.ok(world.glassine(), 'the step it stopped after is done');
     assert.ok(await page.$('#resume-install'), 'Resume is offered');
+    assert.deepStrictEqual(JSON.parse(tree.files.get(`${BACKUP}/install-record.inputs.json`)), { developer: true });
+    // The answer beside the record is gone: the untried steps aren't run.
+    tree.files.delete(`${BACKUP}/install-record.inputs.json`);
+    await page.reload({ waitUntil: 'load' });
+    await rendered(page, 'install');
+    tree.pick = BACKUP;
+    await page.click('#open-record');
+    await waitFor(page, '#run-release-choose');
+    tree.pick = 'Release';
+    await page.click('#run-release-choose');
+    await page.waitForFunction(() => !document.querySelector('#resume-install').disabled, { timeout: 15000 });
+    await page.click('#resume-install');
+    await waitFor(page, '#stopped #why');
+    assert.match(await page.$eval('#why', (x) => x.textContent), /untried write step/);
+    assert.deepStrictEqual(stepsDone(tree), ['back-up', 'replace-boot-loader'], 'nothing more was done');
     assert.deepStrictEqual(problems, []);
     await page.close();
   });
@@ -290,11 +328,11 @@ async function main() {
     await page.click('#choose');
     await rendered(page, 'check');
     await records(page, 'restart');
-    await go(page, `#/confirm?${PLAN_Q}`, 'confirm');
-    tree.pick = 'Release';
-    await page.click('#choose-release');
-    await page.waitForFunction(() => /[?&]release=Release/.test(location.hash) && document.documentElement.dataset.ready === 'confirm', { timeout: 15000 });
-    await go(page, `#/install?${PLAN_Q}&release=Release`, 'install');
+    // Straight to Install, without Confirm: it can't start, and says where to go.
+    await go(page, `#/install?${PLAN_Q}`, 'install');
+    assert.ok(await page.$('#not-confirmed #to-confirm'), 'Install without Confirm doesn’t send the person back');
+    assert.ok(await page.$eval('#start-install', (x) => x.disabled));
+    await assert.rejects(records(page, 'startInstall', 'live-1', { choices: { 'keep-stock': 'no' }, hardware: { 'emergency-cable': true }, developer: true }), /Confirm the plan first/);
     tree.pick = BACKUP;
     await page.click('#backup-folder-choose');
     await page.waitForFunction(() => /record of another installation/.test(document.querySelector('#backup-folder').textContent), { timeout: 15000 });

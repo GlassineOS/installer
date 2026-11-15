@@ -140,7 +140,9 @@ function StartPanel({ s }) {
   const [, tick] = useState(0);
   const rel = s.release(s.machine), folder = s.installFolder(s.machine);
   const open = isOpen(dev);
-  const ok = rel && folder && !folder.record && !open && s.plan;
+  // Only the plan the person confirmed, with this release (Confirm's button).
+  const conf = s.confirmed(s.machine, s.input);
+  const ok = rel && folder && !folder.record && !open && s.plan && conf;
   const refresh = (f) => act(async () => { await f(); tick((n) => n + 1); });
   return html`<${Page} s=${s} step="install" eyebrow="Install · ready to start" title="Start the installation"
       lead=${`The installer carries out the plan you confirmed, step by step, and keeps a record of each step next to the backup. If anything cuts it off, it resumes from that record.`}>
@@ -154,15 +156,18 @@ function StartPanel({ s }) {
           : folder.from === 'this-page' ? 'Made and checked on Back up. The record goes next to it.' : 'A backup made earlier. The installer checks it before the first write.'}
         button=${folder && folder.from === 'this-page' ? null : 'Choose a backup made earlier'} onClick=${refresh(() => s.chooseEarlierBackup(s.machine))} />
     </div>
+    ${!conf ? html`<${Admonition} kind="warning" seal="G" label="Not confirmed" title="Confirm the plan first" id="not-confirmed">
+      <p>The installation runs only the plan you confirmed, for the release you chose there. <a class="il-link" href=${s.link('confirm')} id="to-confirm">Back to Confirm</a>.</p>
+    </${Admonition}>` : null}
     ${open ? html`<${Admonition} kind="warning" seal="G" label="Still connected" title="Restart the device first" id="device-open">
       <p>The check’s connection still holds it. Restart it; the installer finds it again when the first step needs it.</p>
       <div class="ins-buttons"><button type="button" class="il-btn ins-primary" id="restart" onClick=${() => s.restart()}>Restart it</button></div>
     </${Admonition}>` : null}
     <${Problem} err=${err} />
     <p class="ins-small ins-soft">Keep ${s.m.the} connected and this page open. Each time ${s.m.the} restarts into another mode, your browser may ask you to choose it again.</p>
-    <${Actions} next=${ok ? 'The first steps: the backup is checked, then the device is looked for.' : 'Nothing, until the release and the backup are chosen and the device is restarted.'}
+    <${Actions} next=${ok ? 'The first steps: the backup is checked, then the device is looked for.' : !conf ? 'Nothing, until the plan is confirmed.' : 'Nothing, until the release and the backup are chosen and the device is restarted.'}
       out="Go back, or stop here. Nothing has changed."
-      buttons=${[{ label: 'Start the installation', onClick: act(() => s.startInstall(s.machine, s.input, 'Install as planned')), primary: true, id: 'start-install', disabled: !ok || busy },
+      buttons=${[{ label: 'Start the installation', onClick: act(() => s.startInstall(s.machine, s.input)), primary: true, id: 'start-install', disabled: !ok || busy },
         { label: 'Back to Confirm', href: s.link('confirm') }, { label: 'Stop here', href: s.link('start'), push: true }]} />
   </${Page}>`;
 }

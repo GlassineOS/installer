@@ -35,7 +35,7 @@ export function Confirm({ s, state }) {
   // Live: the release to install, picked here; its manifest is part of the plan (002 FR-019a).
   const rel = s.liveDevice && s.release ? s.release(s.machine) : null;
   const relOk = !s.liveDevice || !!rel;
-  const chooseRelease = () => { setRelErr(null); s.chooseRelease(s.machine).then((r) => { if (r) s.withInput({ ...s.input, release: r.name }); }, setRelErr); };
+  const chooseRelease = () => { setRelErr(null); s.chooseRelease(s.machine).then((r) => { if (r) s.withInput({ ...s.input, release: r.tag }); }, setRelErr); };
   const ok = ready && (!needAck || ack) && typedOk && !noRoom && fileOk && relOk;
   const pc = s.m.kind === 'pc';
   const b = backupView(s);
@@ -110,7 +110,10 @@ export function Confirm({ s, state }) {
     <p class="ins-small ins-soft">You can stop at any time: the installer stops at the next safe point and offers to resume or undo.</p>
     <${Actions} next=${next} out="Go back to the plan, or stop here. Nothing has changed."
       buttons=${[
-        { label: 'Install as planned', href: s.link('backup'), primary: true, disabled: !ok, id: 'install' },
+        // Live, the confirmation is what lets the installation start (records/index.js confirmPlan).
+        s.liveDevice && s.confirmPlan
+          ? { label: 'Install as planned', onClick: () => { s.confirmPlan(s.machine, s.input, 'Install as planned'); location.hash = s.link('backup'); }, primary: true, disabled: !ok, id: 'install' }
+          : { label: 'Install as planned', href: s.link('backup'), primary: true, disabled: !ok, id: 'install' },
         need ? { label: 'Back to the file', href: s.link('supply') } : { label: 'Back to the plan', href: s.link('plan') },
         ...(need ? [{ label: 'Back to the plan', href: s.link('plan') }] : []),
         { label: 'Stop here', href: s.link('start'), push: true }]} />

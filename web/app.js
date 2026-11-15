@@ -119,6 +119,8 @@ async function openSession(route, q) {
   s.release = records.release;
   s.chooseEarlierBackup = records.chooseEarlierBackup;
   s.installFolder = records.installFolder;
+  s.confirmPlan = records.confirmPlan;
+  s.confirmed = records.confirmed;
   s.startInstall = records.startInstall;
   s.openInstall = records.openInstall;
   s.chooseRunRelease = records.chooseRunRelease;
