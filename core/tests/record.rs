@@ -6,6 +6,7 @@ mod common;
 use common::root;
 use glassine_installer::artifacts::Artifact;
 use glassine_installer::lock::sha256_hex;
+use glassine_installer::record::{AsyncRecordStore, load_async, save_async};
 use glassine_installer::record::{Backup, Confirmation, Outcome, RECORD_FORMAT, Record, RecordStore, Result_, Resume, StepState, load, save};
 use std::collections::BTreeMap;
 
@@ -201,4 +202,44 @@ fn a_cut_save_leaves_the_previous_record() {
     st.fail_commit = false;
     save(&mut st, &r).unwrap();
     assert_eq!(load(&mut st).unwrap().unwrap().resume().unwrap(), Resume::Interrupted("back-up".into()));
+}
+
+/// The same store whose steps are waited for (a browser's folder).
+struct Later(Store);
+
+impl AsyncRecordStore for Later {
+    async fn write_temp(&mut self, bytes: &[u8]) -> Result<(), String> {
+        self.0.write_temp(bytes)
+    }
+    async fn commit(&mut self) -> Result<(), String> {
+        self.0.commit()
+    }
+    async fn read(&mut self) -> Result<Option<Vec<u8>>, String> {
+        self.0.read()
+    }
+}
+
+#[test]
+fn a_cut_save_through_a_store_that_is_waited_for_leaves_the_previous_record() {
+    let mut st = Later(Store::default());
+    assert_eq!(pollster::block_on(load_async(&mut st)).unwrap(), None);
+    let mut r = record();
+    pollster::block_on(save_async(&mut st, &r)).unwrap();
+    let before = pollster::block_on(load_async(&mut st)).unwrap().unwrap();
+    assert_eq!(before, r);
+    r.begin("back-up", "", None).unwrap();
+    let full = r.to_json().len();
+    for n in [0, full / 2, full - 1] {
+        st.0.cut_write = Some(n);
+        assert!(pollster::block_on(save_async(&mut st, &r)).is_err());
+        assert_eq!(pollster::block_on(load_async(&mut st)).unwrap().unwrap(), before, "cut after {n} bytes");
+    }
+    st.0.fail_commit = true;
+    assert!(pollster::block_on(save_async(&mut st, &r)).is_err());
+    st.0.fail_commit = false;
+    pollster::block_on(save_async(&mut st, &r)).unwrap();
+    assert_eq!(
+        pollster::block_on(load_async(&mut st)).unwrap().unwrap().resume().unwrap(),
+        Resume::Interrupted("back-up".into())
+    );
 }

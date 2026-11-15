@@ -38,7 +38,9 @@ const BROWSER = { platform: 'browser', connections: ['usb-web'] };
 // The pkg's exports: the three records, the descriptions' source, the host setup record and the
 // inspect's Connection (its facts, and reboot in its session), nothing that writes.
 // emergency_read reads a device in its emergency mode: list, read and restart only (004 FR-007).
-const EXPORTS = ['Connection', 'check', 'default', 'description', 'emergency_info', 'emergency_read', 'host_setup', 'initSync', 'inspect', 'plan', 'supplied_check'];
+// install_new, install_record_view and install_run: the installation, run by the core's executor
+// (its writes go through the description's write rules; web/test/install.js runs it).
+const EXPORTS = ['Connection', 'check', 'default', 'description', 'emergency_info', 'emergency_read', 'host_setup', 'initSync', 'inspect', 'install_new', 'install_record_view', 'install_run', 'plan', 'supplied_check'];
 // What the site may load: its own files. Never the repository's records or descriptions.
 const FORBIDDEN = /^(core|devices|fixtures|web|test)\//;
 
@@ -139,7 +141,7 @@ async function main() {
     assert.deepStrictEqual(filters, [{ classCode: 0xff, subclassCode: 0x42, protocolCode: 0x03 }], 'the chooser lists only fastboot interfaces');
   }
 
-  await test('the pkg exports the records and nothing that writes', async () => {
+  await test('the pkg exports the records, the backup read and the installation run', async () => {
     const { page, problems } = await open({ vars: {} });
     await page.goto(base + '#/start', { waitUntil: 'load' });
     await rendered(page, 'start');

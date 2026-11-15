@@ -326,3 +326,36 @@ pub fn load(store: &mut dyn RecordStore) -> Result<Option<Record>, String> {
         }
     }
 }
+
+/// A [`RecordStore`] whose steps have to be waited for (a folder the person
+/// picked in a browser, written through its file API).
+pub trait AsyncRecordStore {
+    /// As [`RecordStore::write_temp`].
+    fn write_temp(&mut self, bytes: &[u8]) -> impl Future<Output = Result<(), String>>;
+    /// As [`RecordStore::commit`].
+    fn commit(&mut self) -> impl Future<Output = Result<(), String>>;
+    /// As [`RecordStore::read`].
+    fn read(&mut self) -> impl Future<Output = Result<Option<Vec<u8>>, String>>;
+}
+
+/// [`save`] through an [`AsyncRecordStore`]: the same steps and the same check.
+pub async fn save_async<S: AsyncRecordStore>(store: &mut S, record: &Record) -> Result<(), String> {
+    let text = record.to_json();
+    store.write_temp(text.as_bytes()).await?;
+    store.commit().await?;
+    match store.read().await? {
+        Some(b) if b == text.as_bytes() => Ok(()),
+        _ => Err("the saved record doesn't read back as written".into()),
+    }
+}
+
+/// [`load`] through an [`AsyncRecordStore`].
+pub async fn load_async<S: AsyncRecordStore>(store: &mut S) -> Result<Option<Record>, String> {
+    match store.read().await? {
+        None => Ok(None),
+        Some(b) => {
+            let t = String::from_utf8(b).map_err(|_| "the record is not UTF-8".to_string())?;
+            Record::parse(&t).map(Some)
+        }
+    }
+}

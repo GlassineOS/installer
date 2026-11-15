@@ -32,6 +32,8 @@ use serde_json::{Value, json};
 
 include!(concat!(env!("OUT_DIR"), "/embedded.rs"));
 
+pub mod install;
+
 /// The shipped description copies that load; others are left out, as the
 /// command line does.
 pub fn descriptions() -> Vec<Description> {

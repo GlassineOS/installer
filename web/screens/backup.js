@@ -270,9 +270,9 @@ export function LiveBackup({ s, run }) {
         : st === 'refused' ? `Nothing, until ${articleOf(need.short)} ${need.short} works on ${the}.`
         : 'Nothing, until there is a backup that reads back.'}
       out=${running ? 'Stop ends the backup at its next read and restarts the device. Keep this page open: closing it stops the backup without the restart; what is stored so far is never taken for a backup.' : 'Stop here. ' + unchanged}
-      buttons=${st === 'ready' ? [{ label: 'Choose the device and back up', onClick: start, primary: true, id: 'start-backup', disabled: busy || !r || !r.folder || !fileOk }, { label: 'Back to the file', href: s.link('supply') }, { label: 'Stop here', href: s.link('start'), push: true }]
+      buttons=${st === 'ready' ? [{ label: 'Choose the device and back up', onClick: start, primary: true, id: 'start-backup', disabled: busy || !r || !r.folder || !fileOk }, { label: 'Use a backup made earlier', href: s.link('install'), id: 'use-earlier' }, { label: 'Back to the file', href: s.link('supply') }, { label: 'Stop here', href: s.link('start'), push: true }]
         : running ? [{ label: r.stopping ? 'Stopping…' : 'Stop', onClick: stop, id: 'stop-backup', disabled: !!r.stopping }]
-        : st === 'verified' ? [{ label: 'Continue', href: s.link('install', { state: p.steps.some((x) => x.point_of_no_return) ? 'ponr' : 'midway' }), primary: true }]
+        : st === 'verified' ? [{ label: 'Continue', href: s.link('install'), primary: true, id: 'to-install' }]
         : st === 'refused' ? [{ label: 'Choose another file', href: s.link('supply'), primary: true, id: 'another-file' }, { label: 'Back to the plan', href: s.link('plan') }, { label: 'Stop here', href: s.link('start'), push: true }]
         : [{ label: 'Back up again', onClick: start, primary: true, id: 'again', disabled: busy || !fileOk }, { label: 'Back to the plan', href: s.link('plan') }, { label: 'Stop here', href: s.link('start'), push: true }]} />
   </${Page}>`;

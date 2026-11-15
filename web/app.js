@@ -29,8 +29,12 @@ import { Verify } from './screens/verify.js';
 import { Resume } from './screens/resume.js';
 import { Installed } from './screens/installed.js';
 import { Done } from './screens/done.js';
+import { LiveInstall } from './screens/run.js';
 
 export const SCREENS = { start: Start, reach: Reach, check: Check, plan: Plan, supply: Supply, confirm: Confirm, backup: Backup, install: Install, verify: Verify, resume: Resume, installed: Installed, done: Done };
+// Live, Install and Resume are the core's run and its record (screens/run.js); with fixtures they
+// show the boards' moments of a plan.
+const LIVE_SCREENS = { ...SCREENS, install: LiveInstall, resume: LiveInstall };
 const CARRIED = ['voice', 'scheme', 'pen', 'live'];
 
 function parse() {
@@ -57,6 +61,9 @@ async function openSession(route, q) {
     input = records.normalInput(records.GOLDEN_PLANS[g].input);
   }
   const s = { route, q, machine, input, report: null, plan: null, desc: null };
+  // Live, a reload forgets the device's answers but not a running installation's record: Install
+  // and Resume then carry on from the record (screens/run.js) instead of failing on the machine.
+  if (machine && !records.FIXTURES && ['install', 'resume'].includes(route) && !records.knows(machine)) s.machine = machine = null;
   if (machine) {
     s.report = await records.inspect(machine);
     const rec = s.report.recognition;
@@ -105,6 +112,22 @@ async function openSession(route, q) {
   s.chooseBackupFolder = records.chooseBackupFolder;
   s.startBackup = records.startBackup;
   s.stopBackup = records.stopBackup;
+  // Live: the installation, carried out by the core in this page, and its record in the backup
+  // folder (records/index.js).
+  s.description = records.description;
+  s.chooseRelease = records.chooseRelease;
+  s.release = records.release;
+  s.chooseEarlierBackup = records.chooseEarlierBackup;
+  s.installFolder = records.installFolder;
+  s.confirmPlan = records.confirmPlan;
+  s.confirmed = records.confirmed;
+  s.startInstall = records.startInstall;
+  s.openInstall = records.openInstall;
+  s.chooseRunRelease = records.chooseRunRelease;
+  s.resumeInstall = records.resumeInstall;
+  s.stopInstall = records.stopInstall;
+  s.installRun = records.installRun;
+  s.onInstallRun = records.onInstallRun;
   // The way out when the browser couldn't open or claim a device (lib/host.js).
   s.hostSetup = records.hostSetup;
   s.param = (k, d) => (q.get(k) === null ? d : q.get(k));
@@ -154,7 +177,7 @@ function App() {
     </${Page}>`;
   }
   if (!view.s) return null;
-  const Screen = SCREENS[view.route];
+  const Screen = (records.FIXTURES ? SCREENS : LIVE_SCREENS)[view.route];
   if (!Screen) {
     return html`<${Page} step="start" eyebrow="The installer" title="There is no such screen">
       <p><a class="il-link" href="#/start">Start again</a></p>

@@ -94,19 +94,21 @@ pub trait InstallEdge {
     /// Waits for the device in `mode` (or, with [`Reach::Already`], in any
     /// mode), after doing what `how` says.
     fn reach(&mut self, mode: &Mode, how: Reach) -> impl Future<Output = Result<Link<Self::Fb, Self::Ram>, String>>;
-    /// Saves the record atomically ([`crate::record::save`] through a store).
-    fn save(&mut self, record: &Record) -> Result<(), String>;
+    /// Saves the record atomically ([`crate::record::save`] through a store),
+    /// done before it resolves: the executor sends nothing to the device
+    /// while a save is pending.
+    fn save(&mut self, record: &Record) -> impl Future<Output = Result<(), String>>;
     /// Runs or finds the step's backup and checks it; the backup's location
     /// and its manifest's hash once verified.
     fn back_up(&mut self, step: &Step) -> impl Future<Output = Result<Backup, String>>;
     /// Bytes of the backed-up disk the partition table is on (the verified
     /// backup's image), from `offset`.
-    fn backup_bytes(&mut self, offset: u64, len: usize) -> Result<Vec<u8>, String>;
+    fn backup_bytes(&mut self, offset: u64, len: usize) -> impl Future<Output = Result<Vec<u8>, String>>;
     /// Keeps `bytes` on the computer under `name`, whole before it returns:
     /// what a step read before it first wrote (a boot image's original).
-    fn keep(&mut self, name: &str, bytes: &[u8]) -> Result<(), String>;
+    fn keep(&mut self, name: &str, bytes: &[u8]) -> impl Future<Output = Result<(), String>>;
     /// What [`InstallEdge::keep`] kept under `name`, if anything.
-    fn kept(&mut self, name: &str) -> Result<Option<Vec<u8>>, String>;
+    fn kept(&mut self, name: &str) -> impl Future<Output = Result<Option<Vec<u8>>, String>>;
     fn progress(&mut self, step: &str, done: u64, total: u64);
     fn note(&mut self, line: &str);
     /// True once the person asked to stop; honoured after a safe-stop step.
@@ -327,8 +329,8 @@ impl<E: InstallEdge, S: ArtifactSource> Exec<'_, E, S> {
         fail_in(self.d, st, why, may_have_changed, interrupted)
     }
 
-    fn save(&mut self, st: Option<&Step>) -> Result<(), Stopped> {
-        self.edge.save(self.record).map_err(|e| {
+    async fn save(&mut self, st: Option<&Step>) -> Result<(), Stopped> {
+        self.edge.save(self.record).await.map_err(|e| {
             let why = format!("the install record couldn't be saved ({e}): stopped; resume once it can be");
             match st {
                 Some(st) => self.fail(st, why, false, true),
@@ -362,7 +364,7 @@ impl<E: InstallEdge, S: ArtifactSource> Exec<'_, E, S> {
         if self.record.final_restart.is_some() {
             return self.finish().await;
         }
-        self.check_artifacts(&order)?;
+        self.check_artifacts(&order).await?;
         for id in &order {
             let ps = pv.steps.iter().find(|s| s.id == *id).unwrap().clone();
             let st = self.step(id)?.clone();
@@ -414,7 +416,7 @@ impl<E: InstallEdge, S: ArtifactSource> Exec<'_, E, S> {
 
     /// Every artifact a step still to run uses: the one the record holds,
     /// read whole and checked, before anything is sent to the device.
-    fn check_artifacts(&mut self, order: &[String]) -> Result<(), Stopped> {
+    async fn check_artifacts(&mut self, order: &[String]) -> Result<(), Stopped> {
         let mut roles = BTreeSet::new();
         for id in order {
             if self.record.state(id) == StepState::Done {
@@ -439,6 +441,7 @@ impl<E: InstallEdge, S: ArtifactSource> Exec<'_, E, S> {
             let edge = &mut *self.edge;
             self.artifacts
                 .verify(&role, &mut |n| edge.progress(&format!("check {role}"), n, a.size))
+                .await
                 .map_err(|e| stop(e.to_string()))?;
         }
         Ok(())
@@ -458,7 +461,7 @@ impl<E: InstallEdge, S: ArtifactSource> Exec<'_, E, S> {
     }
 
     /// Records `st` as found done (no intent of the installer's ran it now).
-    fn record_found_done(&mut self, st: &Step, why: &str) -> Result<(), Stopped> {
+    async fn record_found_done(&mut self, st: &Step, why: &str) -> Result<(), Stopped> {
         if self.record.open_step() != Some(st.id.as_str()) {
             let at = self.now();
             self.record
@@ -469,7 +472,7 @@ impl<E: InstallEdge, S: ArtifactSource> Exec<'_, E, S> {
         ev.insert("found-done".into(), why.into());
         let o = self.outcome(Result_::Done, ev, None);
         self.record.finish(&st.id, o).map_err(|e| self.fail(st, e, false, false))?;
-        self.save(Some(st))
+        self.save(Some(st)).await
     }
 
     async fn run_step(&mut self, st: &Step) -> Result<(), Stopped> {
@@ -479,9 +482,9 @@ impl<E: InstallEdge, S: ArtifactSource> Exec<'_, E, S> {
             // Cut while it ran: closed as interrupted, then run again whole.
             let o = self.outcome(Result_::Interrupted, Evidence::new(), Some("cut while it ran; run again whole".into()));
             self.record.finish(&st.id, o).map_err(|e| self.fail(st, e, false, true))?;
-            self.save(Some(st))?;
+            self.save(Some(st)).await?;
         } else if self.done(st, None).await? == Truth::True {
-            return self.record_found_done(st, "its done conditions hold");
+            return self.record_found_done(st, "its done conditions hold").await;
         }
         if st.kind == "back-up" {
             return self.back_up(st).await;
@@ -489,7 +492,7 @@ impl<E: InstallEdge, S: ArtifactSource> Exec<'_, E, S> {
         let actual = self.move_to(&st.mode, Some(st)).await?;
         if !open || decide_by_done {
             match self.done(st, None).await? {
-                Truth::True => return self.record_found_done(st, &format!("its done conditions hold in mode {actual}")),
+                Truth::True => return self.record_found_done(st, &format!("its done conditions hold in mode {actual}")).await,
                 _ if actual != st.mode => {
                     return Err(self.fail(st, format!("the device came up in mode {actual}, not {}", st.mode), false, open));
                 }
@@ -517,7 +520,7 @@ impl<E: InstallEdge, S: ArtifactSource> Exec<'_, E, S> {
         }
         let at = self.now();
         self.record.begin(&st.id, &summary, at).map_err(|e| self.fail(st, e, false, false))?;
-        self.save(Some(st))?;
+        self.save(Some(st)).await?;
         self.edge.note(&format!("{}: {summary}", st.id));
 
         let again = open
@@ -538,14 +541,14 @@ impl<E: InstallEdge, S: ArtifactSource> Exec<'_, E, S> {
                 // goes on past the step.
                 let o = self.outcome(Result_::Failed, Evidence::new(), Some(e.why.clone()));
                 self.record.finish(&st.id, o).map_err(|x| self.fail(st, x, false, false))?;
-                self.save(Some(st))?;
+                self.save(Some(st)).await?;
                 self.edge.note(&format!("{}: {}; going on", st.id, e.why));
                 return Ok(());
             }
             Err(e) => {
                 let o = self.outcome(Result_::Failed, Evidence::new(), Some(e.why.clone()));
                 let _ = self.record.finish(&st.id, o);
-                let _ = self.edge.save(self.record);
+                let _ = self.edge.save(self.record).await;
                 return Err(self.fail(st, e.why, e.may_have_changed, false));
             }
         };
@@ -558,13 +561,13 @@ impl<E: InstallEdge, S: ArtifactSource> Exec<'_, E, S> {
                 };
                 let o = self.outcome(Result_::Failed, ev, Some(why.clone()));
                 let _ = self.record.finish(&st.id, o);
-                let _ = self.edge.save(self.record);
+                let _ = self.edge.save(self.record).await;
                 return Err(self.fail(st, why, true, false));
             }
         }
         let o = self.outcome(Result_::Done, ev, None);
         self.record.finish(&st.id, o).map_err(|e| self.fail(st, e, true, true))?;
-        self.save(Some(st))
+        self.save(Some(st)).await
     }
 
     async fn back_up(&mut self, st: &Step) -> Result<(), Stopped> {
@@ -572,14 +575,14 @@ impl<E: InstallEdge, S: ArtifactSource> Exec<'_, E, S> {
         self.record
             .begin(&st.id, &self.d.texts.steps.get(&st.id).cloned().unwrap_or_default(), at)
             .map_err(|e| self.fail(st, e, false, false))?;
-        self.save(Some(st))?;
+        self.save(Some(st)).await?;
         let b = match self.edge.back_up(st).await {
             Ok(b) if b.manifest_sha256.is_some() => b,
             Ok(_) => return Err(self.fail(st, "the backup isn't verified", false, false)),
             Err(e) => {
                 let o = self.outcome(Result_::Failed, Evidence::new(), Some(e.clone()));
                 let _ = self.record.finish(&st.id, o);
-                let _ = self.edge.save(self.record);
+                let _ = self.edge.save(self.record).await;
                 return Err(self.fail(st, e, false, false));
             }
         };
@@ -591,7 +594,7 @@ impl<E: InstallEdge, S: ArtifactSource> Exec<'_, E, S> {
         self.record.finish(&st.id, o).map_err(|e| self.fail(st, e, false, true))?;
         // The emergency mode restarts the device into its previous system.
         self.here = Here::Unknown;
-        self.save(Some(st))
+        self.save(Some(st)).await
     }
 
     // ---- done ----------------------------------------------------------------
@@ -943,7 +946,7 @@ impl<E: InstallEdge, S: ArtifactSource> Exec<'_, E, S> {
         if let Some(d) = self.disk {
             return Ok(d);
         }
-        let (src, sector) = self.source_table(st)?;
+        let (src, sector) = self.source_table(st).await?;
         let disk_sectors = crate::table::le64(&src[sector as usize..], 32) + 1;
         let Here::Ram { w, .. } = &mut self.here else {
             return Err(self.fail(st, "not in the RAM environment", false, false));
@@ -971,37 +974,41 @@ impl<E: InstallEdge, S: ArtifactSource> Exec<'_, E, S> {
     }
 
     /// The backed-up primary table and its sector size (the layout's).
-    fn source_table(&mut self, st: &Step) -> Result<(Vec<u8>, u64), Stopped> {
+    async fn source_table(&mut self, st: &Step) -> Result<(Vec<u8>, u64), Stopped> {
         if let Some((_, src)) = self.new_table.clone() {
-            let s = self.layout_sector(st)?;
+            let s = self.layout_sector(st).await?;
             return Ok((src, s));
         }
-        let s = self.layout_sector(st)?;
+        let s = self.layout_sector(st).await?;
         let head = self
             .edge
             .backup_bytes(0, 2 * s as usize)
+            .await
             .map_err(|e| self.fail(st, format!("the backup: {e}"), false, false))?;
         let len = ops::primary_len(&head, s).map_err(|e| self.fail(st, format!("the backed-up table: {e}"), false, false))?;
         let src = self
             .edge
             .backup_bytes(0, len as usize)
+            .await
             .map_err(|e| self.fail(st, format!("the backup: {e}"), false, false))?;
         Ok((src, s))
     }
 
-    fn layout_bytes(&mut self, st: &Step) -> Result<Vec<u8>, Stopped> {
+    async fn layout_bytes(&mut self, st: &Step) -> Result<Vec<u8>, Stopped> {
         let role = "partition-layout";
         let a = self.artifacts.artifact(role).map_err(|e| self.fail(st, e.to_string(), false, false))?;
         let d = self.d;
-        let mut r = self.artifacts.reader(role).map_err(|e| fail_in(d, st, e.to_string(), false, false))?;
+        let mut r = self.artifacts.reader(role).await.map_err(|e| fail_in(d, st, e.to_string(), false, false))?;
         let mut b = vec![0u8; a.size as usize];
-        crate::table::ReadAt::read_at(&mut r, 0, &mut b).map_err(|e| fail_in(d, st, e, false, false))?;
+        crate::table::AsyncReadAt::read_at(&mut r, 0, &mut b)
+            .await
+            .map_err(|e| fail_in(d, st, e, false, false))?;
         r.finish().map_err(|e| fail_in(d, st, e.to_string(), false, false))?;
         Ok(b)
     }
 
-    fn layout_sector(&mut self, st: &Step) -> Result<u64, Stopped> {
-        let b = self.layout_bytes(st)?;
+    async fn layout_sector(&mut self, st: &Step) -> Result<u64, Stopped> {
+        let b = self.layout_bytes(st).await?;
         let r: crate::gpt_build::Recipe = serde_json::from_slice(&b).map_err(|e| self.fail(st, format!("the partition layout: {e}"), false, false))?;
         Ok(r.sector)
     }
@@ -1011,9 +1018,9 @@ impl<E: InstallEdge, S: ArtifactSource> Exec<'_, E, S> {
         if let Some((b, _)) = &self.new_table {
             return Ok(b.clone());
         }
-        let (src, _) = self.source_table(table_step)?;
+        let (src, _) = self.source_table(table_step).await?;
         let disk_bytes = self.ram_disk(table_step).await?.2;
-        let layout = self.layout_bytes(table_step)?;
+        let layout = self.layout_bytes(table_step).await?;
         let b = ops::partition_table::layout(&src, disk_bytes, &layout, table_step).map_err(|e| self.fail(table_step, e.why, false, false))?;
         self.new_table = Some((b.clone(), src));
         Ok(b)
@@ -1024,6 +1031,7 @@ impl<E: InstallEdge, S: ArtifactSource> Exec<'_, E, S> {
         let mbr = self
             .edge
             .backup_bytes(0, sector as usize)
+            .await
             .map_err(|e| self.fail(st, format!("the backup: {e}"), false, false))?;
         let Here::Ram { w, .. } = &mut self.here else {
             return Err(self.fail(st, "not in the RAM environment", false, false));
@@ -1205,6 +1213,7 @@ impl<E: InstallEdge, S: ArtifactSource> Exec<'_, E, S> {
         let mbr = if st.kind == "set-boot-slot" && resumed {
             self.edge
                 .backup_bytes(0, sector as usize)
+                .await
                 .map_err(|e| OpError::before(format!("the backup: {e}")))?
         } else {
             vec![]
@@ -1218,7 +1227,12 @@ impl<E: InstallEdge, S: ArtifactSource> Exec<'_, E, S> {
                 .and_then(|g| g.extent(part))
                 .ok_or_else(|| OpError::before(format!("the partition table has no {part}")))?;
             let key = format!("{}-{part}-original", st.id);
-            match self.edge.kept(&key).map_err(|e| OpError::before(format!("the kept original of {part}: {e}")))? {
+            match self
+                .edge
+                .kept(&key)
+                .await
+                .map_err(|e| OpError::before(format!("the kept original of {part}: {e}")))?
+            {
                 Some(b) if b.len() as u64 == len => {
                     self.edge.note(&format!("{}: the original of {part} as read before the first write", st.id));
                     Some(b)
@@ -1234,6 +1248,7 @@ impl<E: InstallEdge, S: ArtifactSource> Exec<'_, E, S> {
                     let b = w.read_all(disk, start, len).await.map_err(|e| ops::ram_err(e, false))?;
                     self.edge
                         .keep(&key, &b)
+                        .await
                         .map_err(|e| OpError::before(format!("keeping the original of {part} on the computer: {e}")))?;
                     Some(b)
                 }
@@ -1329,7 +1344,7 @@ impl<E: InstallEdge, S: ArtifactSource> Exec<'_, E, S> {
                 Ok(Link::Ram(r)) => self.adopt(Link::Ram(r), None).await?,
                 Ok(_) | Err(_) if self.record.final_restart.is_some() => {
                     self.edge.note(&format!("{}: the device isn't in {cur} any more: it took the restart", t.id));
-                    return self.restarted(&t, &to, check);
+                    return self.restarted(&t, &to, check).await;
                 }
                 Ok(_) => {
                     self.edge.note(&format!("every step is done; the device isn't in {cur}: restart it normally"));
@@ -1351,21 +1366,21 @@ impl<E: InstallEdge, S: ArtifactSource> Exec<'_, E, S> {
             check: check.clone(),
             sent: false,
         });
-        self.save(None)?;
+        self.save(None).await?;
         if let Here::Ram { mut w, .. } = std::mem::replace(&mut self.here, Here::Unknown) {
             w.reboot(Reboot::Normal).await.map_err(|e| stop(format!("{}: {e}", t.id)))?;
         }
-        self.restarted(&t, &to, check)
+        self.restarted(&t, &to, check).await
     }
 
-    fn restarted(&mut self, t: &crate::format1::Transition, to: &Mode, check: String) -> Result<Outcome, Stopped> {
+    async fn restarted(&mut self, t: &crate::format1::Transition, to: &Mode, check: String) -> Result<Outcome, Stopped> {
         self.record.final_restart = Some(FinalRestart {
             transition: t.id.clone(),
             mode: to.id.clone(),
             check: check.clone(),
             sent: true,
         });
-        self.save(None)?;
+        self.save(None).await?;
         self.edge.note(&format!("{}: the device restarts into {}", t.id, to.id));
         // TODO(glassine-usb): a mode that can identify is reached and
         // checked here; GlassineOS isn't recognised over USB yet.
