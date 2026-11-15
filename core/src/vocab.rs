@@ -964,10 +964,17 @@ pub const STEP_KINDS: &[Kind] = &[
             p("partition", T::Partition, true, "the partition it goes to"),
         ],
     },
+    Kind {
+        id: "patch-boot-image",
+        doc: "changes the stock boot image in one partition in place so the system on it mounts its own slot's vendor partition (the vendor entry's fsmgr_flags in the kernel's appended device tree, wait to slotselect), recomputes the header's id, clears a verified-boot 1.0 signature, and checks the write by reading it back; it refuses an image it doesn't recognize and changes nothing then",
+        backends: &["android-bootloader"],
+        modes: &["glassine-ram"],
+        params: &[p("partition", T::Partition, true, "the partition holding the boot image")],
+    },
 ];
 
 /// The step kinds that exist from format 3 on; they stand last in [`STEP_KINDS`].
-pub const STEP_KINDS_SINCE_3: &[&str] = &["copy-partition"];
+pub const STEP_KINDS_SINCE_3: &[&str] = &["copy-partition", "patch-boot-image"];
 
 /// The step kinds of `format`.
 pub fn step_kinds(format: i64) -> &'static [Kind] {

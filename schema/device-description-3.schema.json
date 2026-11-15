@@ -2013,6 +2013,40 @@
             }
           },
           {
+            "if": {
+              "properties": {
+                "kind": {
+                  "const": "patch-boot-image"
+                }
+              },
+              "required": [
+                "kind"
+              ]
+            },
+            "then": {
+              "properties": {
+                "params": {
+                  "additionalProperties": false,
+                  "description": "parameters of patch-boot-image",
+                  "properties": {
+                    "partition": {
+                      "description": "the partition holding the boot image",
+                      "pattern": "^(role:[a-z-]+|[A-Za-z0-9_.-]+)$",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "partition"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "params"
+              ]
+            }
+          },
+          {
             "oneOf": [
               {
                 "required": [
@@ -2367,7 +2401,8 @@
               "remove-partitions",
               "write-boot-files",
               "add-boot-entry",
-              "copy-partition"
+              "copy-partition",
+              "patch-boot-image"
             ],
             "type": "string"
           },
@@ -4043,6 +4078,24 @@
           },
           {
             "doc": "the partition it goes to",
+            "name": "partition",
+            "required": true,
+            "type": "Partition"
+          }
+        ]
+      },
+      {
+        "backends": [
+          "android-bootloader"
+        ],
+        "doc": "changes the stock boot image in one partition in place so the system on it mounts its own slot's vendor partition (the vendor entry's fsmgr_flags in the kernel's appended device tree, wait to slotselect), recomputes the header's id, clears a verified-boot 1.0 signature, and checks the write by reading it back; it refuses an image it doesn't recognize and changes nothing then",
+        "id": "patch-boot-image",
+        "modes": [
+          "glassine-ram"
+        ],
+        "params": [
+          {
+            "doc": "the partition holding the boot image",
             "name": "partition",
             "required": true,
             "type": "Partition"

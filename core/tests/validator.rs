@@ -80,7 +80,7 @@ fn unknown_kind_parameter() {
     na(
         "params = { slot = \"b\", pin = true }",
         "params = { slot = \"b\", pin = true, speed = 3 }",
-        "steps[8].params.speed",
+        "steps[9].params.speed",
     );
 }
 
@@ -496,7 +496,7 @@ fn backup_means_of_another_mode() {
     na(
         "back_up = { mode = \"emergency\", means = \"emergency-read\", check = \"read-back-compare\", size = 9200000000 }",
         "back_up = { mode = \"emergency\", means = \"glassine-read\", check = \"read-back-compare\", size = 9200000000 }",
-        "partitions[7].back_up.means",
+        "partitions[8].back_up.means",
     );
 }
 
@@ -610,13 +610,13 @@ fn by_hand_transition_needs_its_text() {
 
 #[test]
 fn resize_says_whether_it_destroys() {
-    na("class = \"resize\"\ndestroys = true", "class = \"resize\"", "partitions[6].destroys");
+    na("class = \"resize\"\ndestroys = true", "class = \"resize\"", "partitions[7].destroys");
 }
 
 /// Format 2 has one class for "only read": never-write.
 #[test]
 fn format_2_has_no_back_up_class() {
-    na("class = \"resize\"\ndestroys = true", "class = \"back-up\"", "partitions[6].class");
+    na("class = \"resize\"\ndestroys = true", "class = \"back-up\"", "partitions[7].class");
 }
 
 /// Format 1: a replace rule names its own backup.
@@ -638,7 +638,7 @@ fn the_whole_disk_names_how_it_is_read() {
     na(
         "back_up = { mode = \"emergency\", means = \"emergency-read\", check = \"read-back-compare\", size = 9200000000 }",
         "back_up = { with = \"role:partition-table\" }",
-        "partitions[7].back_up",
+        "partitions[8].back_up",
     );
 }
 
@@ -671,7 +671,7 @@ fn the_whole_disk_rule_has_no_condition() {
     na(
         "select = { role = \"disk\" }\nclass = \"never-write\"",
         "select = { role = \"disk\" }\nclass = \"never-write\"\nwhen = { choice = \"keep-stock\", equals = \"yes\" }",
-        "partitions[7].when",
+        "partitions[8].when",
     );
 }
 
@@ -686,7 +686,7 @@ fn backup_mode_exists() {
     na(
         "back_up = { mode = \"emergency\", means = \"emergency-read\", check = \"read-back-compare\", size = 9200000000 }",
         "back_up = { mode = \"edl\", means = \"emergency-read\", check = \"read-back-compare\", size = 9200000000 }",
-        "partitions[7].back_up.mode",
+        "partitions[8].back_up.mode",
     );
 }
 
