@@ -1,7 +1,7 @@
 # Feature Specification: The check, and proof that it writes nothing
 
 **Feature branch:** `check`
-**Created:** 2026-11-12 · **Status:** spec, for review; nothing built
+**Created:** 2026-11-12 · **Status:** spec, for review; built, see the README's Status
 **Builds on:** [001-install-from-stock](../001-install-from-stock/spec.md) (Scenario 2, the
 check; FR-001 to FR-005), [002-device-description](../002-device-description/spec.md) (the
 format the check reads) · **Decision:**

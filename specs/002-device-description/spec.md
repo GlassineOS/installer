@@ -1,7 +1,7 @@
 # Feature Specification: The device description
 
 **Feature branch:** `device-description`
-**Created:** 2026-11-12 · **Status:** spec, for review; nothing built
+**Created:** 2026-11-12 · **Status:** spec, for review; built (format 4), see the README's Status
 **Decision:** [docs 0014](https://docs.glassine.org/decisions/0014-installation-and-provisioning/),
 [docs 0015](https://docs.glassine.org/decisions/0015-installer-stack/) · **Builds on:**
 [001](../001-install-from-stock/spec.md) · **Contract:** owned by this repository, format 4
