@@ -1,8 +1,10 @@
 # CLAUDE.md — GlassineOS/installer
 
 The guided installer for GlassineOS (see `README.md`): one flow for every machine, device
-knowledge in device descriptions, device-specific steps in platform backends. Nothing built
-yet; the first spec is `specs/001-install-from-stock/`.
+knowledge in device descriptions, device-specific steps in platform backends. The command
+line, the browser screens and the emergency read exist (the README's Status and command-line
+sections say what has been run on a device); the specs are in `specs/`, starting with
+`specs/001-install-from-stock/`.
 
 - Inspecting and planning never write to the machine. A change that adds a write needs a
   test of its failure case (cut write, read-back mismatch, an interruption) before it merges.
