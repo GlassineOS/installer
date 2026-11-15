@@ -135,8 +135,8 @@
     ],
     "replaces": [
       "abl",
-      "partition table",
-      "recovery"
+      "recovery",
+      "partition table"
     ],
     "creates": [
       "boot_b",
@@ -147,7 +147,7 @@
       "userdata"
     ],
     "untouched_partitions": 0,
-    "imaged_partitions": 45,
+    "imaged_partitions": 44,
     "backup_off": false,
     "space_at_least": 9200000000,
     "space_exact": false

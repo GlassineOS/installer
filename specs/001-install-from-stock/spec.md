@@ -180,8 +180,11 @@ texts the description provides.
 
 - **FR-012**: The installation has the layout of 0010: the system partition with a base, the
   first deployment, the person's storage on the data partition, the device data from the
-  device's list, and the GlassineOS recovery; where the plan keeps another system, its
-  recovery stays reachable as the secondary.
+  device's list, and the GlassineOS recovery (FR-016a); where the plan keeps another
+  system, its recovery stays reachable as the secondary.
+- **FR-012b**: Where the description's steps leave the data partition without a file
+  system (a resize that destroys what is on it), the installed system formats it at its
+  first start. The installer doesn't format it, and the plan says it is emptied.
 - **FR-012a**: Where the installer makes the partitions (a PC), it gives each the standard
   partition type for its role, records each one's unique partition ID in the installation
   record, and writes the system partition's and userdata's IDs into the boot entry's
@@ -203,6 +206,10 @@ texts the description provides.
 - **FR-016**: A device lacking a capability the system needs to boot safely is refused
   with the reason. One lacking an optional capability is installed without it, as the plan
   says.
+- **FR-016a**: An installation whose description says the device's GlassineOS recovery
+  needs something that isn't there yet (the recovery isn't built) is refused for people,
+  with what is missing. A developer who asks may run it; the plan then states plainly that
+  the device ends without the GlassineOS recovery and what is missing.
 - **FR-017**: The installer runs from Linux, Windows or a browser on a computer connected
   to the device, and on a PC from removable media started on that PC.
 - **FR-018**: The installer reaches a device through the connections its description
@@ -210,6 +217,12 @@ texts the description provides.
   boot loader departs from its protocol's standard, the description says how, and the
   installer works with the boot loader as it shipped. Installing never needs the boot
   loader changed first.
+- **FR-018a**: A boot loader operation the description marks never to send (one that
+  erases more than it writes, 002 FR-011a) is never sent, by any step and on any run.
+  Where a boot loader's own partition-table write is unsafe, the installation writes the
+  table, the partitions it creates and the slot flags through a GlassineOS RAM environment
+  that it first writes to a partition the boot loader starts, as the description says
+  (002 FR-011a).
 - **FR-019**: Inspecting reports which of the device's connections the installer can use
   from where it runs (a browser can use fewer than a program on the computer). With none,
   the report says so and where the installation can run instead. The plan uses only
