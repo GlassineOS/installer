@@ -526,7 +526,10 @@ impl Transport for RamEnv {
             if self.gone && self.pending.is_empty() {
                 return Err(FbError::Usb("no such device".into()));
             }
-            return Err(FbError::Timeout(format!("a {buf}-byte transfer that the device never fills ({} pending)", self.pending.len())));
+            return Err(FbError::Timeout(format!(
+                "a {buf}-byte transfer that the device never fills ({} pending)",
+                self.pending.len()
+            )));
         }
         let out: Vec<u8> = self.pending.drain(..end).collect();
         if self.short_at.front() == Some(&end) {
