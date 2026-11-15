@@ -367,8 +367,10 @@ pub fn report(ds: &[&Description], facts: &Snapshot, rec: &Recognition, plan: Op
         }
     }
     // Supported: recognised, and a plan exists that isn't refused (001 FR-016:
-    // a device lacking what GlassineOS needs to boot safely is refused).
-    let supported = matches!(rec.outcome, Outcome::Match { .. }) && plan.is_some_and(|p| p.status != crate::plan::Status::Refused);
+    // a device lacking what GlassineOS needs to boot safely is refused), or is
+    // refused only until the release has what it needs (001 FR-016a): the
+    // reasons say so.
+    let supported = matches!(rec.outcome, Outcome::Match { .. }) && plan.is_some_and(|p| p.status != crate::plan::Status::Refused || p.developer_may);
     Report {
         report_format: REPORT_FORMAT,
         mode: facts.mode.clone(),

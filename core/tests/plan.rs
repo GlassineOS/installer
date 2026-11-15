@@ -28,17 +28,53 @@ fn input(choices: &[(&str, &str)], hardware: &[(&str, bool)], developer: bool) -
     }
 }
 
+/// The Note Air as it will be once its GlassineOS recovery is built.
+fn noteair_with_recovery() -> String {
+    mutate(
+        &noteair(),
+        "status = \"needs\"\nwith = \"the GlassineOS recovery, which isn't built yet\"",
+        "status = \"have\"",
+    )
+}
+
+/// Plans `input` for the stock Note Air in fastboot from `description`.
+fn plan_with(description: &str, i: &Input) -> glassine_installer::plan::Plan {
+    let ds = [valid(description), valid(&pc())];
+    let refs: Vec<&Description> = ds.iter().collect();
+    let f = facts("noteair-stock-fastboot");
+    plan(&refs, &f, &recognize(&refs, &f), i)
+}
+
+/// 001 FR-016a: without its GlassineOS recovery the Note Air is refused for
+/// people, with what is missing; the steps stay listed.
 #[test]
 fn note_air_keep_stock() {
     let p = run("noteair-keep-stock", "noteair-stock-fastboot", Input::default());
-    assert_eq!(p.status, Status::NeedsAnswers);
+    assert_eq!(p.status, Status::Refused);
+    assert!(
+        p.reasons
+            .iter()
+            .any(|r| r.contains("the GlassineOS recovery, which isn't built yet") && r.contains("write-recovery")),
+        "{:?}",
+        p.reasons
+    );
+    assert!(p.developer_may);
+    assert!(p.left_out.is_empty());
+    assert!(p.steps.iter().any(|s| s.id == "write-recovery"));
     assert_eq!(p.questions[0].hardware, "emergency-cable");
     assert!(p.steps.iter().all(|s| s.id != "retire-stock"));
     let userdata = p.partitions.iter().find(|x| x.partition == "userdata").unwrap();
     assert!(userdata.loses_files);
     assert!(!p.space.exact, "artifact sizes are unknown, so the space is 'at least'");
+    // Once the recovery is there, the plan asks its question first.
+    let p = plan_with(&noteair_with_recovery(), &Input::default());
+    assert_eq!(p.status, Status::NeedsAnswers);
+    assert_eq!(p.questions[0].hardware, "emergency-cable");
 }
 
+/// 001 FR-016a, 002 FR-022: a developer's plan leaves out the step that
+/// writes the recovery, names it and what the recovery partition holds
+/// instead, and goes on; set-slot no longer waits for it.
 #[test]
 fn note_air_without_stock_for_a_developer() {
     let p = run(
@@ -48,13 +84,101 @@ fn note_air_without_stock_for_a_developer() {
     );
     assert_eq!(p.status, Status::Ready);
     assert!(p.steps.iter().any(|s| s.id == "retire-stock"));
+    assert!(p.steps.iter().all(|s| s.id != "write-recovery"));
+    assert!(p.steps.iter().any(|s| s.id == "set-slot"));
+    assert_eq!(p.left_out.len(), 1);
+    let l = &p.left_out[0];
+    assert_eq!(
+        (l.step.as_str(), l.artifact.as_str(), l.capability.as_str()),
+        ("write-recovery", "recovery", "recovery")
+    );
+    assert_eq!(l.missing.as_deref(), Some("the GlassineOS recovery, which isn't built yet"));
+    assert_eq!(l.holds_instead[0].partition, "recovery");
+    let h = &l.holds_instead[0];
+    assert_eq!(
+        (h.step.as_deref(), h.artifact.as_deref()),
+        (Some("write-ram-environment"), Some("ram-environment"))
+    );
+    // The way out that named the left-out step goes on where its interruption would.
+    let v = p.steps.iter().find(|s| s.id == "write-vendor").unwrap();
+    assert_eq!(v.on_interruption.way_out, "step set-slot");
+    assert!(
+        p.steps
+            .iter()
+            .all(|s| !s.on_failure.way_out.contains("write-recovery") && !s.on_interruption.way_out.contains("write-recovery"))
+    );
+    let txt = render(&p, Some(&valid(&noteair())));
+    assert!(txt.contains("write-recovery: writes the recovery, which the release doesn't have (the GlassineOS recovery, which isn't built yet). The device ends without the GlassineOS recovery."), "{txt}");
+    assert!(
+        txt.contains("recovery holds the ram-environment, which step write-ram-environment writes instead."),
+        "{txt}"
+    );
+}
+
+/// Without a missing artifact nothing is left out.
+#[test]
+fn nothing_is_left_out_once_the_recovery_is_there() {
+    let p = plan_with(&noteair_with_recovery(), &input(&[], &[("emergency-cable", true)], true));
+    assert_eq!(p.status, Status::Ready, "{:?}", p.reasons);
+    assert!(p.left_out.is_empty());
+    assert!(p.steps.iter().any(|s| s.id == "write-recovery"));
 }
 
 #[test]
 fn untried_write_steps_are_for_developers_only() {
     let p = run("noteair-cable-yes", "noteair-stock-fastboot", input(&[], &[("emergency-cable", true)], false));
+    assert_eq!(p.status, Status::Refused, "people: refused until the recovery is there");
+    assert!(p.untried_steps.contains(&"replace-boot-loader".to_string()));
+    let p = plan_with(&noteair_with_recovery(), &input(&[], &[("emergency-cable", true)], false));
     assert_eq!(p.status, Status::DeveloperOnly);
     assert!(p.untried_steps.contains(&"replace-boot-loader".to_string()));
+    // The developer's plan with the question answered.
+    let p = run(
+        "noteair-developer-cable-yes",
+        "noteair-stock-fastboot",
+        input(&[], &[("emergency-cable", true)], true),
+    );
+    assert_eq!(p.status, Status::Ready, "{:?}", p.reasons);
+    assert_eq!(p.left_out.len(), 1);
+    // and before it is answered
+    let p = run("noteair-developer", "noteair-stock-fastboot", input(&[], &[], true));
+    assert_eq!(p.status, Status::NeedsAnswers);
+}
+
+/// 002 FR-014b: a step names a renamed partition by either name, resolved on
+/// whichever table inspecting finds: the stock one before the table step, the
+/// A/B one when an installation goes on after it.
+#[test]
+fn renamed_partitions_resolve_on_either_table() {
+    // On the stock table write-vendor reads `vendor`, and a step naming
+    // `vendor_a` finds it too.
+    let p = plan_with(&noteair(), &input(&[], &[("emergency-cable", true)], true));
+    assert!(p.reasons.iter().all(|r| !r.contains("didn't find")), "{:?}", p.reasons);
+    let v = p.partitions.iter().find(|x| x.partition == "vendor").unwrap();
+    assert_eq!(v.actions, vec!["reads".to_string()]);
+    let t = mutate(&noteair(), "reads = [\"vendor\"]", "reads = [\"vendor_a\"]");
+    let p = plan_with(&t, &input(&[], &[("emergency-cable", true)], true));
+    assert!(p.reasons.iter().all(|r| !r.contains("didn't find")), "{:?}", p.reasons);
+    assert!(
+        p.partitions
+            .iter()
+            .any(|x| x.partition == "vendor" && x.steps.contains(&"write-vendor".to_string()))
+    );
+    // On the A/B table (`vendor_a`), the step's `vendor` resolves there.
+    let ds = [valid(&noteair())];
+    let refs: Vec<&Description> = ds.iter().collect();
+    let mut f = facts("noteair-stock-fastboot");
+    let fb = f.fastboot.as_mut().unwrap();
+    let size = fb.variables.remove("partition-size:vendor").expect("the stock facts list vendor");
+    fb.variables.insert("partition-size:vendor_a".into(), size);
+    let p = plan(&refs, &f, &recognize(&refs, &f), &input(&[], &[("emergency-cable", true)], true));
+    assert!(p.reasons.iter().all(|r| !r.contains("didn't find")), "{:?}", p.reasons);
+    let v = p.partitions.iter().find(|x| x.partition == "vendor_a").unwrap();
+    assert_eq!((v.class.as_str(), v.steps.clone()), ("never-write", vec!["write-vendor".to_string()]));
+    // An unknown name is still not found.
+    let t = mutate(&noteair(), "reads = [\"vendor\"]", "reads = [\"vendor_c\"]");
+    let p = plan_with(&t, &input(&[], &[("emergency-cable", true)], true));
+    assert!(p.reasons.iter().any(|r| r.contains("vendor_c (not found)")), "{:?}", p.reasons);
 }
 
 #[test]

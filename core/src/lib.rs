@@ -11,6 +11,7 @@
 //! that the browser's USB can drive them; the transport is the edge's.
 
 pub mod artifacts;
+pub mod boot_patch;
 pub mod derive;
 pub mod efivar;
 pub mod emergency_read;
@@ -37,3 +38,4 @@ pub mod supplied;
 pub mod table;
 pub mod validate;
 pub mod vocab;
+pub mod write_rules;

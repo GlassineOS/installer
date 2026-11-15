@@ -80,7 +80,7 @@ fn unknown_kind_parameter() {
     na(
         "params = { slot = \"b\", pin = true }",
         "params = { slot = \"b\", pin = true, speed = 3 }",
-        "steps[8].params.speed",
+        "steps[9].params.speed",
     );
 }
 
@@ -496,7 +496,7 @@ fn backup_means_of_another_mode() {
     na(
         "back_up = { mode = \"emergency\", means = \"emergency-read\", check = \"read-back-compare\", size = 9200000000 }",
         "back_up = { mode = \"emergency\", means = \"glassine-read\", check = \"read-back-compare\", size = 9200000000 }",
-        "partitions[7].back_up.means",
+        "partitions[8].back_up.means",
     );
 }
 
@@ -610,13 +610,13 @@ fn by_hand_transition_needs_its_text() {
 
 #[test]
 fn resize_says_whether_it_destroys() {
-    na("class = \"resize\"\ndestroys = true", "class = \"resize\"", "partitions[6].destroys");
+    na("class = \"resize\"\ndestroys = true", "class = \"resize\"", "partitions[7].destroys");
 }
 
 /// Format 2 has one class for "only read": never-write.
 #[test]
 fn format_2_has_no_back_up_class() {
-    na("class = \"resize\"\ndestroys = true", "class = \"back-up\"", "partitions[6].class");
+    na("class = \"resize\"\ndestroys = true", "class = \"back-up\"", "partitions[7].class");
 }
 
 /// Format 1: a replace rule names its own backup.
@@ -638,7 +638,7 @@ fn the_whole_disk_names_how_it_is_read() {
     na(
         "back_up = { mode = \"emergency\", means = \"emergency-read\", check = \"read-back-compare\", size = 9200000000 }",
         "back_up = { with = \"role:partition-table\" }",
-        "partitions[7].back_up",
+        "partitions[8].back_up",
     );
 }
 
@@ -671,7 +671,7 @@ fn the_whole_disk_rule_has_no_condition() {
     na(
         "select = { role = \"disk\" }\nclass = \"never-write\"",
         "select = { role = \"disk\" }\nclass = \"never-write\"\nwhen = { choice = \"keep-stock\", equals = \"yes\" }",
-        "partitions[7].when",
+        "partitions[8].when",
     );
 }
 
@@ -686,7 +686,7 @@ fn backup_mode_exists() {
     na(
         "back_up = { mode = \"emergency\", means = \"emergency-read\", check = \"read-back-compare\", size = 9200000000 }",
         "back_up = { mode = \"edl\", means = \"emergency-read\", check = \"read-back-compare\", size = 9200000000 }",
-        "partitions[7].back_up.mode",
+        "partitions[8].back_up.mode",
     );
 }
 
@@ -977,4 +977,55 @@ fn copy_partition_runs_in_a_ram_environment_only() {
         "kind = \"copy-partition\"\nmode = \"fastboot\"",
         "steps[6].mode",
     );
+}
+
+/// The index of the `[[<table>]]` entry whose text holds `marker`.
+fn index_of(t: &str, table: &str, marker: &str) -> usize {
+    t[..t.find(marker).unwrap_or_else(|| panic!("{marker}"))]
+        .matches(&format!("[[{table}]]\n"))
+        .count()
+        - 1
+}
+
+/// FR-003: the RAM environment's writes are format 3's. A format 1 or 2
+/// description has no copy-partition step, no step in a glassine-ram mode
+/// besides the backup, and no departure about the operations format 3 added.
+#[test]
+fn formats_1_and_2_have_none_of_the_ram_environments_writes() {
+    for (f, t) in [(1, text("core/tests/fixtures/descriptions/onyx-noteair-format1.toml")), (2, format2())] {
+        assert_eq!(valid(&t).format, f);
+        // copy-partition
+        let n = t.matches("[[steps]]\n").count();
+        let copy = "\n[[steps]]\nid = \"copy\"\njob = \"install\"\nkind = \"copy-partition\"\nmode = \"fastboot\"\nparams = { from = \"vendor\", partition = \"vendor_b\" }\nwrites = [\"vendor_b\"]\ndone = [{ key = \"installer.step.copy\", present = true, mode = \"installer\" }]\nescape.failure = { leaves = \"installer-can-finish\", way_out = { step = \"copy\" } }\nescape.interruption = { leaves = \"installer-can-finish\", way_out = { step = \"copy\" } }\npoint_of_no_return = false\nsafe_stop = true\nuntried = \"x\"\n";
+        let at = t.find("\n[texts]").unwrap();
+        rejects(&format!("{}{copy}{}", &t[..at], &t[at..]), &format!("steps[{n}].kind"));
+        // a write in a glassine-ram mode
+        if t.contains("kind = \"glassine-ram\"") {
+            let i = index_of(&t, "steps", "id = \"write-kernel\"");
+            let w = t.replacen(
+                "mode = \"fastboot\"\nafter = [\"partition-table\"]\nparams = { artifact = \"kernel\"",
+                "mode = \"ram\"\nafter = [\"partition-table\"]\nparams = { artifact = \"kernel\"",
+                1,
+            );
+            assert_ne!(w, t, "format {f}");
+            rejects(&w, &format!("steps[{i}].mode"));
+        }
+        // never-use of an operation format 3 added
+        let m = index_of(&t, "modes", "id = \"fastboot\"\nkind = \"fastboot\"");
+        let marker = "id = \"fastboot\"\nkind = \"fastboot\"";
+        let j = t[t.find(marker).unwrap()..]
+            .split("\n[[modes]]")
+            .next()
+            .unwrap()
+            .matches("[[modes.departures]]")
+            .count();
+        let at = t.find(marker).unwrap();
+        let end = at + t[at..].find("\n[[modes]]").unwrap();
+        let w = format!(
+            "{}\n[[modes.departures]]\nkind = \"never-use\"\nparams = {{ operation = \"flash-partition-table\", reason = \"x\" }}\nuntried = \"x\"\n{}",
+            &t[..end],
+            &t[end..]
+        );
+        rejects(&w, &format!("modes[{m}].departures[{j}].params.operation"));
+    }
 }

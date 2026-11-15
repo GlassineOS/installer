@@ -9,6 +9,7 @@
   "reasons": [
     "steps create-partitions, write-base, write-boot, add-boot-entry write and haven't been tried on real hardware: only a developer who asks for them may run them"
   ],
+  "developer_may": false,
   "questions": [],
   "choices": [
     {
@@ -307,5 +308,6 @@
     "write-base",
     "write-boot",
     "add-boot-entry"
-  ]
+  ],
+  "left_out": []
 }

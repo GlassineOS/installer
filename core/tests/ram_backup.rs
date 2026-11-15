@@ -113,6 +113,10 @@ impl Transport for Boot {
                 self.got.clear();
                 format!("DATA{n:08x}").into_bytes()
             }
+        } else if c == "oem reboot-recovery" {
+            // The GlassineOS boot loader restarts into the recovery partition.
+            self.booted.set(true);
+            b"OKAY".to_vec()
         } else if c == "boot" {
             if self.refuse_boot || !self.got.starts_with(b"ANDROID!") {
                 b"FAILnot a boot image".to_vec()
@@ -296,7 +300,16 @@ fn ram_image() -> Vec<u8> {
 }
 
 fn run_backup(boot: &mut Boot, edge: &mut Edge, image: &[u8], accept: bool) -> Result<BackupDone, BackupError> {
-    let ds = descriptions();
+    run_described(descriptions(), boot, edge, image, accept)
+}
+
+/// The backup with the descriptions as they ship: the Note Air's RAM
+/// environment starts from its recovery partition.
+fn run_shipped(boot: &mut Boot, edge: &mut Edge, image: &[u8]) -> Result<BackupDone, BackupError> {
+    run_described(vec![valid(&noteair()), valid(&pc())], boot, edge, image, false)
+}
+
+fn run_described(ds: Vec<Description>, boot: &mut Boot, edge: &mut Edge, image: &[u8], accept: bool) -> Result<BackupDone, BackupError> {
     let refs: Vec<&Description> = ds.iter().collect();
     let opts = BackupOptions {
         image,
@@ -585,4 +598,56 @@ fn check_slot_flags_is_what_lets_the_glassine_boot_loader_reach_the_ram_environm
     let e = run_with(&ds, &mut boot, &mut edge, true).unwrap_err();
     assert!(e.to_string().contains("doesn't restart into a RAM environment"), "{e}");
     only_reads(&boot.commands());
+}
+
+// ---- the route the Note Air's description gives: from the recovery partition ----
+
+#[test]
+fn the_shipped_description_starts_the_ram_environment_from_its_partition() {
+    let (mut boot, mut edge) = setup("noteair-recorded-glassine-fastboot");
+    // No image: nothing is sent but the oem verb.
+    let done = run_shipped(&mut boot, &mut edge, &[]).unwrap();
+    assert_eq!(done.prepared.mode, "fastboot");
+    assert_eq!(
+        done.prepared.route,
+        RamRoute::FromPartition {
+            partition: "recovery".into(),
+            oem: "reboot-recovery".into()
+        }
+    );
+    assert_eq!(done.prepared.download_size, 0);
+    // No slot flags read or accepted: nothing is booted from USB.
+    assert!(done.prepared.slot_flags.is_none());
+    assert!(!edge.notes.iter().any(|n| n.starts_with("accepted:") || n.starts_with("slot ")));
+    let cmds = boot.commands();
+    let (last, before) = cmds.split_last().unwrap();
+    assert_eq!(last, "oem reboot-recovery");
+    only_reads(before);
+    assert!(!cmds.iter().any(|c| c.starts_with("download") || c == "boot"));
+    assert!(boot.got.is_empty());
+    assert_eq!(edge.files.len(), 3);
+    let m: serde_json::Value = serde_json::from_str(&done.manifest).unwrap();
+    assert_eq!(m["ram_started_from"], "recovery");
+    assert!(m.get("ram_image_sha256").is_none());
+}
+
+#[test]
+fn the_stock_boot_loader_cant_start_the_partition_and_is_refused() {
+    let (mut boot, mut edge) = setup("noteair-stock-fastboot");
+    let e = run_shipped(&mut boot, &mut edge, &ram_image()).unwrap_err();
+    let BackupError::Refused(why) = &e else { panic!("{e}") };
+    assert!(why.contains("starts from the recovery partition"), "{why}");
+    assert!(why.contains("mode fastboot-stock"), "{why}");
+    only_reads(&boot.commands());
+    assert!(!boot.booted.get());
+    assert!(edge.asked.is_none() && edge.files.is_empty() && edge.manifest.is_none());
+}
+
+#[test]
+fn a_ram_environment_that_never_comes_up_from_the_partition_is_reported() {
+    let (mut boot, mut edge) = setup("noteair-recorded-glassine-fastboot");
+    edge.booted = Rc::new(Cell::new(false)); // the edge never sees the restart
+    let e = run_shipped(&mut boot, &mut edge, &[]).unwrap_err();
+    assert_eq!(e.kind(), "no-ram-environment", "{e}");
+    assert!(edge.files.is_empty() && edge.manifest.is_none());
 }

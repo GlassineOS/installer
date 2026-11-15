@@ -667,7 +667,10 @@ mod tests {
         let p: Value = serde_json::from_str(&plan_record(&f, r#"{"hardware": {"emergency-cable": true}, "developer": true}"#).unwrap()).unwrap();
         assert_eq!(p["plan_format"], 1);
         assert_eq!(p["status"], "ready");
+        // For people the Note Air is refused until its GlassineOS recovery is built.
         let p: Value = serde_json::from_str(&plan_record(&f, "").unwrap()).unwrap();
+        assert_eq!(p["status"], "refused");
+        let p: Value = serde_json::from_str(&plan_record(&f, r#"{"developer": true}"#).unwrap()).unwrap();
         assert_eq!(p["status"], "needs-answers");
     }
 

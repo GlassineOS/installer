@@ -1,6 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-//! The full backup through the RAM environment (spec 001 FR-009), for a
-//! device whose boot loader starts a boot image sent over USB.
+//! The full backup through the RAM environment (spec 001 FR-009), reached
+//! the way the device's description says ([`RamRoute`]):
+//! - a description whose RAM environment mode has a `started-from-partition`
+//!   departure starts it from that partition, through the fastboot mode's
+//!   `oem-reboot-recovery` departure (`oem reboot-recovery`); nothing is
+//!   downloaded or booted, and a mode without that departure is refused;
+//! - any other starts it from a boot image sent over USB (`download`, `boot`).
 //!
 //! This is the one path that sends `download` and `boot`. Every other
 //! fastboot session only reads (`getvar`) and restarts (`reboot`).
@@ -8,7 +13,9 @@
 //! The steps:
 //! 1. A fresh inspect of the boot loader, in the framing its description
 //!    tells ([`inspect::inspect_open`]).
-//! 2. The RAM environment's image is downloaded and booted. On a layout with
+//! 2. On the partition route, `oem reboot-recovery` (the partition must
+//!    already hold the RAM environment). On the boot-image route, the RAM
+//!    environment's image is downloaded and booted. On a layout with
 //!    two slots the active slot's flags are read first: booting changes
 //!    nothing when the slot is marked successful and not unbootable; any
 //!    other state (or flags the boot loader doesn't publish) needs the
@@ -28,6 +35,8 @@ use crate::fastboot::{FbError, Framing, Transport};
 use crate::format1::{Description, Mode};
 use crate::glassine_read::{self, Disk, DiskRecord, RR_CLASS, RR_PROTOCOL, RR_SUBCLASS, ReadError, Reader, Reboot};
 use crate::inspect::{self, Host, InspectError, UsbIds};
+use crate::vocab;
+use crate::write_rules;
 use sha2::{Digest, Sha256};
 use std::cell::RefCell;
 use std::fmt;
@@ -144,9 +153,19 @@ pub trait BackupEdge {
     fn note(&mut self, line: &str);
 }
 
+/// How the boot loader starts the RAM environment, from the description.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RamRoute {
+    /// The image is sent over USB and booted (`download`, `boot`).
+    BootImage,
+    /// The boot loader starts it from `partition`, which must already hold
+    /// it, when asked with `oem <oem>`.
+    FromPartition { partition: String, oem: String },
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct BackupOptions<'a> {
-    /// The RAM environment's boot image.
+    /// The RAM environment's boot image (the boot-image route only).
     pub image: &'a [u8],
     /// Booting may change the slot flags (see [`BackupError::SlotFlags`]).
     pub accept_slot_flags: bool,
@@ -162,7 +181,10 @@ pub struct Prepared {
     pub ram: RamUsb,
     /// What booting changes on the device, when it changes anything.
     pub slot_flags: Option<String>,
-    /// The bytes `download` sends: the image, NUL-padded for the framing.
+    /// How the RAM environment is started.
+    pub route: RamRoute,
+    /// The bytes `download` sends: the image, NUL-padded for the framing (0
+    /// on the partition route).
     pub download_size: u64,
 }
 
@@ -303,6 +325,9 @@ pub fn prepare(ds: &[&Description], snapshot: &Snapshot, framing: Framing, image
     }
     let d = ds.iter().find(|d| d.id == rule.description).expect("a rule's description");
     let mode: &Mode = d.modes.iter().find(|m| m.id == rule.mode).expect("a rule's mode");
+    if let Some(p) = from_partition_route(d, mode, framing)? {
+        return Ok(p);
+    }
     if boot_image_departure(mode, "never-use").is_some() {
         let reason = boot_image_departure(mode, "never-use")
             .and_then(|x| x.params.get("reason"))
@@ -321,17 +346,7 @@ pub fn prepare(ds: &[&Description], snapshot: &Snapshot, framing: Framing, image
         .iter()
         .find(|m| m.kind == RAM_MODE_KIND && (mode.restarts_into.contains(&m.id) || check.is_some()))
         .ok_or_else(|| BackupError::Refused(format!("{} mode {} doesn't restart into a RAM environment", d.id, mode.id)))?;
-    let ram = ram_mode
-        .usb
-        .as_ref()
-        .filter(|u| u.interface.as_deref() == Some(ram_interface().as_str()))
-        .and_then(|u| {
-            Some(RamUsb {
-                vendor_id: hex_id(&u.vendor_id)?,
-                product_id: hex_id(&u.product_id)?,
-            })
-        })
-        .ok_or_else(|| BackupError::Refused(format!("{} mode {} has no USB ids with the interface {}", d.id, ram_mode.id, ram_interface())))?;
+    let ram = ram_usb(d, ram_mode)?;
 
     if image.len() < 8 || &image[..8] != b"ANDROID!" {
         return Err(BackupError::Refused("the RAM environment's image isn't an Android boot image".into()));
@@ -368,8 +383,60 @@ pub fn prepare(ds: &[&Description], snapshot: &Snapshot, framing: Framing, image
         framing,
         ram,
         slot_flags,
+        route: RamRoute::BootImage,
         download_size: size,
     })
+}
+
+fn ram_usb(d: &Description, ram_mode: &Mode) -> Result<RamUsb, BackupError> {
+    ram_mode
+        .usb
+        .as_ref()
+        .filter(|u| u.interface.as_deref() == Some(ram_interface().as_str()))
+        .and_then(|u| {
+            Some(RamUsb {
+                vendor_id: hex_id(&u.vendor_id)?,
+                product_id: hex_id(&u.product_id)?,
+            })
+        })
+        .ok_or_else(|| BackupError::Refused(format!("{} mode {} has no USB ids with the interface {}", d.id, ram_mode.id, ram_interface())))
+}
+
+/// The partition route, when the description's RAM environment mode starts
+/// from a partition: `Ok(None)` when it doesn't (the boot-image route), a
+/// refusal when the fastboot mode `mode` can't start it from there. Nothing
+/// on this route is downloaded or booted, so the image, the download limit
+/// and the slot flags aren't checked.
+fn from_partition_route(d: &Description, mode: &Mode, framing: Framing) -> Result<Option<Prepared>, BackupError> {
+    let started = d.modes.iter().filter(|m| m.kind == RAM_MODE_KIND).find_map(|m| {
+        let x = m.departures.iter().find(|x| x.kind == vocab::STARTED_FROM_PARTITION)?;
+        Some((m, x.params.get("partition").and_then(|v| v.as_str()).unwrap_or_default().to_string()))
+    });
+    let Some((ram_mode, partition)) = started else { return Ok(None) };
+    if partition.is_empty() {
+        return Err(BackupError::Refused(format!(
+            "{} mode {} starts from a partition it doesn't name",
+            d.id, ram_mode.id
+        )));
+    }
+    if !mode.departures.iter().any(|x| x.kind == vocab::OEM_REBOOT_RECOVERY) || !mode.restarts_into.contains(&ram_mode.id) {
+        return Err(BackupError::Refused(format!(
+            "{} mode {} starts from the {partition} partition, and the boot loader in mode {} can't start it from there (no oem reboot-recovery into it)",
+            d.id, ram_mode.id, mode.id
+        )));
+    }
+    Ok(Some(Prepared {
+        description: d.id.clone(),
+        mode: mode.id.clone(),
+        framing,
+        ram: ram_usb(d, ram_mode)?,
+        slot_flags: None,
+        route: RamRoute::FromPartition {
+            partition,
+            oem: write_rules::OEM_REBOOT_RECOVERY_VERB.to_string(),
+        },
+        download_size: 0,
+    }))
 }
 
 fn snapshot_var(snapshot: &Snapshot, k: &str) -> Option<String> {
@@ -421,7 +488,7 @@ fn plain_name(n: &str) -> bool {
 /// The manifest: what was read, from which device description, and each
 /// copy's name, size and sha256. Never a serial or another unit-unique value.
 pub fn manifest(p: &Prepared, image: &[u8], disks: &[(DiskRecord, String)]) -> String {
-    let v = serde_json::json!({
+    let mut v = serde_json::json!({
         "manifest_format": 1,
         "kind": "glassine-ram-backup",
         "description": p.description,
@@ -436,6 +503,12 @@ pub fn manifest(p: &Prepared, image: &[u8], disks: &[(DiskRecord, String)]) -> S
             "file": file,
         })).collect::<Vec<_>>(),
     });
+    if let RamRoute::FromPartition { partition, .. } = &p.route {
+        // No image was sent: the RAM environment was the partition's.
+        let o = v.as_object_mut().unwrap();
+        o.remove("ram_image_sha256");
+        o.insert("ram_started_from".into(), serde_json::json!(partition));
+    }
     serde_json::to_string_pretty(&v).unwrap() + "\n"
 }
 
@@ -451,6 +524,17 @@ pub async fn back_up_device<T: Transport, E: BackupEdge>(
     edge: &mut E,
 ) -> Result<BackupDone, BackupError> {
     let (got, mut s) = inspect::inspect_open(ds, fastboot, ids, host).await?;
+    // The partition route sends no image: no slot flags to read, nothing to boot.
+    let first = prepare(ds, &got.snapshot, got.framing, opts.image, None)?;
+    if let RamRoute::FromPartition { partition, oem } = first.route.clone() {
+        let prepared = first;
+        let d = ds.iter().find(|d| d.id == prepared.description).expect("the prepared description");
+        let rules = write_rules::mode_rules(d, &prepared.mode, "").map_err(BackupError::Refused)?.rules;
+        edge.note(&format!("starting the RAM environment from the {partition} partition (oem {oem})"));
+        s.oem(&rules, &oem).await.map_err(BackupError::Boot)?;
+        drop(s);
+        return finish(prepared, opts, edge).await;
+    }
     // The active slot's flags, read now: what `boot` would change depends on them.
     let flags = match current_slot(&got.snapshot) {
         Some(slot) if slot_count(&got.snapshot) >= 2 || asks_slot_check(ds, &got.snapshot) => {
@@ -483,7 +567,12 @@ pub async fn back_up_device<T: Transport, E: BackupEdge>(
     ));
     s.download_and_boot(opts.image).await.map_err(BackupError::Boot)?;
     drop(s);
+    finish(prepared, opts, edge).await
+}
 
+/// After the boot loader was told to start the RAM environment: wait for it,
+/// read every disk, reboot, store the manifest.
+async fn finish<E: BackupEdge>(prepared: Prepared, opts: BackupOptions<'_>, edge: &mut E) -> Result<BackupDone, BackupError> {
     edge.note(&format!("waiting up to {RAM_WAIT_SECONDS} s for the RAM environment ({})", prepared.ram));
     let (t, rids) = edge.wait_ram(&prepared.ram, RAM_WAIT_SECONDS).await.map_err(BackupError::NoRamEnvironment)?;
     let triple = (RR_CLASS, RR_SUBCLASS, RR_PROTOCOL);
