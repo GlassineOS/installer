@@ -13,3 +13,8 @@ publish = false
 [profile.release]
 opt-level = "s"
 lto = true
+
+# The executor's tests hash whole simulated partitions; unoptimised SHA-256
+# makes them minutes long.
+[profile.dev.package.sha2]
+opt-level = 3
