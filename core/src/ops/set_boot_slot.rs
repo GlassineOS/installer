@@ -1,36 +1,19 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
-//! `set-boot-slot` through the RAM environment: the slot flags live in the
-//! attribute bits 48 to 55 of the slot's boot partition entry (`boot_<slot>`,
-//! the Qualcomm A/B convention the boot loader reads: priority 48-49, active
-//! 50, tries 51-53, successful 54, unbootable 55). Both table copies are
-//! rewritten with only those bits changed (the table builder refuses any
-//! other difference), the backup copy first.
+//! `set-boot-slot` through the RAM environment: the slot flags live in
+//! attribute bits of each slot's entry in the partition table. Which entry
+//! and which bits, and the values a pinned, fallback and unbootable slot
+//! get, are the description's ([`SlotFlags`], its `slot-flags` boot
+//! setting). Both table copies are rewritten with only those bits changed
+//! (the table builder refuses any other difference), the backup copy first.
 //!
-//! - `pin`: the slot active, priority 3, 7 tries, successful (0x7f), and every
-//!   other slot a lower-priority fallback that stays bootable (priority 1,
-//!   active, 7 tries, successful: 0x7d). Seven tries cover GlassineOS's first
-//!   start (a bare boot, a restart, the candidate's boot).
-//! - `unbootable`: the slot inactive, priority 0, no tries, not successful,
-//!   unbootable (0x80): the boot loader never picks it nor falls back to it.
-//!
-//! The values are the lab's slot tool's (set_active_slot.py), which a device
-//! ran (slot switch and fallback, 2026-06-03, development).
+//! - `pin`: the slot gets `pinned`, every other slot's entry `fallback`.
+//! - `unbootable`: the slot gets `unbootable`.
 
 use super::{Evidence, OpError, gpt_from_backup, param, read_gpt};
 use crate::fastboot::Transport;
 use crate::format1::Step;
 use crate::glassine_write::Writer;
 use crate::gpt_build::{Change, Recipe, Rename, build};
-
-pub const SLOT_BITS: u64 = 0xff << 48;
-pub const PINNED: u64 = 0x7f << 48;
-pub const FALLBACK: u64 = 0x7d << 48;
-pub const RETIRED: u64 = 0x80 << 48;
-
-/// The new attributes of `old` for the flag bits `bits`.
-pub fn with_flags(old: u64, bits: u64) -> u64 {
-    (old & !SLOT_BITS) | bits
-}
+use crate::slot_flags::SlotFlags;
 
 /// `resumed`: the step was cut or failed while it wrote; a primary copy
 /// torn by that is rebuilt from the backup copy (written first, checked),
@@ -41,6 +24,7 @@ pub async fn run<T: Transport>(
     disk: u32,
     sector: u64,
     disk_bytes: u64,
+    flags: &SlotFlags,
     st: &Step,
     resumed: bool,
     mbr: &[u8],
@@ -67,7 +51,7 @@ pub async fn run<T: Transport>(
         }
         Err(e) => return Err(OpError::before(format!("the partition table on the device: {e}"))),
     };
-    let target = format!("boot_{slot}");
+    let target = flags.entry(slot);
     let t = gpt
         .part(&target)
         .ok_or_else(|| OpError::before(format!("the partition table has no {target}: no slot {slot}")))?;
@@ -76,20 +60,16 @@ pub async fn run<T: Transport>(
         renames.push(Rename {
             from: name.into(),
             to: name.into(),
-            attributes: Some(format!("0x{:016x}", with_flags(old, bits))),
+            attributes: Some(format!("0x{:016x}", flags.with(old, bits))),
         })
     };
     if pin {
-        set(&target, t.attributes, PINNED);
-        for o in gpt
-            .parts
-            .iter()
-            .filter(|p| p.name.starts_with("boot_") && p.name.len() == 6 && p.name != target)
-        {
-            set(&o.name, o.attributes, FALLBACK);
+        set(&target, t.attributes, flags.pinned);
+        for o in gpt.parts.iter().filter(|p| p.name != target && flags.slot_of(&p.name).is_some()) {
+            set(&o.name, o.attributes, flags.fallback);
         }
     } else {
-        set(&target, t.attributes, RETIRED);
+        set(&target, t.attributes, flags.unbootable);
     }
     let recipe = Recipe {
         sector,

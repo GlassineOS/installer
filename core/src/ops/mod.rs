@@ -4,19 +4,19 @@
 //! checked against, the bytes the table builder needs.
 //!
 //! Every op writes only through a [`crate::fastboot::Session`] (checked by
-//! [`WriteRules`]) or a [`crate::glassine_write::Writer`] (inside the ranges
+//! the mode's [`crate::write_rules::ModeRules`]) or a [`crate::glassine_write::Writer`] (inside the ranges
 //! the executor armed), and returns its evidence: what it wrote and the
 //! hashes it read back.
 
 pub mod boot_loader;
 pub mod copy_partition;
 pub mod partition_table;
+pub mod patch_boot;
 pub mod set_boot_slot;
 pub mod write_base;
 pub mod write_image;
 
 use crate::fastboot::Transport;
-use crate::fastboot::{Framing, WriteRules};
 use crate::format1::{Description, Step};
 use crate::glassine_write::{RamError, Writer};
 use crate::table::{crc32, le32, le64};
@@ -26,10 +26,13 @@ use std::fmt;
 
 /// What an op found wrong. `may_have_changed`: a write may have reached
 /// the device (the step's failure escape applies, not just a retry).
+/// `goes_on`: the op refused before writing anything and the run goes on
+/// past the step (its outcome is recorded as failed).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpError {
     pub why: String,
     pub may_have_changed: bool,
+    pub goes_on: bool,
 }
 
 impl OpError {
@@ -37,12 +40,22 @@ impl OpError {
         OpError {
             why: why.into(),
             may_have_changed: false,
+            goes_on: false,
         }
     }
     pub fn after(why: impl Into<String>) -> OpError {
         OpError {
             why: why.into(),
             may_have_changed: true,
+            goes_on: false,
+        }
+    }
+    /// Refused before anything was written; the run goes on past the step.
+    pub fn goes_on(why: impl Into<String>) -> OpError {
+        OpError {
+            why: why.into(),
+            may_have_changed: false,
+            goes_on: true,
         }
     }
 }
@@ -59,6 +72,7 @@ pub fn ram_err(e: RamError, writing: bool) -> OpError {
     OpError {
         why: e.to_string(),
         may_have_changed: writing,
+        goes_on: false,
     }
 }
 
@@ -77,41 +91,72 @@ pub fn param<'a>(st: &'a Step, key: &str) -> Result<&'a str, OpError> {
         .ok_or_else(|| OpError::before(format!("step {} has no parameter {key}", st.id)))
 }
 
-/// The partitions a description never lets anything write, by name: its
-/// `never-write` rules that select names.
-///
-/// TODO(write_rules.rs): the planner's `write_rules` derives the complete
-/// rules from a description mode (never-use departures, the oem allow-list,
-/// `system*` over fastboot); this is the minimal subset the executor needs
-/// until the CLI passes those in.
-pub fn never_write(d: &Description) -> Vec<String> {
-    let mut out = Vec::new();
-    for r in d.partitions.iter().filter(|r| r.class == "never-write") {
-        out.extend(r.select.name.iter().cloned());
-        out.extend(r.select.names.iter().flatten().cloned());
-    }
-    out
+/// The partitions the RAM environment may never write, by name, for the
+/// plan's `choices`: the description's partition rules decide a name by the
+/// first rule that selects it and whose `when` holds (a name no rule selects
+/// is never written), as the planner reads them. A `replace` rule with a
+/// `when` (boot_a, only when Android is kept) opens a name a later
+/// `never-write` rule closes otherwise.
+pub fn never_write<'a>(d: &'a Description, choices: &BTreeMap<String, String>) -> NeverWrite<'a> {
+    NeverWrite { d, choices: choices.clone() }
 }
 
-/// Minimal fastboot write rules for `mode` (see [`never_write`]'s TODO):
-/// the framing of its `equal-length-transfers` departure, its never-write
-/// names, and `reboot-recovery` when it has `oem-reboot-recovery`.
-pub fn minimal_write_rules(d: &Description, mode: &str) -> WriteRules {
-    let m = d.modes.iter().find(|m| m.id == mode);
-    let framing = m
-        .and_then(|m| m.departures.iter().find(|x| x.kind == "equal-length-transfers"))
-        .and_then(|x| x.params.get("length").and_then(|v| v.as_integer()))
-        .map(|len| Framing::EqualLength { len: len as usize })
-        .unwrap_or(Framing::Plain);
-    let oem = match m.is_some_and(|m| m.departures.iter().any(|x| x.kind == "oem-reboot-recovery")) {
-        true => vec!["reboot-recovery".to_string()],
-        false => vec![],
-    };
-    WriteRules {
-        framing,
-        never_write: never_write(d),
-        oem,
+/// See [`never_write`].
+pub struct NeverWrite<'a> {
+    d: &'a Description,
+    choices: BTreeMap<String, String>,
+}
+
+impl NeverWrite<'_> {
+    /// The class the description gives `name`, if a rule selects it.
+    pub fn class(&self, name: &str) -> Option<&str> {
+        for r in &self.d.partitions {
+            if let Some(w) = &r.when
+                && self.choices.get(&w.choice) != Some(&w.equals)
+            {
+                continue;
+            }
+            let s = &r.select;
+            let hit = s.name.as_deref().is_some_and(|n| n.eq_ignore_ascii_case(name))
+                || s.names.iter().flatten().any(|n| n.eq_ignore_ascii_case(name))
+                || s.pattern.as_deref().is_some_and(|p| glob(p, name));
+            if hit {
+                return Some(r.class.as_str());
+            }
+        }
+        None
     }
+
+    /// True when nothing may write `name`.
+    pub fn refuses(&self, name: &str) -> bool {
+        !matches!(self.class(name), Some(c) if c != "never-write" && c != "read" && c != "back-up")
+    }
+}
+
+/// `*` matches any run of characters; nothing else is special.
+fn glob(pat: &str, name: &str) -> bool {
+    let parts: Vec<&str> = pat.split('*').collect();
+    if parts.len() == 1 {
+        return pat.eq_ignore_ascii_case(name);
+    }
+    let (n, mut at) = (name.to_ascii_lowercase(), 0);
+    let last = parts.len() - 1;
+    for (i, p) in parts.iter().map(|p| p.to_ascii_lowercase()).enumerate() {
+        if i == 0 {
+            if !n.starts_with(&p) {
+                return false;
+            }
+            at = p.len();
+        } else if i == last {
+            return n.len() >= at + p.len() && n.ends_with(&p);
+        } else {
+            match n[at..].find(&p) {
+                Some(k) => at += k + p.len(),
+                None => return false,
+            }
+        }
+    }
+    true
 }
 
 /// One partition of a GPT as the executor uses it.

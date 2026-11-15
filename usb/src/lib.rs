@@ -228,6 +228,16 @@ mod native {
         find_kind(Kind::Fastboot)
     }
 
+    /// How many connected devices have these USB ids: looks at the bus only,
+    /// never opens one (no other program's driver or server is involved).
+    pub fn count_ids(vendor_id: u16, product_id: u16) -> Result<usize, OpenError> {
+        Ok(nusb::list_devices()
+            .wait()
+            .map_err(open_error)?
+            .filter(|d| d.vendor_id() == vendor_id && d.product_id() == product_id)
+            .count())
+    }
+
     /// The one connected device with an interface of `kind`.
     pub fn find_kind(kind: Kind) -> Result<nusb::DeviceInfo, OpenError> {
         let s = kind_selector(kind);
@@ -348,7 +358,7 @@ mod native {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use native::{find, find_kind, open, open_kind};
+pub use native::{count_ids, find, find_kind, open, open_kind};
 
 #[cfg(target_arch = "wasm32")]
 mod web {

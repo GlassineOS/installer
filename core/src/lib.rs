@@ -37,6 +37,7 @@ pub mod release;
 pub mod report;
 pub mod sahara;
 pub mod shape;
+pub mod slot_flags;
 pub mod supplied;
 pub mod table;
 pub mod validate;

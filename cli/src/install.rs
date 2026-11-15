@@ -103,6 +103,13 @@ impl RecordStore for FileStore {
     }
 }
 
+/// Where a step's originals are kept: `RECORD.kept/`.
+fn kept_dir(record: &Path) -> PathBuf {
+    let mut s = record.as_os_str().to_owned();
+    s.push(".kept");
+    PathBuf::from(s)
+}
+
 fn inputs_path(record: &Path) -> PathBuf {
     let mut s = record.as_os_str().to_owned();
     s.push(".inputs.json");
@@ -127,6 +134,7 @@ fn verified_backup(dir: &Path) -> Result<Backup, String> {
 struct CliEdge<'a> {
     d: &'a Description,
     store: FileStore,
+    kept: PathBuf,
     backup: Option<PathBuf>,
     cancel_file: PathBuf,
     shown: BTreeMap<String, u64>,
@@ -139,13 +147,22 @@ fn adb() -> Option<PathBuf> {
         .find(|p| p.is_file())
 }
 
-/// True when `adb devices` lists one device that is on and authorised.
-fn adb_sees_device() -> bool {
-    let Some(a) = adb() else { return false };
-    match Command::new(a).arg("devices").output() {
-        Ok(o) => String::from_utf8_lossy(&o.stdout).lines().skip(1).any(|l| l.trim_end().ends_with("\tdevice")),
-        Err(_) => false,
-    }
+/// The description's mode the installer can't open itself (stock Android,
+/// the emergency mode) whose USB ids are on the bus, if one is: read from
+/// the bus alone, so no adb server is started to find out.
+fn other_mode_on_bus(d: &Description) -> Option<String> {
+    d.modes
+        .iter()
+        .filter(|m| m.kind != "fastboot" && m.kind != glassine_installer::ram_backup::RAM_MODE_KIND)
+        .find(|m| {
+            m.usb
+                .as_ref()
+                .is_some_and(|u| match (u16::from_str_radix(&u.vendor_id, 16), u16::from_str_radix(&u.product_id, 16)) {
+                    (Ok(v), Ok(p)) => usb::count_ids(v, p).is_ok_and(|n| n > 0),
+                    _ => false,
+                })
+        })
+        .map(|m| m.id.clone())
 }
 
 fn open_error(e: usb::OpenError) -> String {
@@ -230,11 +247,8 @@ impl InstallEdge for CliEdge<'_> {
             {
                 return Ok(Link::Ram(t));
             }
-            if any
-                && adb_sees_device()
-                && let Some(m) = self.d.modes.iter().find(|m| m.kind == "android-adb")
-            {
-                return Ok(Link::Elsewhere(m.id.clone()));
+            if any && let Some(m) = other_mode_on_bus(self.d) {
+                return Ok(Link::Elsewhere(m));
             }
             if Instant::now() >= deadline {
                 return Err(format!("the device didn't show up in {} within {} s ({last})", mode.id, REACH_WAIT.as_secs()));
@@ -268,6 +282,30 @@ impl InstallEdge for CliEdge<'_> {
         Ok(b)
     }
 
+    fn keep(&mut self, name: &str, bytes: &[u8]) -> Result<(), String> {
+        if !glassine_installer::artifacts::plain_path(name) || name.contains('/') {
+            return Err(format!("{name:?} isn't a plain file name"));
+        }
+        std::fs::create_dir_all(&self.kept).map_err(|e| format!("{}: {e}", self.kept.display()))?;
+        let (to, temp) = (self.kept.join(name), self.kept.join(format!("{name}.partial")));
+        let mut f = File::create(&temp).map_err(|e| format!("{}: {e}", temp.display()))?;
+        f.write_all(bytes).and_then(|_| f.sync_all()).map_err(|e| format!("{}: {e}", temp.display()))?;
+        std::fs::rename(&temp, &to).map_err(|e| format!("{}: {e}", to.display()))?;
+        if let Ok(d) = File::open(&self.kept) {
+            let _ = d.sync_all();
+        }
+        Ok(())
+    }
+
+    fn kept(&mut self, name: &str) -> Result<Option<Vec<u8>>, String> {
+        let p = self.kept.join(name);
+        match std::fs::read(&p) {
+            Ok(b) => Ok(Some(b)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(format!("{}: {e}", p.display())),
+        }
+    }
+
     fn progress(&mut self, step: &str, done: u64, total: u64) {
         let last = self.shown.entry(step.to_string()).or_insert(0);
         if done == total || done >= *last + (64 << 20) || done < *last {
@@ -294,17 +332,6 @@ fn load_description(path: &Path) -> Result<(Description, String), String> {
     }
 }
 
-fn job(d: &Description, sha: String, developer: bool) -> Job<'_> {
-    // TODO(write_rules.rs): the rules derived from the description's modes;
-    // until then the executor's minimal ones (ops::minimal_write_rules).
-    Job {
-        description: d,
-        description_sha256: sha,
-        developer,
-        write_rules: BTreeMap::new(),
-    }
-}
-
 fn execute(
     d: &Description,
     sha: String,
@@ -320,13 +347,18 @@ fn execute(
     let mut edge = CliEdge {
         d,
         store: FileStore(record_path.to_path_buf()),
+        kept: kept_dir(record_path),
         backup,
         cancel_file: PathBuf::from(cancel),
         shown: BTreeMap::new(),
     };
     eprintln!("to stop after the next step that is safe to stop after, create {}", edge.cancel_file.display());
     let plan = rec.plan.clone();
-    let j = job(d, sha, developer);
+    let job_id = serde_json::from_str::<serde_json::Value>(&plan)
+        .ok()
+        .and_then(|v| v.get("job").and_then(|j| j.as_str()).map(String::from))
+        .ok_or("the record's plan names no job")?;
+    let j = Job::new(d, sha, developer, &job_id)?;
     match pollster::block_on(execute::run(&j, &plan, &mut rec, &mut artifacts, &mut edge)) {
         Ok(Outcome::Complete) => {
             println!("installed: every step is done");
@@ -379,6 +411,11 @@ pub fn install_cmd(args: &[String]) -> Result<ExitCode, String> {
             record_path.display(),
             record_path.display()
         ));
+    }
+    // Originals a run with no record left behind belong to no install.
+    let kept = kept_dir(&record_path);
+    if kept.exists() {
+        std::fs::remove_dir_all(&kept).map_err(|e| format!("{}: {e}", kept.display()))?;
     }
     let (d, sha) = load_description(Path::new(desc))?;
     let rel = PathBuf::from(rel);
@@ -543,11 +580,17 @@ mod tests {
         let mut e = CliEdge {
             d: &d,
             store: FileStore(t.0.join("r.json")),
+            kept: t.0.join("r.json.kept"),
             backup: Some(t.0.clone()),
             cancel_file: t.0.join("cancel"),
             shown: BTreeMap::new(),
         };
         assert_eq!(e.backup_bytes(512, 4).unwrap(), [0, 1, 2, 3]);
+        // a step's original, kept whole under its name
+        assert_eq!(e.kept("patch-boot_a-original").unwrap(), None);
+        e.keep("patch-boot_a-original", b"stock").unwrap();
+        assert_eq!(e.kept("patch-boot_a-original").unwrap().unwrap(), b"stock");
+        assert!(e.keep("../x", b"").is_err());
         assert!(!e.cancel_requested());
         std::fs::write(t.0.join("cancel"), b"").unwrap();
         assert!(e.cancel_requested());
