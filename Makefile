@@ -85,6 +85,7 @@ web-check: web-site
 	cd web && npm ci --ignore-scripts --no-audit --no-fund
 	node web/test/screens.js
 	node web/test/live.js $(SITE)
+	node web/test/install.js $(SITE)
 
 docker-image:
 	docker build -t $(IMAGE) .
