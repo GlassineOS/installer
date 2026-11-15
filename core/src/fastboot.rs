@@ -9,7 +9,7 @@
 //! backup).
 //!
 //! The writes of an install: [`Session::flash_raw`] (one `download` of a raw
-//! image streamed from a [`ReadAt`], then `flash:<partition>`),
+//! image streamed from an [`AsyncReadAt`], then `flash:<partition>`),
 //! [`Session::oem`] for the verbs a description allows and
 //! [`Session::reboot_bootloader`]. Each is checked against [`WriteRules`]
 //! before anything is sent. `erase` doesn't exist. `flash:partition` (any name
@@ -19,7 +19,7 @@
 //! A transport error or a malformed reply on any command (reads and `reboot`
 //! too) ends the session: nothing more is sent on it ([`FbError::Ended`]).
 
-use crate::table::ReadAt;
+use crate::table::AsyncReadAt;
 use std::fmt;
 
 /// Fastboot replies are at most 64 bytes in the original protocol; newer
@@ -400,7 +400,7 @@ impl<T: Transport> Session<T> {
     /// device.
     ///
     /// Any failure after the first byte of the download ends the session.
-    pub async fn flash_raw(&mut self, rules: &WriteRules, part: &str, src: &mut dyn ReadAt, len: u64) -> Result<(), WriteError> {
+    pub async fn flash_raw<R: AsyncReadAt + ?Sized>(&mut self, rules: &WriteRules, part: &str, src: &mut R, len: u64) -> Result<(), WriteError> {
         rules.check_partition(part).map_err(WriteError::Refused)?;
         rules.check_framing(self.framing).map_err(WriteError::Refused)?;
         if let Some(why) = &self.ended {
@@ -412,6 +412,7 @@ impl<T: Transport> Session<T> {
         let mut head = [0u8; 4];
         let n = len.min(4) as usize;
         src.read_at(0, &mut head[..n])
+            .await
             .map_err(|e| WriteError::Refused(FbError::RefusedWrite(format!("the image for {part}: {e}"))))?;
         if let Some(kind) = not_raw(&head[..n]) {
             return Err(WriteError::Refused(FbError::RefusedWrite(format!(
@@ -459,7 +460,7 @@ impl<T: Transport> Session<T> {
 
     /// `download:<size>` and the data: `len` bytes of `src`, NUL-padded to
     /// `size`. A failure ends the session.
-    async fn download(&mut self, src: &mut dyn ReadAt, len: u64, size: u32) -> Result<(), FbError> {
+    async fn download<R: AsyncReadAt + ?Sized>(&mut self, src: &mut R, len: u64, size: u32) -> Result<(), FbError> {
         let chunk = match self.framing {
             Framing::Plain => PLAIN_CHUNK,
             Framing::EqualLength { len } => len,
@@ -480,7 +481,7 @@ impl<T: Transport> Session<T> {
         while off < size {
             let n = (chunk as u64).min(size - off) as usize;
             let have = len.saturating_sub(off).min(n as u64) as usize;
-            if let Err(e) = src.read_at(off, &mut buf[..have]) {
+            if let Err(e) = src.read_at(off, &mut buf[..have]).await {
                 // The boot loader waits for the rest of the data: the session is over.
                 return Err(self.end(FbError::Usb(format!("reading the image at {off}: {e}"))));
             }

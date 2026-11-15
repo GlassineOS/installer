@@ -307,7 +307,7 @@ impl InstallEdge for Edge {
         Ok(self.w.link())
     }
 
-    fn save(&mut self, record: &Record) -> Result<(), String> {
+    async fn save(&mut self, record: &Record) -> Result<(), String> {
         self.saves += 1;
         if self.cut_at_save == Some(self.saves) {
             return Err("the computer lost power".into());
@@ -325,19 +325,19 @@ impl InstallEdge for Edge {
         })
     }
 
-    fn backup_bytes(&mut self, offset: u64, len: usize) -> Result<Vec<u8>, String> {
+    async fn backup_bytes(&mut self, offset: u64, len: usize) -> Result<Vec<u8>, String> {
         let mut b = vec![0u8; len];
         let mut s: &[u8] = &self.w.source;
         s.read_at(offset, &mut b)?;
         Ok(b)
     }
 
-    fn keep(&mut self, name: &str, bytes: &[u8]) -> Result<(), String> {
+    async fn keep(&mut self, name: &str, bytes: &[u8]) -> Result<(), String> {
         self.kept.insert(name.into(), bytes.to_vec());
         Ok(())
     }
 
-    fn kept(&mut self, name: &str) -> Result<Option<Vec<u8>>, String> {
+    async fn kept(&mut self, name: &str) -> Result<Option<Vec<u8>>, String> {
         Ok(self.kept.get(name).cloned())
     }
 
@@ -379,7 +379,7 @@ fn the_plan_keeping(d: &Description, developer: bool, keep: bool) -> String {
 }
 
 fn new_record(d: &Description, plan: &str, src: MemorySource) -> Record {
-    let a = Artifacts::open(src).unwrap();
+    let a = block(Artifacts::open(src)).unwrap();
     let arts = a.roles().iter().map(|r| a.artifact(r).unwrap()).collect();
     Record::new(
         "test",
@@ -401,7 +401,7 @@ fn job(d: &Description) -> Job<'_> {
 }
 
 fn go(d: &Description, plan: &str, record: &mut Record, src: MemorySource, edge: &mut Edge) -> Result<Outcome, Stopped> {
-    let mut a = Artifacts::open(src).unwrap();
+    let mut a = block(Artifacts::open(src)).unwrap();
     block(run(&job(d), plan, record, &mut a, edge))
 }
 
@@ -920,7 +920,7 @@ fn another_plan_or_description_is_refused() {
     assert!(s.why.contains("plan"), "{s}");
     let mut j = job(&d);
     j.description_sha256 = sha256_hex(b"another description");
-    let mut a = Artifacts::open(src).unwrap();
+    let mut a = block(Artifacts::open(src)).unwrap();
     let s = block(run(&j, &plan, &mut rec, &mut a, &mut edge)).unwrap_err();
     assert!(s.why.contains("description"), "{s}");
     assert_eq!(edge.w.reaches, 0);
@@ -936,7 +936,7 @@ fn untried_write_steps_need_a_developer() {
     let plan = the_plan(&d, false);
     let mut rec = new_record(&d, &plan, src.clone());
     let mut edge = Edge::new(World::new());
-    let mut a = Artifacts::open(src.clone()).unwrap();
+    let mut a = block(Artifacts::open(src.clone())).unwrap();
     let s = block(run(&j, &plan, &mut rec, &mut a, &mut edge)).unwrap_err();
     assert!(s.why.contains("nothing is run"), "{s}");
     assert_eq!(edge.w.reaches, 0);
@@ -944,7 +944,7 @@ fn untried_write_steps_need_a_developer() {
     let plan = the_plan(&d, true);
     let mut rec = new_record(&d, &plan, src.clone());
     let mut edge = Edge::new(World::new());
-    let mut a = Artifacts::open(src).unwrap();
+    let mut a = block(Artifacts::open(src)).unwrap();
     let s = block(run(&j, &plan, &mut rec, &mut a, &mut edge)).unwrap_err();
     assert!(s.why.contains("developer"), "{s}");
     assert_eq!(edge.w.reaches, 0);
