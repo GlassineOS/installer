@@ -21,7 +21,7 @@ use glassine_installer::facts::Snapshot;
 use glassine_installer::format1::{Description, Mode, Step};
 use glassine_installer::lock::sha256_hex;
 use glassine_installer::plan::{self, Status};
-use glassine_installer::record::{self, Backup, Confirmation, Record, RecordStore};
+use glassine_installer::record::{self, Backup, Confirmation, Record, RecordStore, StepState};
 use glassine_installer::validate::{self, Loaded};
 use glassine_installer::{recognize, release::Release};
 use glassine_installer_usb as usb;
@@ -179,7 +179,7 @@ impl CliEdge<'_> {
     /// The device's interface of `kind`, if one is there. An open that fails
     /// (busy, no access yet: udev applies it a moment after the device shows
     /// up) is kept as `last` and tried again until the deadline.
-    fn try_kind(&self, kind: usb::Kind, last: &mut String) -> Option<usb::UsbTransport> {
+    fn try_kind(&self, kind: usb::Kind, last: &mut String, failed: &mut bool) -> Option<usb::UsbTransport> {
         match usb::find_kind(kind) {
             Ok(info) => match usb::open_kind(&info, kind) {
                 Ok((mut t, _)) => {
@@ -190,12 +190,14 @@ impl CliEdge<'_> {
                 }
                 Err(e) => {
                     *last = open_error(e);
+                    *failed = true;
                     None
                 }
             },
             Err(usb::OpenError::NoDevice) => None,
             Err(e) => {
                 *last = open_error(e);
+                *failed = true;
                 None
             }
         }
@@ -237,17 +239,23 @@ impl InstallEdge for CliEdge<'_> {
         let deadline = Instant::now() + REACH_WAIT;
         let mut last = String::from("nothing came up");
         loop {
+            let mut failed = false;
             if (any || mode.kind == "fastboot")
-                && let Some(t) = self.try_kind(usb::Kind::Fastboot, &mut last)
+                && let Some(t) = self.try_kind(usb::Kind::Fastboot, &mut last, &mut failed)
             {
                 return Ok(Link::Fastboot(t));
             }
             if (any || mode.kind == glassine_installer::ram_backup::RAM_MODE_KIND)
-                && let Some(t) = self.try_kind(usb::Kind::RamRead, &mut last)
+                && let Some(t) = self.try_kind(usb::Kind::RamRead, &mut last, &mut failed)
             {
                 return Ok(Link::Ram(t));
             }
-            if any && let Some(m) = other_mode_on_bus(self.d) {
+            // A fastboot or RAM interface that is there but didn't open yet
+            // isn't taken for another mode with the same USB ids.
+            if any
+                && !failed
+                && let Some(m) = other_mode_on_bus(self.d)
+            {
                 return Ok(Link::Elsewhere(m));
             }
             if Instant::now() >= deadline {
@@ -360,15 +368,37 @@ fn execute(
         .ok_or("the record's plan names no job")?;
     let j = Job::new(d, sha, developer, &job_id)?;
     match pollster::block_on(execute::run(&j, &plan, &mut rec, &mut artifacts, &mut edge)) {
-        Ok(Outcome::Complete) => {
-            println!("installed: every step is done");
-            Ok(ExitCode::SUCCESS)
-        }
-        Ok(Outcome::WaitingForAcceptance { mode, check }) => {
-            println!(
-                "every step is done and the device is restarting into {mode}. The installer can't see it there yet: check it yourself.\n\
-                 {check} GlassineOS sets itself up at its first start and restarts once; then it shows its own screen."
-            );
+        Ok(o) => {
+            // Steps the run went on past (refused before they wrote anything).
+            let failed: Vec<String> = rec
+                .plan_steps()
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|s| rec.state(s) == StepState::Failed)
+                .map(|s| {
+                    let why = rec
+                        .journal
+                        .iter()
+                        .rev()
+                        .find(|e| e.step == s)
+                        .and_then(|e| e.outcome.as_ref())
+                        .and_then(|o| o.message.clone())
+                        .unwrap_or_default();
+                    format!("  {s}: {why}")
+                })
+                .collect();
+            let all = if failed.is_empty() {
+                "every step is done".to_string()
+            } else {
+                format!("the steps are done except these, which wrote nothing:\n{}\n", failed.join("\n"))
+            };
+            match o {
+                Outcome::Complete => println!("installed: {all}"),
+                Outcome::WaitingForAcceptance { mode, check } => println!(
+                    "{all}; the device is restarting into {mode}. The installer can't see it there yet: check it yourself.\n\
+                     {check} GlassineOS sets itself up at its first start and restarts once; then it shows its own screen."
+                ),
+            }
             Ok(ExitCode::SUCCESS)
         }
         Err(s) => {

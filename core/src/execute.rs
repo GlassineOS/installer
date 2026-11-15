@@ -357,6 +357,11 @@ impl<E: InstallEdge, S: ArtifactSource> Exec<'_, E, S> {
         }
         self.choices = pv.choices.iter().map(|c| (c.choice.clone(), c.value.clone())).collect();
         let order = self.order(&pv)?;
+        // The final restart is saved only after every step ran (a step the
+        // run went on past stays failed): a resume goes straight to it.
+        if self.record.final_restart.is_some() {
+            return self.finish().await;
+        }
         self.check_artifacts(&order)?;
         for id in &order {
             let ps = pv.steps.iter().find(|s| s.id == *id).unwrap().clone();
