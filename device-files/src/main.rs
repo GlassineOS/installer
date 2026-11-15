@@ -2,8 +2,9 @@
 //! glassine-device-files DESCRIPTION DIR
 //!
 //! Checks the description as the installer does (spec 002 FR-002, FR-025) and
-//! writes the files derived from it (FR-030) into DIR: `device-data.list` and
-//! `slots.conf`, each only when the description has something for it. Prints
+//! writes the files derived from it (FR-030) into DIR: `device-data.list`,
+//! `slots.conf` and `deploy.conf.device` (FR-018c), each only when the
+//! description has something for it. Prints
 //! each written file and where the installed system reads it. A device's
 //! package runs this at its build. Exit 1: the description is invalid or a file
 //! can't be derived; 2: usage.

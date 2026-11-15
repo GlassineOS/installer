@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 /// The latest format; a reader reads it and every earlier one (FR-003).
-pub const FORMAT: i64 = 3;
+pub const FORMAT: i64 = 4;
 /// The earliest format a reader reads.
 pub const FIRST_FORMAT: i64 = 1;
 
@@ -373,6 +373,31 @@ pub struct SuppliedTexts {
     pub recognise: String,
 }
 
+/// The partition that holds the person's data on the installed system (FR-018c,
+/// format 4), and the space kept free at its end.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DataPartition {
+    /// Its name in the device's table, as the installed system finds it.
+    pub name: String,
+    /// What stays free at its end, a fixed size (`<n>KiB` and up); none when absent.
+    #[serde(default)]
+    pub keep_free_at_end: Option<String>,
+}
+
+impl DataPartition {
+    /// `keep_free_at_end` in KiB (0 when absent); `None` when it isn't a fixed size.
+    pub fn keep_free_kib(&self) -> Option<u64> {
+        let Some(v) = &self.keep_free_at_end else {
+            return Some(0);
+        };
+        let (n, shift) = [("KiB", 0), ("MiB", 10), ("GiB", 20), ("TiB", 30)]
+            .iter()
+            .find_map(|(u, sh)| v.strip_suffix(u).map(|n| (n, *sh)))?;
+        n.parse::<u64>().ok()?.checked_mul(1 << shift)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Artifact {
@@ -545,6 +570,8 @@ pub struct Description {
     #[serde(default)]
     pub transitions: Vec<Transition>,
     pub partitions: Vec<PartitionRule>,
+    #[serde(default)]
+    pub data_partition: Option<DataPartition>,
     #[serde(default)]
     pub boot_settings: Vec<BootSetting>,
     #[serde(default)]
@@ -959,6 +986,23 @@ pub fn shape_for(format: i64) -> Table {
     } else {
         table(boot_setting_fields)
     };
+    // From format 4 on (FR-018c).
+    let data_partition = table(Table::new(
+        "the partition that holds the person's data on the installed system (FR-018c)",
+        vec![
+            f(
+                "name",
+                sp(PART_NAME_PATTERN, "its name in the device's table, as the installed system finds it"),
+            ),
+            opt(
+                "keep_free_at_end",
+                sp(
+                    FIXED_SIZE_PATTERN,
+                    "the space the installed system leaves free at its end when it makes the file system there, for what another system keeps there",
+                ),
+            ),
+        ],
+    ));
     let unit_value = table(Table::new(
         "a value unique to the unit that GlassineOS can't read itself (FR-017)",
         vec![
@@ -1221,11 +1265,14 @@ pub fn shape_for(format: i64) -> Table {
             f("modes", arr1(mode, "")),
             opt("transitions", arr(transition, "")),
             f("partitions", arr1(rule, "")),
+        ]
+        .into_iter()
+        .chain((format >= 4).then(|| opt("data_partition", data_partition)))
+        .chain([
             opt("boot_settings", arr(boot_setting, "")),
             opt("unit_values", arr(unit_value, "")),
             opt("device_files", arr(device_file, "")),
-        ]
-        .into_iter()
+        ])
         .chain((format >= 3).then(|| opt("supplied_files", arr(supplied_file, ""))))
         .chain([
             opt("artifacts", arr(artifact, "")),

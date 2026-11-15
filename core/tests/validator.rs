@@ -116,13 +116,13 @@ fn every_problem_at_once() {
 
 #[test]
 fn format_first() {
-    let t = mutate(&noteair(), "format = 3\nid = \"onyx-noteair\"", "id = \"onyx-noteair\"\nformat = 3");
+    let t = mutate(&noteair(), "format = 4\nid = \"onyx-noteair\"", "id = \"onyx-noteair\"\nformat = 4");
     rejects(&t, "format");
 }
 
 #[test]
 fn unknown_format() {
-    na("format = 3", "format = 0", "format");
+    na("format = 4", "format = 0", "format");
 }
 
 #[test]
@@ -134,8 +134,8 @@ fn not_toml() {
 /// nothing of it is read.
 #[test]
 fn newer_format_is_too_new_not_invalid() {
-    let t = mutate(&noteair(), "format = 3", "format = 4\nnew_key_of_format_4 = true");
-    assert!(matches!(load(&t), Loaded::TooNew { format: 4 }));
+    let t = mutate(&noteair(), "format = 4", "format = 5\nnew_key_of_format_5 = true");
+    assert!(matches!(load(&t), Loaded::TooNew { format: 5 }));
 }
 
 /// FR-003: a reader reads every earlier format too.
@@ -191,6 +191,57 @@ fn format_1_has_no_layout_partitions() {
         "renames = { boot = \"boot_a\", system = \"system_a\", vendor = \"vendor_a\" }, partitions = [{ name = \"system_b\", size = \"3GiB\" }] }",
     );
     rejects(&t, "steps[2].params.partitions");
+}
+
+/// FR-003: format 3 still reads, and what format 4 added isn't in it.
+fn format3() -> String {
+    text("core/tests/fixtures/descriptions/onyx-noteair-format3.toml")
+}
+
+#[test]
+fn format_3_still_reads() {
+    let d = valid(&format3());
+    assert_eq!(d.format, 3);
+    assert!(d.data_partition.is_none());
+}
+
+#[test]
+fn format_3_has_no_data_partition() {
+    let t = format3() + "\n[data_partition]\nname = \"userdata\"\n";
+    rejects(&t, "data_partition");
+}
+
+// ---- FR-018c: the person's data partition -----------------------------------------
+
+#[test]
+fn a_data_partition_no_rule_selects() {
+    na("name = \"userdata\"\nkeep_free", "name = \"nowhere\"\nkeep_free", "data_partition.name");
+}
+
+#[test]
+fn the_data_partition_is_not_the_system_partition() {
+    na("name = \"userdata\"\nkeep_free", "name = \"system_b\"\nkeep_free", "data_partition.name");
+}
+
+#[test]
+fn a_data_partition_keeps_a_fixed_size_free() {
+    na("keep_free_at_end = \"16KiB\"", "keep_free_at_end = \"16k\"", "data_partition.keep_free_at_end");
+    na("keep_free_at_end = \"16KiB\"", "keep_free_at_end = 16384", "data_partition.keep_free_at_end");
+    na(
+        "keep_free_at_end = \"16KiB\"",
+        "keep_free_at_end = \"rest-of-disk\"",
+        "data_partition.keep_free_at_end",
+    );
+    na(
+        "keep_free_at_end = \"16KiB\"",
+        "keep_free_at_end = \"99999999999999999999TiB\"",
+        "data_partition.keep_free_at_end",
+    );
+}
+
+#[test]
+fn a_data_partition_needs_its_name() {
+    na("[data_partition]\nname = \"userdata\"\n", "[data_partition]\n", "data_partition.name");
 }
 
 /// FR-003: format 2 still reads, and what format 3 added isn't in it.

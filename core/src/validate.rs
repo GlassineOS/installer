@@ -310,6 +310,7 @@ pub fn check(d: &Description) -> Vec<Problem> {
     }
     unique(&mut ck, d.device_files.iter().map(|u| u.id.as_str()), "device_files", "id");
     check_device_data(&mut ck);
+    check_data_partition(&mut ck);
     check_supplied_files(&mut ck);
     unique(&mut ck, d.artifacts.iter().map(|a| a.role.as_str()), "artifacts", "role");
     for (i, c) in d.capabilities.iter().enumerate() {
@@ -664,6 +665,25 @@ fn check_device_data(ck: &mut Ck) {
     if d.format >= 2 && d.device_data.iter().any(|x| matches!(x, format1::DeviceDatum::Named(_))) {
         // The shape rejects it first; this keeps the records honest.
         ck.p("device_data", "from format 2 each device-data file is a table (FR-018)");
+    }
+}
+
+/// The person's data partition (FR-018c): a partition a rule selects, never one
+/// the installation's system goes to, and a size that fits the file the
+/// installed system reads (whole KiB).
+fn check_data_partition(ck: &mut Ck) {
+    let d = ck.d;
+    let Some(p) = &d.data_partition else {
+        return;
+    };
+    if !d.partitions.iter().any(|r| selects_ref(&r.select, &p.name)) {
+        ck.p("data_partition.name", format!("no partition rule selects {:?}", p.name));
+    }
+    if crate::derive::system_partitions(d).iter().any(|s| s == &p.name) {
+        ck.p("data_partition.name", format!("{:?} is the system partition", p.name));
+    }
+    if p.keep_free_kib().is_none() {
+        ck.p("data_partition.keep_free_at_end", "not a size the installed system can read");
     }
 }
 
