@@ -409,7 +409,13 @@ mod web {
     /// browser's reason (nusb logs it and answers only "WebUSB error"); the
     /// device is then handed to nusb.
     pub async fn request_kind(kind: Kind) -> Result<(UsbTransport, UsbIds), OpenError> {
-        let device = choose(kind).await?;
+        open_device(choose(kind).await?, kind).await
+    }
+
+    /// Opens a device the page got from the browser itself (its chooser, or
+    /// `getDevices()` for one the person allowed before) and claims its
+    /// interface of `kind`, retrying while it is busy.
+    pub async fn open_device(device: UsbDevice, kind: Kind) -> Result<(UsbTransport, UsbIds), OpenError> {
         let mut waited = Duration::ZERO;
         loop {
             match try_open(&device, kind).await {
@@ -576,7 +582,7 @@ mod web {
 }
 
 #[cfg(target_arch = "wasm32")]
-pub use web::{browser_error, request, request_kind};
+pub use web::{browser_error, open_device, request, request_kind};
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
