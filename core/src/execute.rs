@@ -51,7 +51,7 @@ use crate::gpt_build::Built;
 use crate::inspect::{choose_framing, framing_table};
 use crate::lock::sha256_hex;
 use crate::ops::{self, Evidence, Gpt, OpError};
-use crate::record::{Backup, Outcome as Done, Record, Result_, StepState};
+use crate::record::{Backup, FinalRestart, Outcome as Done, Record, Result_, StepState};
 use crate::vocab::INSTALLER_MODE;
 use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -981,6 +981,20 @@ impl<E: InstallEdge, S: ArtifactSource> Exec<'_, E, S> {
         Ok(b)
     }
 
+    async fn gpt_from_backup(&mut self, st: &Step) -> Result<Gpt, Stopped> {
+        let (disk, sector, disk_bytes) = self.ram_disk(st).await?;
+        let mbr = self
+            .edge
+            .backup_bytes(0, sector as usize)
+            .map_err(|e| self.fail(st, format!("the backup: {e}"), false, false))?;
+        let Here::Ram { w, .. } = &mut self.here else {
+            return Err(self.fail(st, "not in the RAM environment", false, false));
+        };
+        ops::gpt_from_backup(w, disk, sector, disk_bytes, &mbr)
+            .await
+            .map_err(|e| self.fail(st, e, false, false))
+    }
+
     async fn live_gpt(&mut self, st: &Step) -> Result<Gpt, Stopped> {
         let (disk, sector, _) = self.ram_disk(st).await?;
         let Here::Ram { w, .. } = &mut self.here else {
@@ -1070,7 +1084,15 @@ impl<E: InstallEdge, S: ArtifactSource> Exec<'_, E, S> {
                 (g, vec![(0, b.primary.len() as u64), (b.backup_offset(), b.backup.len() as u64)])
             }
             (None, _) => {
-                let g = self.live_gpt(st).await?;
+                let g = match self.live_gpt(st).await {
+                    Ok(g) => g,
+                    // A primary torn by a cut slot-flag write: the places
+                    // from the backup copy (the step rebuilds the primary).
+                    Err(s) => self.gpt_from_backup(st).await.map_err(|b| Stopped {
+                        why: format!("{}; its backup copy: {}", s.why, b.why),
+                        ..s
+                    })?,
+                };
                 let arr = g.primary.len() as u64 - 2 * sector;
                 let backup_at = (g.backup_header * sector).saturating_sub(arr);
                 let copies = vec![(0, g.primary.len() as u64), (backup_at, arr + sector)];
@@ -1139,13 +1161,22 @@ impl<E: InstallEdge, S: ArtifactSource> Exec<'_, E, S> {
             None
         };
         let src = self.new_table.as_ref().map(|(_, s)| s.clone()).unwrap_or_default();
+        // The backed-up disk's sector 0: the protective MBR every table copy
+        // the installer writes carries (a slot step's torn primary is rebuilt with it).
+        let mbr = if st.kind == "set-boot-slot" && resumed {
+            self.edge
+                .backup_bytes(0, sector as usize)
+                .map_err(|e| OpError::before(format!("the backup: {e}")))?
+        } else {
+            vec![]
+        };
         let Here::Ram { w, .. } = &mut self.here else { unreachable!() };
         let max_hash = w.list().await.map_err(|e| ops::ram_err(e, false))?.listing.max_hash;
         let edge = &mut *self.edge;
         let mut progress = |d: u64, t: u64| edge.progress(&id, d, t);
         match st.kind.as_str() {
             "write-partition-table" => ops::partition_table::run(w, disk, table.as_ref().unwrap(), &src, resumed, max_hash).await,
-            "set-boot-slot" => ops::set_boot_slot::run(w, disk, sector, disk_bytes, st, max_hash).await,
+            "set-boot-slot" => ops::set_boot_slot::run(w, disk, sector, disk_bytes, st, resumed, &mbr, max_hash).await,
             "write-image" => {
                 let part = ops::param(st, "partition")?;
                 ops::write_image::write_ram(w, disk, gpt.as_ref().unwrap(), part, &role, self.artifacts, max_hash, &mut progress).await
@@ -1165,17 +1196,32 @@ impl<E: InstallEdge, S: ArtifactSource> Exec<'_, E, S> {
 
     // ---- the end ------------------------------------------------------------------
 
-    /// Every step done: from the RAM environment, disarm and restart into
-    /// GlassineOS. A system the installer can't identify yet leaves the run
-    /// waiting for the person's acceptance.
+    /// The restart into the installed system, after the last step. Saved in
+    /// the record before it is sent and once it was: a resume after it
+    /// doesn't touch the device; one cut before it finds the device and
+    /// sends it (or, not finding it, waits for the person's check).
     async fn finish(&mut self) -> Result<Outcome, Stopped> {
-        let Some(cur) = self.here.mode().map(String::from) else {
+        if let Some(f) = &self.record.final_restart
+            && f.sent
+        {
+            return Ok(Outcome::WaitingForAcceptance {
+                mode: f.mode.clone(),
+                check: f.check.clone(),
+            });
+        }
+        // The installer's own restart into a glassine-usb mode, from the
+        // mode the last step ran in.
+        let last = self
+            .record
+            .plan_steps()
+            .unwrap_or_default()
+            .last()
+            .and_then(|id| self.d.steps.iter().find(|s| s.id == *id))
+            .map(|s| s.mode.clone());
+        let from = self.here.mode().map(String::from).or(last);
+        let Some(cur) = from else {
             return Ok(Outcome::Complete);
         };
-        if let Here::Ram { w, armed, .. } = &mut self.here {
-            w.disarm().await.map_err(|e| stop(format!("disarming at the end: {e}")))?;
-            *armed = false;
-        }
         let Some(t) = self
             .d
             .transitions
@@ -1186,11 +1232,6 @@ impl<E: InstallEdge, S: ArtifactSource> Exec<'_, E, S> {
             return Ok(Outcome::Complete);
         };
         let to = self.mode(&t.to)?.clone();
-        if let Here::Ram { mut w, .. } = std::mem::replace(&mut self.here, Here::Unknown) {
-            w.reboot(Reboot::Normal).await.map_err(|e| stop(format!("{}: {e}", t.id)))?;
-        } else {
-            return Ok(Outcome::Complete);
-        }
         let check = self
             .d
             .texts
@@ -1198,22 +1239,56 @@ impl<E: InstallEdge, S: ArtifactSource> Exec<'_, E, S> {
             .get(&to.id)
             .cloned()
             .unwrap_or_else(|| format!("the device starts {}", to.id));
-        self.edge.note(&format!("{}: the device restarts into {}", t.id, to.id));
-        if !to.can.iter().any(|c| c == "identify") {
-            return Ok(Outcome::WaitingForAcceptance { mode: to.id, check });
+        if matches!(self.here, Here::Unknown) {
+            // A resume after every step was done: the device is where the
+            // cut left it.
+            let m = self.mode(&cur)?.clone();
+            let text = self.d.texts.modes.get(&cur).cloned();
+            match self.edge.reach(&m, Reach::Already { text }).await {
+                Ok(Link::Ram(r)) => self.adopt(Link::Ram(r), None).await?,
+                Ok(_) | Err(_) if self.record.final_restart.is_some() => {
+                    self.edge.note(&format!("{}: the device isn't in {cur} any more: it took the restart", t.id));
+                    return self.restarted(&t, &to, check);
+                }
+                Ok(_) => {
+                    self.edge.note(&format!("every step is done; the device isn't in {cur}: restart it normally"));
+                    return Ok(Outcome::WaitingForAcceptance { mode: to.id, check });
+                }
+                Err(e) => return Err(stop(format!("every step is done, but the device wasn't found for {}: {e}", t.id))),
+            }
         }
-        let link = self
-            .edge
-            .reach(
-                &to,
-                Reach::Sent {
-                    transition: Some(t.id.clone()),
-                },
-            )
-            .await
-            .map_err(stop)?;
-        self.adopt(link, None).await?;
-        Ok(Outcome::Complete)
+        if let Here::Ram { w, armed, .. } = &mut self.here {
+            w.disarm().await.map_err(|e| stop(format!("disarming at the end: {e}")))?;
+            *armed = false;
+        }
+        let Here::Ram { .. } = self.here else {
+            return Ok(Outcome::Complete);
+        };
+        self.record.final_restart = Some(FinalRestart {
+            transition: t.id.clone(),
+            mode: to.id.clone(),
+            check: check.clone(),
+            sent: false,
+        });
+        self.save(None)?;
+        if let Here::Ram { mut w, .. } = std::mem::replace(&mut self.here, Here::Unknown) {
+            w.reboot(Reboot::Normal).await.map_err(|e| stop(format!("{}: {e}", t.id)))?;
+        }
+        self.restarted(&t, &to, check)
+    }
+
+    fn restarted(&mut self, t: &crate::format1::Transition, to: &Mode, check: String) -> Result<Outcome, Stopped> {
+        self.record.final_restart = Some(FinalRestart {
+            transition: t.id.clone(),
+            mode: to.id.clone(),
+            check: check.clone(),
+            sent: true,
+        });
+        self.save(None)?;
+        self.edge.note(&format!("{}: the device restarts into {}", t.id, to.id));
+        // TODO(glassine-usb): a mode that can identify is reached and
+        // checked here; GlassineOS isn't recognised over USB yet.
+        Ok(Outcome::WaitingForAcceptance { mode: to.id.clone(), check })
     }
 
     /// Leaves an armed RAM environment disarmed (a run that stopped).

@@ -16,7 +16,7 @@
 //! The values are the lab's slot tool's (set_active_slot.py), which a device
 //! ran (slot switch and fallback, 2026-06-03, development).
 
-use super::{Evidence, OpError, param, read_gpt};
+use super::{Evidence, OpError, gpt_from_backup, param, read_gpt};
 use crate::fastboot::Transport;
 use crate::format1::Step;
 use crate::glassine_write::Writer;
@@ -32,16 +32,41 @@ pub fn with_flags(old: u64, bits: u64) -> u64 {
     (old & !SLOT_BITS) | bits
 }
 
-pub async fn run<T: Transport>(w: &mut Writer<T>, disk: u32, sector: u64, disk_bytes: u64, st: &Step, max_hash: u64) -> Result<Evidence, OpError> {
+/// `resumed`: the step was cut or failed while it wrote; a primary copy
+/// torn by that is rebuilt from the backup copy (written first, checked),
+/// with `mbr` (the backed-up disk's sector 0) in front.
+#[allow(clippy::too_many_arguments)]
+pub async fn run<T: Transport>(
+    w: &mut Writer<T>,
+    disk: u32,
+    sector: u64,
+    disk_bytes: u64,
+    st: &Step,
+    resumed: bool,
+    mbr: &[u8],
+    max_hash: u64,
+) -> Result<Evidence, OpError> {
     let slot = param(st, "slot")?;
     let flag = |k: &str| st.params.get(k).and_then(|v| v.as_bool()).unwrap_or(false);
     let (pin, unbootable) = (flag("pin"), flag("unbootable"));
     if pin == unbootable {
         return Err(OpError::before(format!("step {}: either pin or unbootable", st.id)));
     }
-    let gpt = read_gpt(w, disk, sector)
-        .await
-        .map_err(|e| OpError::before(format!("the partition table on the device: {e}")))?;
+    let mut ev = Evidence::new();
+    let gpt = match read_gpt(w, disk, sector).await {
+        Ok(g) => g,
+        Err(e) if resumed => {
+            let g = gpt_from_backup(w, disk, sector, disk_bytes, mbr)
+                .await
+                .map_err(|b| OpError::before(format!("the primary partition table: {e}; its backup copy: {b}")))?;
+            ev.insert(
+                "found".into(),
+                format!("a primary copy cut while it was written ({e}): rebuilt from the backup copy"),
+            );
+            g
+        }
+        Err(e) => return Err(OpError::before(format!("the partition table on the device: {e}"))),
+    };
     let target = format!("boot_{slot}");
     let t = gpt
         .part(&target)
@@ -81,7 +106,6 @@ pub async fn run<T: Transport>(w: &mut Writer<T>, disk: u32, sector: u64, disk_b
             "the table's geometry isn't what the builder writes: the slot flags aren't written",
         ));
     }
-    let mut ev = Evidence::new();
     super::partition_table::write_table(w, disk, &built, max_hash, &mut ev).await?;
     ev.insert("changes".into(), built.describe().join("; "));
     Ok(ev)

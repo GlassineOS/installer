@@ -541,6 +541,91 @@ fn a_cut_at_every_save_resumes_to_the_same_device() {
 }
 
 #[test]
+fn the_final_restart_is_recorded_and_a_resume_after_it_leaves_the_device_alone() {
+    let (d, plan, src, mut rec, mut edge) = fresh();
+    let r = go(&d, &plan, &mut rec, src.clone(), &mut edge);
+    assert!(matches!(r, Ok(Outcome::WaitingForAcceptance { .. })), "{r:?}");
+    let f = rec.final_restart.clone().expect("the restart is in the record");
+    assert!(f.sent);
+    assert_eq!(f.mode, "glassine");
+    // resume: no reach, no write, the same check
+    let mut rec = Record::parse(edge.saved.as_ref().unwrap()).unwrap();
+    let (reaches, writes) = (edge.w.reaches, edge.w.ram.borrow().written.len());
+    let r = go(&d, &plan, &mut rec, src, &mut edge);
+    match r {
+        Ok(Outcome::WaitingForAcceptance { mode, check }) => {
+            assert_eq!(mode, f.mode);
+            assert_eq!(check, f.check);
+        }
+        r => panic!("{r:?}"),
+    }
+    assert_eq!(edge.w.reaches, reaches, "the device isn't looked for");
+    assert_eq!(edge.w.ram.borrow().written.len(), writes);
+}
+
+#[test]
+fn a_cut_just_before_or_after_the_final_restart_resumes_to_the_check() {
+    // the whole run's saves: the last two are the restart's (before, after)
+    let (d, plan, src, mut rec, mut edge) = fresh();
+    go(&d, &plan, &mut rec, src.clone(), &mut edge).unwrap();
+    let n = edge.saves;
+    for (cut, sent) in [(n - 1, false), (n, true)] {
+        let (d, plan, src, mut rec, mut edge) = fresh();
+        edge.cut_at_save = Some(cut);
+        assert!(go(&d, &plan, &mut rec, src.clone(), &mut edge).is_err());
+        edge.w.sync();
+        // before: the device still waits in the RAM environment; after: it restarted
+        assert_eq!(edge.w.at == At::Glassine, sent, "cut at save {cut}");
+        let mut rec = Record::parse(edge.saved.as_ref().unwrap()).unwrap();
+        assert_eq!(rec.final_restart.is_some(), sent, "the record of a cut at save {cut}");
+        assert!(rec.final_restart.as_ref().is_none_or(|f| !f.sent));
+        edge.cut_at_save = None;
+        let r = go(&d, &plan, &mut rec, src, &mut edge);
+        assert!(matches!(r, Ok(Outcome::WaitingForAcceptance { .. })), "cut at save {cut}: {r:?}");
+        edge.w.sync();
+        assert_eq!(edge.w.at, At::Glassine, "cut at save {cut}: restarted once");
+        assert!(rec.final_restart.as_ref().unwrap().sent);
+        installed(&edge.w);
+    }
+}
+
+#[test]
+fn a_cut_inside_a_slot_flag_write_resumes_from_the_whole_copy() {
+    // the run's last WRITEs are the slot steps' table copies (backup, then primary)
+    let (d, plan, src, mut rec, mut edge) = fresh();
+    go(&d, &plan, &mut rec, src.clone(), &mut edge).unwrap();
+    let total = edge.w.ram.borrow().writes;
+    let slot_steps: Vec<_> = d.steps.iter().filter(|s| s.kind == "set-boot-slot").map(|s| s.id.clone()).collect();
+    assert!(!slot_steps.is_empty());
+    let mut rebuilt = 0;
+    for back in 1..=2 * slot_steps.len() {
+        let (d, plan, src, mut rec, mut edge) = fresh();
+        let n = total - back;
+        edge.w.ram.borrow_mut().faults = WriteFaults {
+            cut_write: Some(n),
+            ..Default::default()
+        };
+        let s = go(&d, &plan, &mut rec, src.clone(), &mut edge).unwrap_err();
+        assert!(slot_steps.contains(&s.step.clone().unwrap()), "WRITE {n}: {s:?}");
+        assert!(s.may_have_changed);
+        edge.w.ram.borrow_mut().faults = WriteFaults::default();
+        let mut rec = Record::parse(edge.saved.as_ref().unwrap()).unwrap();
+        let r = go(&d, &plan, &mut rec, src, &mut edge);
+        assert!(matches!(r, Ok(Outcome::WaitingForAcceptance { .. })), "WRITE {n}: {r:?}\n{:#?}", edge.notes);
+        edge.w.sync();
+        installed(&edge.w);
+        rebuilt += rec
+            .journal
+            .iter()
+            .filter_map(|e| e.outcome.as_ref())
+            .filter(|o| o.evidence.get("found").is_some_and(|f| f.contains("rebuilt from the backup copy")))
+            .count();
+    }
+    // a half-written primary whose unwritten half holds no change reads whole
+    assert!(rebuilt >= 1, "a torn primary was rebuilt from the backup copy");
+}
+
+#[test]
 fn a_cut_between_the_table_copies_leaves_a_whole_copy_and_resumes() {
     let (d, plan, src, mut rec, mut edge) = fresh();
     // the RAM environment's writes: 0 = the backup copy, 1 = the primary
