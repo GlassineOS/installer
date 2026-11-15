@@ -22,10 +22,7 @@ fn unhex(s: &str) -> Vec<u8> {
 const MIB: u64 = 1 << 20;
 
 fn env() -> RamEnv {
-    RamEnv::new(vec![
-        ("mmcblk0".into(), Sparse::new(64 * MIB)),
-        ("mmcblk0boot0".into(), Sparse::new(4 * MIB)),
-    ])
+    RamEnv::new(vec![("mmcblk0".into(), Sparse::new(64 * MIB)), ("mmcblk0boot0".into(), Sparse::new(4 * MIB))])
 }
 
 fn range(offset: u64, length: u64) -> Range {
@@ -36,9 +33,7 @@ fn range(offset: u64, length: u64) -> Range {
 fn the_write_request_and_answer_are_the_pinned_bytes() {
     let req = encode_request(OP_WRITE, 0x0102_0304, 0, 0x4400, 512);
     assert_eq!(req.to_vec(), unhex("4752525102000600040302010000000000440000000000000002000000000000"));
-    let rsp = unhex(
-        "4752525302000600040302010000000020000000000000000044000000000000000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
-    );
+    let rsp = unhex("4752525302000600040302010000000020000000000000000044000000000000000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f");
     let h = parse_header(&rsp).unwrap();
     assert_eq!((h.op, h.tag, h.status, h.length, h.offset), (OP_WRITE, 0x0102_0304, 0, 32, 0x4400));
     assert_eq!(h.sha256.to_vec(), (0u8..32).collect::<Vec<_>>());

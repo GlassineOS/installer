@@ -61,14 +61,25 @@ pub const STATUS_ALREADY_ARMED: u16 = 8;
 pub enum RamError {
     Transport(FbError),
     /// The device refused or failed the request.
-    Status { op: u16, status: u16, why: String },
+    Status {
+        op: u16,
+        status: u16,
+        why: String,
+    },
     /// A response that isn't the answer to the request just sent.
     OutOfStep(String),
     Malformed(String),
     /// Read bytes that don't match the sha256 the device sent with them.
-    Corrupt { disk: u32, offset: u64 },
+    Corrupt {
+        disk: u32,
+        offset: u64,
+    },
     /// The range read back after a WRITE isn't what was sent.
-    ReadBackDiffers { disk: u32, offset: u64, length: u64 },
+    ReadBackDiffers {
+        disk: u32,
+        offset: u64,
+        length: u64,
+    },
     /// Not sent: a request this client can't make (unaligned, too long, no list).
     Refused(String),
 }
