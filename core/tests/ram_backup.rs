@@ -245,7 +245,32 @@ impl BackupEdge for Edge {
 }
 
 fn descriptions() -> Vec<Description> {
-    vec![valid(&noteair()), valid(&pc())]
+    vec![valid(&booted_ram()), valid(&pc())]
+}
+
+/// The Note Air as a device whose boot loaders start the RAM environment sent
+/// over USB (fastboot boot), which the route drives: the stock boot loader
+/// restarts into it, the GlassineOS one only through its check-slot-flags
+/// departure. The real Note Air starts it from its recovery partition instead.
+fn booted_ram() -> String {
+    let t = mutate(
+        &noteair(),
+        "restarts_into = [\"android\", \"fastboot\"]\n",
+        "restarts_into = [\"android\", \"fastboot\", \"ram\"]\n",
+    );
+    let t = mutate(
+        &t,
+        "restarts_into = [\"glassine\", \"android\", \"emergency\", \"ram\"]",
+        "restarts_into = [\"glassine\", \"android\", \"emergency\"]",
+    );
+    let t = mutate(
+        &t,
+        "transitions]]\nid = \"fastboot-to-ram\"\nfrom = \"fastboot\"",
+        "transitions]]\nid = \"fastboot-stock-to-ram\"\nfrom = \"fastboot-stock\"",
+    );
+    let start = t.find("[[modes.departures]]\nkind = \"started-from-partition\"").unwrap();
+    let end = start + t[start..].find("\n\n").unwrap() + 2;
+    format!("{}{}", &t[..start], &t[end..])
 }
 
 fn fastboot_usb() -> UsbIds {
@@ -497,7 +522,7 @@ fn a_corrupt_transfer_fails_the_backup() {
 #[test]
 fn a_device_without_a_ram_mode_is_refused() {
     let ds = [valid(&mutate(
-        &noteair(),
+        &booted_ram(),
         "usb = { vendor_id = \"1d6b\", product_id = \"0104\", interface = \"ff-47-52\" }\n",
         "",
     ))];
@@ -518,7 +543,7 @@ fn a_device_without_a_ram_mode_is_refused() {
 /// changed to `kind`.
 fn with_boot_image_departure(kind: &str) -> Vec<Description> {
     vec![
-        valid(&mutate(&noteair(), "kind = \"check-slot-flags\"", &format!("kind = \"{kind}\""))),
+        valid(&mutate(&booted_ram(), "kind = \"check-slot-flags\"", &format!("kind = \"{kind}\""))),
         valid(&pc()),
     ]
 }
@@ -552,7 +577,7 @@ fn check_slot_flags_is_what_lets_the_glassine_boot_loader_reach_the_ram_environm
     assert_eq!(done.prepared.mode, "fastboot");
     assert!(done.prepared.slot_flags.is_none());
     // without it, the mode doesn't restart into the RAM environment at all
-    let text = noteair();
+    let text = booted_ram();
     let start = text.find("[[modes.departures]]\nkind = \"check-slot-flags\"").unwrap();
     let end = start + text[start..].find("\n\n").unwrap() + 2;
     let ds = vec![valid(&format!("{}{}", &text[..start], &text[end..])), valid(&pc())];

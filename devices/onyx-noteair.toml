@@ -93,14 +93,22 @@ id = "fastboot-stock"
 kind = "fastboot"
 usb = { vendor_id = "18d1", product_id = "d00d", interface = "ff-42-03" }
 can = ["identify", "write"]
-restarts_into = ["android", "fastboot", "ram"]
-untried = "it answered getvar all in development (2026-03-17); flash and boot hang there with plain framing, and the equal-length framing that fixes them on the GlassineOS boot loader is not tried on it"
+restarts_into = ["android", "fastboot"]
+untried = "in development (2026-11-15) it read and wrote partitions with the equal-length framing, a flash read back as written; not a recorded installer run, and it never took a boot loader there"
 
 [[modes.departures]]
 kind = "equal-length-transfers"
 params = { length = 65535, warm-up = "short-command-then-dummy" }
 told_by = { key = "fastboot.var.product", equals = "sdm660" }
-untried = "flash and boot hang with plain framing as on the GlassineOS boot loader; assumed to work the same way, not tried on the stock one"
+untried = "flash and boot hang with plain framing; in development (2026-11-15) the equal-length framing let it read and write partitions; not a recorded installer run"
+
+# Both boot loaders' partition-table write (flash:partition) erases the whole
+# eMMC before it writes the new table: never sent. The installer writes the
+# table through the RAM environment instead.
+[[modes.departures]]
+kind = "never-use"
+params = { operation = "flash-partition-table", reason = "the boot loader erases the whole storage before it writes the new partition table: every partition would be lost, those GlassineOS never writes too" }
+untried = "from the boot loaders' source (WriteGpt erases the whole storage before the table is written); never sent"
 
 # The GlassineOS boot loader's fastboot.
 [[modes]]
@@ -108,7 +116,7 @@ id = "fastboot"
 kind = "fastboot"
 usb = { vendor_id = "18d1", product_id = "d00d", interface = "ff-42-03" }
 can = ["identify", "write"]
-restarts_into = ["glassine", "android", "emergency"]
+restarts_into = ["glassine", "android", "emergency", "ram"]
 verified = { record = "GlassineOS/installer#2", state = "installed", boot_loader = "GlassineOS boot loader, abl tag glassine1" }
 
 [[modes.departures]]
@@ -130,16 +138,34 @@ kind = "check-slot-flags"
 params = { operation = "boot-image", reason = "on the A/B layout, booting an image writes the partition table (GPT) only when the active slot isn't marked successful or is marked unbootable; it also marks the active slot's partitions active again, which writes only where those bits differ from the disk, and they can't be read beforehand" }
 untried = "from the boot loader's source (CmdBoot, FindBootableSlot, UpdatePartitionAttributes); not a recorded run"
 
-# A GlassineOS environment the boot loader starts from memory. Not a way to
-# this device's backup: its boot loaders never start a kernel sent with
-# fastboot boot, so the backup reads through the emergency mode instead.
+# Its partition-table write erases the whole eMMC too: never sent.
+[[modes.departures]]
+kind = "never-use"
+params = { operation = "flash-partition-table", reason = "the boot loader erases the whole storage before it writes the new partition table: every partition would be lost, those GlassineOS never writes too" }
+untried = "from the boot loaders' source (WriteGpt erases the whole storage before the table is written); never sent"
+
+[[modes.departures]]
+kind = "oem-reboot-recovery"
+untried = "the GlassineOS boot loader has it, and it restarted into the recovery partition in development; not a recorded run"
+
+# A GlassineOS environment that runs from memory. Its boot loaders never start
+# a kernel sent with fastboot boot, so it is written to the recovery partition
+# and the GlassineOS boot loader starts it from there. It writes what the
+# installer can't send through a boot loader: the partition table, slot B and
+# the slot flags. Not a way to the backup: it can only be written after the
+# boot loader is replaced, so the backup reads through the emergency mode.
 [[modes]]
 id = "ram"
 kind = "glassine-ram"
 usb = { vendor_id = "1d6b", product_id = "0104", interface = "ff-47-52" }
-can = ["identify", "read"]
-restarts_into = ["fastboot-stock", "android"]
-untried = "not reachable on this device: fastboot boot never starts a kernel here (development); the RAM environment passes its QEMU test only"
+can = ["identify", "read", "write"]
+restarts_into = ["glassine", "android", "fastboot"]
+untried = "never started on this device; reading passes its QEMU test only, writing isn't built"
+
+[[modes.departures]]
+kind = "started-from-partition"
+params = { partition = "recovery" }
+untried = "the GlassineOS boot loader starts the recovery partition on an A/B table and on the stock one in development; the RAM environment was never started from there"
 
 [[modes]]
 id = "android"
@@ -227,25 +253,32 @@ by = "installer"
 untried = "a fastboot reboot of the stock boot loader; not a recorded run"
 
 [[transitions]]
-id = "fastboot-stock-to-ram"
-from = "fastboot-stock"
+id = "fastboot-to-ram"
+from = "fastboot"
 to = "ram"
 by = "installer"
-untried = "boots the ram-environment artifact from the stock boot loader; fastboot boot never starts a kernel on this device (development), so this way isn't used"
+untried = "the GlassineOS boot loader's oem reboot-recovery, which starts the recovery partition once; the RAM environment was never started this way"
 
 [[transitions]]
-id = "ram-to-fastboot-stock"
+id = "ram-to-glassine"
 from = "ram"
-to = "fastboot-stock"
+to = "glassine"
 by = "installer"
-untried = "not reachable on this device: fastboot boot never starts a kernel here"
+untried = "a normal restart from the RAM environment once slot B is active; not built"
+
+[[transitions]]
+id = "ram-to-fastboot"
+from = "ram"
+to = "fastboot"
+by = "installer"
+untried = "a restart into the boot loader from the RAM environment; not built"
 
 [[transitions]]
 id = "ram-to-android"
 from = "ram"
 to = "android"
 by = "installer"
-untried = "not reachable on this device: fastboot boot never starts a kernel here"
+untried = "a normal restart from the RAM environment while the stock table is still there; not built"
 
 [[transitions]]
 id = "fastboot-stock-to-fastboot"
@@ -513,11 +546,15 @@ status = "needs"
 with = "the GlassineOS recovery, which isn't built yet"
 untried = "not built"
 
+# On the A/B table the stock boot image can't find its vendor partition (it
+# mounts it by the name `vendor`, now vendor_a): Android stays on slot A but
+# doesn't start until slot A's boot image mounts its own slot's partition.
 [[capabilities]]
 id = "keep-stock"
-status = "have"
+status = "needs"
+with = "slot A's boot image changed to mount its own slot's vendor partition, which the installation doesn't do yet"
 when = { choice = "keep-stock", equals = "yes" }
-untried = "stock Android on slot A next to GlassineOS on slot B runs in development; not from an installation"
+untried = "stock Android on slot A next to GlassineOS on slot B runs in development only with that change to its boot image; not from an installation"
 
 [[capabilities]]
 id = "keep-stock"
@@ -576,14 +613,39 @@ escape.failure = { leaves = "special-hardware", hardware = "emergency-cable", wa
 escape.interruption = { leaves = "previous-system-starts", way_out = { transition = "fastboot-to-android" } }
 point_of_no_return = true
 safe_stop = true
-untried = "never done from the stock boot loader; a boot loader that doesn't start leaves only the emergency-mode cable"
+untried = "the stock boot loader wrote other partitions in development (2026-11-15), never abl; its unlock state allows abl to be written, a boot loader that doesn't start leaves only the emergency-mode cable"
 
+# The RAM environment goes to the recovery partition, which the GlassineOS
+# boot loader starts on the stock table and on the A/B one. Through the
+# GlassineOS boot loader's fastboot, which the replaced boot loader's done
+# condition has already restarted into.
+[[steps]]
+id = "write-ram-environment"
+job = "install"
+kind = "write-image"
+mode = "fastboot"
+after = ["replace-boot-loader"]
+params = { artifact = "ram-environment", partition = "recovery" }
+writes = ["recovery"]
+done = [{ key = "installer.step.write-ram-environment", present = true, mode = "installer" }]
+escape.failure = { leaves = "previous-system-starts", way_out = { transition = "fastboot-to-android" } }
+escape.interruption = { leaves = "previous-system-starts", way_out = { transition = "fastboot-to-android" } }
+point_of_no_return = false
+safe_stop = true
+untried = "the GlassineOS boot loader's flash read back as written in development (2026-11-12); not a recorded run, and never this artifact"
+
+# From here on the RAM environment writes. The partition table never goes
+# through a boot loader (its flash:partition erases the whole storage): the
+# RAM environment writes the backup copy first and reads it back, then the
+# primary, so one copy is always whole. After the new table the stock system
+# can't start (its vendor partition is renamed), so the escapes go through
+# the GlassineOS boot loader back into the RAM environment.
 [[steps]]
 id = "partition-table"
 job = "install"
 kind = "write-partition-table"
-mode = "fastboot"
-after = ["replace-boot-loader"]
+mode = "ram"
+after = ["write-ram-environment"]
 params.artifact = "partition-layout"
 params.renames = { boot = "boot_a", system = "system_a", vendor = "vendor_a" }
 # slot B's system partition is as big as slot A's: a release whose base needs
@@ -595,18 +657,18 @@ writes = ["role:partition-table"]
 creates = ["boot_b", "system_b", "vendor_b"]
 resizes = ["userdata"]
 boot_settings = ["slot-flags"]
-done = [{ key = "storage.partition.boot_b", present = true, mode = "fastboot" }]
-escape.failure = { leaves = "special-hardware", hardware = "emergency-cable", way_out = { transition = "cable-to-emergency" } }
+done = [{ key = "storage.partition.boot_b", present = true, mode = "ram" }]
+escape.failure = { leaves = "installer-can-finish", way_out = { step = "partition-table" } }
 escape.interruption = { leaves = "installer-can-finish", way_out = { step = "write-kernel" } }
 point_of_no_return = true
 safe_stop = true
-untried = "the A/B layout was made from a running system in development, never over fastboot"
+untried = "the A/B layout was made from a running system in development, never by the RAM environment; the boot loader starting from the backup copy when the primary is damaged ran in development (2026-06-01), not a recorded run"
 
 [[steps]]
 id = "write-kernel"
 job = "install"
 kind = "write-image"
-mode = "fastboot"
+mode = "ram"
 after = ["partition-table"]
 params = { artifact = "kernel", partition = "boot_b" }
 writes = ["boot_b"]
@@ -615,65 +677,91 @@ escape.failure = { leaves = "installer-can-finish", way_out = { step = "write-ke
 escape.interruption = { leaves = "installer-can-finish", way_out = { step = "write-base" } }
 point_of_no_return = false
 safe_stop = true
-untried = "a raw image write over fastboot is proven to the cache partition only"
+untried = "the RAM environment's writes aren't built"
 
 [[steps]]
 id = "write-base"
 job = "install"
 kind = "write-base"
-mode = "fastboot"
+mode = "ram"
 after = ["partition-table"]
 params = { artifact = "base", partition = "system_b" }
 writes = ["system_b"]
 done = [{ key = "installer.step.write-base", present = true, mode = "installer" }]
 escape.failure = { leaves = "installer-can-finish", way_out = { step = "write-base" } }
+escape.interruption = { leaves = "installer-can-finish", way_out = { step = "write-vendor" } }
+point_of_no_return = false
+safe_stop = true
+untried = "the RAM environment's writes aren't built"
+
+# Slot B's vendor partition is a copy of slot A's: the GlassineOS kernel reads
+# the GPU's firmware from its own slot. The step reads `vendor`, which the
+# table step has renamed vendor_a by the time it runs.
+[[steps]]
+id = "write-vendor"
+job = "install"
+kind = "copy-partition"
+mode = "ram"
+after = ["partition-table"]
+params = { from = "vendor_a", partition = "vendor_b" }
+reads = ["vendor"]
+writes = ["vendor_b"]
+done = [{ key = "installer.step.write-vendor", present = true, mode = "installer" }]
+escape.failure = { leaves = "installer-can-finish", way_out = { step = "write-vendor" } }
 escape.interruption = { leaves = "installer-can-finish", way_out = { step = "write-recovery" } }
 point_of_no_return = false
 safe_stop = true
-untried = "not tried over fastboot"
+untried = "the RAM environment's writes aren't built"
 
+# The GlassineOS recovery takes the recovery partition from the RAM
+# environment, which runs from memory by then. If this write fails, the
+# partition holds neither: the GlassineOS boot loader writes the RAM
+# environment back first.
 [[steps]]
 id = "write-recovery"
 job = "install"
 kind = "write-image"
-mode = "fastboot"
-after = ["partition-table"]
+mode = "ram"
+after = ["write-kernel", "write-base", "write-vendor"]
 params = { artifact = "recovery", partition = "recovery" }
 writes = ["recovery"]
 done = [{ key = "installer.step.write-recovery", present = true, mode = "installer" }]
-escape.failure = { leaves = "installer-can-finish", way_out = { step = "write-recovery" } }
+escape.failure = { leaves = "installer-can-finish", way_out = { step = "write-ram-environment" } }
 escape.interruption = { leaves = "installer-can-finish", way_out = { step = "set-slot" } }
 point_of_no_return = false
 safe_stop = true
 untried = "the GlassineOS recovery isn't built yet"
 
+# The slot flags live in the partition table's entries: the RAM environment
+# writes them, backup copy first. Not after write-recovery: a developer run
+# without the GlassineOS recovery leaves that step out and still sets the slot.
 [[steps]]
 id = "set-slot"
 job = "install"
 kind = "set-boot-slot"
-mode = "fastboot"
-after = ["write-kernel", "write-base", "write-recovery"]
+mode = "ram"
+after = ["write-kernel", "write-base", "write-vendor"]
 params = { slot = "b", pin = true }
 boot_settings = ["slot-flags"]
-done = [{ key = "fastboot.var.current-slot", equals = "b", mode = "fastboot" }]
+done = [{ key = "installer.step.set-slot", present = true, mode = "installer" }]
 escape.failure = { leaves = "installer-can-finish", way_out = { step = "set-slot" } }
-escape.interruption = { leaves = "glassine-starts", way_out = { transition = "fastboot-to-glassine" } }
+escape.interruption = { leaves = "glassine-starts", way_out = { transition = "ram-to-glassine" } }
 point_of_no_return = false
 safe_stop = true
-untried = "slots are pinned from a running system in development, never over fastboot"
+untried = "slots are pinned from a running system in development, never by the RAM environment"
 
 [[steps]]
 id = "retire-stock"
 job = "install"
 kind = "set-boot-slot"
-mode = "fastboot"
+mode = "ram"
 after = ["set-slot"]
 when = [{ choice = "keep-stock", equals = "no" }]
 params = { slot = "a", unbootable = true }
 boot_settings = ["slot-flags"]
 done = [{ key = "installer.step.retire-stock", present = true, mode = "installer" }]
 escape.failure = { leaves = "installer-can-finish", way_out = { step = "retire-stock" } }
-escape.interruption = { leaves = "glassine-starts", way_out = { transition = "fastboot-to-glassine" } }
+escape.interruption = { leaves = "glassine-starts", way_out = { transition = "ram-to-glassine" } }
 point_of_no_return = false
 safe_stop = true
 untried = "not tried"
@@ -686,7 +774,7 @@ fastboot-stock = "No way by hand is known for the stock boot loader. Leave the d
 fastboot = "Close the cover, then press the power button and hold it for about 3 seconds while the cover stays closed."
 android = "Start the device normally. To let the installer in, turn on USB debugging in the developer settings."
 emergency = "The installer restarts the device into it from Android, with USB debugging on. Without a working system only the emergency-mode cable helps: let the battery run empty, then connect the cable and start the device."
-ram = "Not used on this device: its boot loader can't start a system sent over USB."
+ram = "The installer starts it from the GlassineOS boot loader. By hand: close the cover, press the power button and hold it for about 3 seconds while the cover stays closed, and the installer goes on from the boot loader."
 glassine = "Start the device normally."
 
 [texts.transitions]
@@ -699,15 +787,17 @@ cable-to-emergency = "Let the battery run completely empty. Connect the emergenc
 keep-stock = "Keep the stock Android system next to GlassineOS."
 
 [texts.options]
-"keep-stock.yes" = "Keep Android. It stays on the device and can still start. Its data partition is made smaller, so the data on it is deleted."
+"keep-stock.yes" = "Keep Android. It stays on the device, but it can't start yet next to GlassineOS. Its data partition is made smaller, so the data on it is deleted."
 "keep-stock.no" = "Don't keep Android. It is never started again, unless you go back to stock."
 
 [texts.steps]
 back-up = "Back up the device's whole storage, every partition and the partition table, to this computer, through its emergency mode and the programmer you supplied, and check the backup by reading it back."
 replace-boot-loader = "Replace the boot loader with GlassineOS's. From here there is no way back without the backup, and if this step fails only the emergency-mode cable helps."
+write-ram-environment = "Put the installer's helper on the device, in place of the stock recovery. The device restarts into it to write the rest."
 partition-table = "Give the device a second slot for GlassineOS. The data partition is made smaller: everything on it is deleted."
 write-kernel = "Write the GlassineOS kernel to slot B."
 write-base = "Write GlassineOS to slot B."
+write-vendor = "Copy the device's own vendor files to slot B."
 write-recovery = "Write the GlassineOS recovery."
 set-slot = "Start GlassineOS by default."
 retire-stock = "Stop Android from starting."
