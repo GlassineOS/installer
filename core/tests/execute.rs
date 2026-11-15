@@ -349,7 +349,8 @@ fn the_plan(d: &Description, developer: bool) -> String {
         developer,
         ..Default::default()
     };
-    serde_json::to_string_pretty(&plan(&ds, &f, &rec, &input)).unwrap()
+    let p = plan(&ds, &f, &rec, &input);
+    serde_json::to_string_pretty(&p).unwrap()
 }
 
 fn new_record(d: &Description, plan: &str, src: MemorySource) -> Record {
@@ -427,8 +428,8 @@ fn installed(w: &World) {
     assert_eq!(n, m);
     assert_eq!(disk.read(va, n), disk.read(vb, n));
     assert_eq!(disk.read(va, n), image(n as usize, 40));
-    let (o, _) = at("recovery");
-    assert_eq!(disk.read(o, MIB as u64), files["recovery"].0);
+    // the GlassineOS recovery isn't built: the developer's plan leaves its
+    // step out and the recovery partition keeps the RAM environment
     // nothing but the table and the steps' partitions was written
     for (_, off, len) in &ram.written {
         let inside = ["boot_b", "system_b", "vendor_b", "recovery"].iter().any(|n| {
@@ -741,12 +742,21 @@ fn another_plan_or_description_is_refused() {
 #[test]
 fn untried_write_steps_need_a_developer() {
     let d = description();
-    let plan = the_plan(&d, false);
     let src = source(&release_files());
-    let mut rec = new_record(&d, &plan, src.clone());
-    let mut edge = Edge::new(World::new());
     let mut j = job(&d);
     j.developer = false;
+    // a person's plan for this device is refused (its write steps are untried): never run
+    let plan = the_plan(&d, false);
+    let mut rec = new_record(&d, &plan, src.clone());
+    let mut edge = Edge::new(World::new());
+    let mut a = Artifacts::open(src.clone()).unwrap();
+    let s = block(run(&j, &plan, &mut rec, &mut a, &mut edge)).unwrap_err();
+    assert!(s.why.contains("nothing is run"), "{s}");
+    assert_eq!(edge.w.reaches, 0);
+    // a developer's plan, run without asking for untried steps: stopped at the first
+    let plan = the_plan(&d, true);
+    let mut rec = new_record(&d, &plan, src.clone());
+    let mut edge = Edge::new(World::new());
     let mut a = Artifacts::open(src).unwrap();
     let s = block(run(&j, &plan, &mut rec, &mut a, &mut edge)).unwrap_err();
     assert!(s.why.contains("developer"), "{s}");
