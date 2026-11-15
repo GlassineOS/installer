@@ -37,3 +37,4 @@ pub mod supplied;
 pub mod table;
 pub mod validate;
 pub mod vocab;
+pub mod write_rules;
