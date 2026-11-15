@@ -15,7 +15,7 @@ use super::{Evidence, Gpt, OpError, RangeHashes, check_ranges, hex, ram_err};
 use crate::artifacts::{ArtifactSource, Artifacts};
 use crate::fastboot::{Session, Transport, WriteRules};
 use crate::glassine_write::{WRITE_MAX, Writer};
-use crate::table::ReadAt;
+use crate::table::AsyncReadAt;
 
 pub async fn flash<T: Transport, S: ArtifactSource>(
     s: &mut Session<T>,
@@ -24,7 +24,7 @@ pub async fn flash<T: Transport, S: ArtifactSource>(
     role: &str,
     artifacts: &mut Artifacts<S>,
 ) -> Result<Evidence, OpError> {
-    let mut r = artifacts.reader(role).map_err(|e| OpError::before(e.to_string()))?;
+    let mut r = artifacts.reader(role).await.map_err(|e| OpError::before(e.to_string()))?;
     let a = r.artifact.clone();
     match s.flash_raw(rules, part, &mut r, a.size).await {
         Ok(()) => {}
@@ -59,7 +59,7 @@ pub async fn write_ram<T: Transport, S: ArtifactSource>(
     progress: &mut dyn FnMut(u64, u64),
 ) -> Result<Evidence, OpError> {
     let (start, size) = gpt.extent(part).ok_or_else(|| OpError::before(format!("the partition table has no {part}")))?;
-    let mut r = artifacts.reader(role).map_err(|e| OpError::before(e.to_string()))?;
+    let mut r = artifacts.reader(role).await.map_err(|e| OpError::before(e.to_string()))?;
     let a = r.artifact.clone();
     let padded = a.size.div_ceil(gpt.sector) * gpt.sector;
     if a.size == 0 || padded > size {
@@ -73,7 +73,7 @@ pub async fn write_ram<T: Transport, S: ArtifactSource>(
         let n = chunk.min(padded - at) as usize;
         let real = (a.size.saturating_sub(at)).min(n as u64) as usize;
         buf[..n].fill(0);
-        r.read_at(at, &mut buf[..real]).map_err(|e| OpError {
+        r.read_at(at, &mut buf[..real]).await.map_err(|e| OpError {
             why: e,
             may_have_changed: at > 0,
             goes_on: false,

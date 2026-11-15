@@ -14,6 +14,20 @@ pub trait ReadAt {
     fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> Result<(), String>;
 }
 
+/// Bytes at an offset of something that may have to be waited for: an
+/// artifact read through a browser's file API, where reads are promises.
+/// Every [`ReadAt`] is one whose reads are ready at once.
+pub trait AsyncReadAt {
+    /// Fills `buf` from `offset`, or fails: a short read is an error.
+    fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> impl Future<Output = Result<(), String>>;
+}
+
+impl<T: ReadAt + ?Sized> AsyncReadAt for T {
+    async fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> Result<(), String> {
+        ReadAt::read_at(self, offset, buf)
+    }
+}
+
 /// A disk held in memory (tests, and images small enough to read whole).
 impl ReadAt for &[u8] {
     fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> Result<(), String> {
