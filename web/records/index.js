@@ -84,6 +84,8 @@ export const GOLDEN_PLANS = {
   'pc-small-disk-no-release': { machine: 'pc-small-disk', input: { developer: true } },
   'pc-release-small-disk': { machine: 'pc-small-disk', input: { developer: true, release: 'base-8gib' } },
   'noteair-release-too-big': { machine: 'noteair-stock-fastboot', input: { hardware: { 'emergency-cable': true }, developer: true, release: 'base-8gib' } },
+  'noteair-developer': { machine: 'noteair-stock-fastboot', input: { developer: true } },
+  'noteair-developer-cable-yes': { machine: 'noteair-stock-fastboot', input: { hardware: { 'emergency-cable': true }, developer: true } },
 };
 
 // The check reports there are records of (one per facts snapshot of the core's tests).

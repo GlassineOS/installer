@@ -9,6 +9,7 @@
   "reasons": [
     "system_b is too small for this release: its base needs at least 8.0 GiB there and it is 3.0 GiB; it lacks 5.0 GiB (5368709120 bytes)"
   ],
+  "developer_may": false,
   "questions": [
     {
       "hardware": "emergency-cable",
@@ -38,7 +39,7 @@
   "systems": [
     {
       "system": "stock system",
-      "outcome": "not kept"
+      "outcome": "kept, not startable"
     }
   ],
   "partitions": [
@@ -63,8 +64,7 @@
       "size": 67108864,
       "loses_files": false,
       "steps": [
-        "write-ram-environment",
-        "write-recovery"
+        "write-ram-environment"
       ]
     },
     {
@@ -224,8 +224,7 @@
       "boot-loader",
       "kernel",
       "partition-layout",
-      "ram-environment",
-      "recovery"
+      "ram-environment"
     ],
     "total_at_least": 9200000000,
     "exact": false,
@@ -422,26 +421,6 @@
       "on_interruption": {
         "leaves": "installer-can-finish",
         "hardware": null,
-        "way_out": "step write-recovery"
-      }
-    },
-    {
-      "id": "write-recovery",
-      "kind": "write-image",
-      "mode": "ram",
-      "done": "false",
-      "writes": true,
-      "tried": false,
-      "point_of_no_return": false,
-      "safe_stop": true,
-      "on_failure": {
-        "leaves": "installer-can-finish",
-        "hardware": null,
-        "way_out": "step write-ram-environment"
-      },
-      "on_interruption": {
-        "leaves": "installer-can-finish",
-        "hardware": null,
         "way_out": "step set-slot"
       }
     },
@@ -473,7 +452,21 @@
     "write-kernel",
     "write-base",
     "write-vendor",
-    "write-recovery",
     "set-slot"
+  ],
+  "left_out": [
+    {
+      "step": "write-recovery",
+      "artifact": "recovery",
+      "capability": "recovery",
+      "missing": "the GlassineOS recovery, which isn't built yet",
+      "holds_instead": [
+        {
+          "partition": "recovery",
+          "step": "write-ram-environment",
+          "artifact": "ram-environment"
+        }
+      ]
+    }
   ]
 }

@@ -98,7 +98,9 @@
     "signals": []
   },
   "supported": true,
-  "reasons": [],
+  "reasons": [
+    "the installation needs the GlassineOS recovery, which isn't built yet: it is refused until that is there (step write-recovery writes it); a developer may install without it"
+  ],
   "capabilities": [
     {
       "id": "start-kernel",
@@ -126,8 +128,10 @@
     }
   ],
   "plan": {
-    "status": "needs-answers",
-    "keeps": [],
+    "status": "refused",
+    "keeps": [
+      "stock system"
+    ],
     "backs_up": [
       "disk 0 (whole disk)"
     ],

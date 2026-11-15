@@ -12,7 +12,7 @@ Choices:
   backup-to = computer (default)
 
 Systems:
-  stock system: not kept
+  stock system: kept, not startable
 
 Partitions:
   abl (replace, 1.0 MiB): writes
@@ -45,7 +45,7 @@ Kept from the device:
 
 Space on the computer:
   backup 8.6 GiB
-  artifacts 0 B plus base, boot-loader, kernel, partition-layout, ram-environment, recovery of unknown size
+  artifacts 0 B plus base, boot-loader, kernel, partition-layout, ram-environment of unknown size
   at least 8.6 GiB
 
 Least sizes from the release:
@@ -59,6 +59,10 @@ Afterwards the device:
   needs keep-stock (slot A's boot image changed to mount its own slot's vendor partition, which the installation doesn't do yet) [untried]
   lack secondary-recovery [untried]
   needs choose-at-start (a way to pick a slot at start-up, which isn't decided) [untried]
+
+Left out (a developer's run; the release doesn't have what they write):
+  write-recovery: writes the recovery, which the release doesn't have (the GlassineOS recovery, which isn't built yet). The device ends without the GlassineOS recovery.
+    recovery holds the ram-environment, which step write-ram-environment writes instead.
 
 Steps:
   1. back-up (back-up, in emergency) [safe stop]
@@ -88,12 +92,8 @@ Steps:
   7. write-vendor (copy-partition, in ram) [untried, safe stop]
      Copy the device's own vendor files to slot B.
      if it fails: installer-can-finish via step write-vendor
-     if cut off after it: installer-can-finish via step write-recovery
-  8. write-recovery (write-image, in ram) [untried, safe stop]
-     Write the GlassineOS recovery.
-     if it fails: installer-can-finish via step write-ram-environment
      if cut off after it: installer-can-finish via step set-slot
-  9. set-slot (set-boot-slot, in ram) [untried, safe stop]
+  8. set-slot (set-boot-slot, in ram) [untried, safe stop]
      Start GlassineOS by default.
      if it fails: installer-can-finish via step set-slot
      if cut off after it: glassine-starts via transition ram-to-glassine

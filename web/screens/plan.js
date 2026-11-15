@@ -6,7 +6,7 @@
 // only the person can supply (spec 004), the way on is Supply, then Confirm.
 
 import { html, Admonition, Actions, Page, Owed, Steps, Tick, Bang, saveJson } from '../lib/parts.js';
-import { HARDWARE, hardwareName, cap, human } from '../lib/words.js';
+import { HARDWARE, hardwareName, cap, human, CAPABILITY, ARTIFACT } from '../lib/words.js';
 import { stepViews, erase, spaceRows, splitSentence, systemView, goneSystems, stepList, backupView, suppliedState } from '../lib/model.js';
 import { EraseNote } from './check.js';
 
@@ -89,7 +89,8 @@ function Status({ s }) {
     const q = p.questions.find((x) => x.answer === false);
     return html`<${Admonition} kind="warning" seal="G" label="Can’t be installed" title="The plan stops here" id="refused">
       ${q ? html`<p>Without ${article(hardwareName(q.hardware))} ${hardwareName(q.hardware)}, ${s.m.the} can’t be installed: only it can undo a failed ${stepList(numbers(p, q.steps))}, and the installation can’t skip ${q.steps.length === 1 ? 'that step' : 'those steps'}. Nothing has changed.</p>` : null}
-      ${q ? null : html`<p>The plan can’t be carried out on ${s.m.the}. Nothing has changed.</p>`}
+      ${q ? null : p.developer_may ? html`<p>${cap(s.m.the)} can’t be installed yet: part of the installation isn’t built. Nothing has changed.</p>`
+    : html`<p>The plan can’t be carried out on ${s.m.the}. Nothing has changed.</p>`}
       <details class="il-details"><summary>The plan’s reason</summary><ul class="ins-stack ins-small">${p.reasons.map((r) => html`<li>${cap(r)}.</li>`)}</ul></details>
       <p><strong>Way out:</strong> stop here, or change the answer above and make the plan again.</p>
     </${Admonition}>`;
@@ -105,6 +106,24 @@ function Status({ s }) {
     return html`<${Admonition} label="A question first" id="needs-answers"><p>Answer the question above: the plan depends on it.</p></${Admonition}>`;
   }
   return null;
+}
+
+// A developer's plan leaves out the steps that write what the release doesn't have yet
+// (spec 001 FR-016a): which, what is missing, and what the device ends with instead.
+function LeftOut({ s }) {
+  const p = s.plan;
+  if (!p.left_out || !p.left_out.length) return null;
+  const T = s.desc ? s.desc.texts.steps : {};
+  return html`<${Admonition} kind="warning" seal="G" label="Left out" title="Left out of this developer run" id="left-out">
+    ${p.left_out.map((l) => {
+      const c = CAPABILITY[l.capability];
+      const what = T[l.step] || (c ? c.name : html`<${Owed}>${l.capability}: no words for it</${Owed}>`);
+      return html`<div class="ins-stack">
+        <p><strong>${what}</strong> ${l.missing ? `Left out: it needs ${l.missing}.` : 'Left out: the release doesn’t have it.'} ${cap(s.m.the)} ends without ${c ? c.name.toLowerCase() : 'it'}.</p>
+        ${l.holds_instead.map((h) => html`<p class="ins-small">Its ${h.partition} partition keeps ${h.artifact && ARTIFACT[h.artifact] ? ARTIFACT[h.artifact] : 'what it holds now'} instead.</p>`)}
+      </div>`;
+    })}
+  </${Admonition}>`;
 }
 
 const article = (w) => (/^[aeiou]/.test(w) ? 'an' : 'a');
@@ -203,6 +222,7 @@ export function Plan({ s }) {
       </ul>
     </section>
     <${Status} s=${s} />
+    <${LeftOut} s=${s} />
     ${refused ? null : html`<section class="ins-stack" id="what-happens">
       <h2 class="ins-h2">What happens</h2>
       <${Steps} views=${stepViews(s)} mode="summary" />

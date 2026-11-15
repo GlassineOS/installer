@@ -5,10 +5,11 @@
   "mode": "fastboot",
   "state": "stock",
   "job": "install",
-  "status": "developer-only",
+  "status": "refused",
   "reasons": [
-    "steps replace-boot-loader, write-ram-environment, partition-table, write-kernel, write-base, write-vendor, write-recovery, set-slot write and haven't been tried on real hardware: only a developer who asks for them may run them"
+    "the installation needs the GlassineOS recovery, which isn't built yet: it is refused until that is there (step write-recovery writes it); a developer may install without it"
   ],
+  "developer_may": true,
   "questions": [
     {
       "hardware": "emergency-cable",
@@ -38,7 +39,7 @@
   "systems": [
     {
       "system": "stock system",
-      "outcome": "not kept"
+      "outcome": "kept, not startable"
     }
   ],
   "partitions": [
@@ -475,5 +476,6 @@
     "write-vendor",
     "write-recovery",
     "set-slot"
-  ]
+  ],
+  "left_out": []
 }

@@ -9,6 +9,7 @@
   "reasons": [
     "disk 0 is too small: GlassineOS needs 9.0 GiB there and it has 6.0 GiB free; it lacks 3.0 GiB (3221225472 bytes)"
   ],
+  "developer_may": false,
   "questions": [],
   "choices": [
     {
@@ -307,5 +308,6 @@
     "write-base",
     "write-boot",
     "add-boot-entry"
-  ]
+  ],
+  "left_out": []
 }
