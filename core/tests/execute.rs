@@ -257,6 +257,8 @@ struct Edge {
     asked: Vec<String>,
     /// What the executor kept on the computer (a boot image's original).
     kept: BTreeMap<String, Vec<u8>>,
+    /// The manifest hash of the backup the edge reads (None: no backup given).
+    backup_manifest: Option<String>,
 }
 
 impl Edge {
@@ -271,6 +273,7 @@ impl Edge {
             notes: vec![],
             asked: vec![],
             kept: BTreeMap::new(),
+            backup_manifest: Some(sha256_hex(b"manifest")),
         }
     }
 }
@@ -321,8 +324,12 @@ impl InstallEdge for Edge {
         self.w.at = At::Android;
         Ok(Backup {
             location: "the test's backup".into(),
-            manifest_sha256: Some(sha256_hex(b"manifest")),
+            manifest_sha256: self.backup_manifest.clone(),
         })
+    }
+
+    async fn backup_manifest(&mut self) -> Result<Option<String>, String> {
+        Ok(self.backup_manifest.clone())
     }
 
     async fn backup_bytes(&mut self, offset: u64, len: usize) -> Result<Vec<u8>, String> {
@@ -910,6 +917,65 @@ fn a_changed_artifact_stops_before_the_device_is_touched() {
     let s = go(&d, &plan, &mut rec, src, &mut edge).unwrap_err();
     assert!(s.why.contains("SHA-256"), "{s}");
     assert_eq!(edge.w.reaches, 0);
+}
+
+/// A run stopped after write-kernel (partition-table done, RAM steps left):
+/// the resume's state before anything is tried.
+fn stopped_after_the_table() -> (Description, String, MemorySource, Record, Edge) {
+    let (d, plan, src, mut rec, mut edge) = fresh();
+    edge.cancel_after = Some("write-kernel".into());
+    go(&d, &plan, &mut rec, src.clone(), &mut edge).unwrap_err();
+    assert_eq!(rec.state("partition-table"), StepState::Done);
+    assert_eq!(rec.state("write-base"), StepState::NotStarted);
+    edge.cancel_after = None;
+    (d, plan, src, rec, edge)
+}
+
+/// A resume `edge` refused before it looked for the device or wrote.
+fn refused_untouched(s: &Stopped, rec: &Record, journal: usize, edge: &Edge, reaches: usize, writes: usize) {
+    assert!(s.step.is_none() && !s.may_have_changed, "{s:?}");
+    assert_eq!(edge.w.reaches, reaches, "the device isn't looked for");
+    assert_eq!(edge.w.ram.borrow().written.len(), writes, "nothing is written");
+    assert_eq!(rec.journal.len(), journal, "no intent is recorded");
+}
+
+#[test]
+fn a_resume_with_another_layout_is_refused_after_its_step_is_done() {
+    let (d, plan, _, mut rec, mut edge) = stopped_after_the_table();
+    let (reaches, writes, journal) = (edge.w.reaches, edge.w.ram.borrow().written.len(), rec.journal.len());
+    // another release folder: the same recipe written another way, its
+    // manifest true to its files, so only the record tells them apart
+    let mut files = release_files();
+    let recipe: serde_json::Value = serde_json::from_slice(&files["partition-layout"].0).unwrap();
+    files.get_mut("partition-layout").unwrap().0 = serde_json::to_vec(&recipe).unwrap();
+    let s = go(&d, &plan, &mut rec, source(&files), &mut edge).unwrap_err();
+    assert!(s.why.contains("partition-layout") && s.why.contains("not the confirmed artifact"), "{s}");
+    refused_untouched(&s, &rec, journal, &edge, reaches, writes);
+    // the confirmed release resumes
+    let r = go(&d, &plan, &mut rec, source(&release_files()), &mut edge);
+    assert!(matches!(r, Ok(Outcome::WaitingForAcceptance { .. })), "{r:?}");
+    installed(&edge.w);
+}
+
+#[test]
+fn a_resume_with_another_backup_is_refused() {
+    let (d, plan, src, mut rec, mut edge) = stopped_after_the_table();
+    let (reaches, writes, journal) = (edge.w.reaches, edge.w.ram.borrow().written.len(), rec.journal.len());
+    assert_eq!(rec.backup.as_ref().unwrap().manifest_sha256, Some(sha256_hex(b"manifest")));
+    edge.backup_manifest = Some(sha256_hex(b"another backup's manifest"));
+    let s = go(&d, &plan, &mut rec, src.clone(), &mut edge).unwrap_err();
+    assert!(s.why.contains("not the backup this installation rests on"), "{s}");
+    refused_untouched(&s, &rec, journal, &edge, reaches, writes);
+    // none given, with steps left that read it
+    edge.backup_manifest = None;
+    let s = go(&d, &plan, &mut rec, src.clone(), &mut edge).unwrap_err();
+    assert!(s.why.contains("none is given"), "{s}");
+    refused_untouched(&s, &rec, journal, &edge, reaches, writes);
+    // the record's backup resumes
+    edge.backup_manifest = Some(sha256_hex(b"manifest"));
+    let r = go(&d, &plan, &mut rec, src, &mut edge);
+    assert!(matches!(r, Ok(Outcome::WaitingForAcceptance { .. })), "{r:?}");
+    installed(&edge.w);
 }
 
 #[test]

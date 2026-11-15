@@ -123,6 +123,10 @@ texts the description provides.
   itself.
 - The person cancels after confirming: the installer stops at the next point the plan names
   as safe, and offers to resume or undo.
+- A resume is given another release or another backup than the ones the installation
+  record holds (a different folder, a changed file): refused before anything reaches the
+  device, also when the steps that first used them are done and only later steps read
+  them (the partition layout, the backed-up partition table).
 - A step that only special hardware can escape (an emergency-mode cable): the plan asks
   whether the person has it, and without it the plan has no such step, or the device is
   refused.
@@ -264,3 +268,12 @@ texts the description provides.
 - First-boot setup runs after the accepted boot and isn't part of the installer.
 - The GlassineOS recovery is the same on every machine (0014); on a machine that keeps
   another system, that system's own recovery stays as the secondary one it hands over to.
+- A resume relies on what the computer saved before each write: the record's intent for
+  the step and, for a step that changes a partition in place (a boot image), the
+  partition's original as read before the first write. The program on the computer forces
+  both to its disk before it writes to the device. A browser can't: a file it writes is
+  either the old or the new one, but nothing makes sure the new one is on the disk, so a
+  power cut or a crash of the computer's system during a write step can lose both. A
+  resume after that can't tell a half-written partition from an untouched one and would
+  take the half-written one as the original. This is a risk of the browser route that the
+  installer doesn't detect; the way back is the full backup (FR-009).
