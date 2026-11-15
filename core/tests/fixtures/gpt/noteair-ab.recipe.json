@@ -1,0 +1,17 @@
+{
+  "sector": 512,
+  "entries": 64,
+  "align_sectors": 1024,
+  "renames": [
+    { "from": "boot", "to": "boot_a", "attributes": "0x007f000000000000" },
+    { "from": "system", "to": "system_a" },
+    { "from": "vendor", "to": "vendor_a" }
+  ],
+  "shrink": "userdata",
+  "place": "end-of-disk",
+  "new": [
+    { "name": "boot_b", "size": { "like": "boot" }, "type": { "like": "boot" }, "attributes": "0x0000000000000000", "guid": "6030cd57-807b-5f38-85d4-bf630ae89a96" },
+    { "name": "system_b", "size": { "like": "system" }, "type": { "like": "system" }, "attributes": "0x0000000000000000", "guid": "9e89df43-1580-5cd0-8112-7e472d666ebf" },
+    { "name": "vendor_b", "size": { "like": "vendor" }, "type": { "like": "vendor" }, "attributes": "0x1000000000000000", "guid": "75ca9f79-2152-5e20-bb7f-b8b2fb2a32f6" }
+  ]
+}

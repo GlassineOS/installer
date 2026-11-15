@@ -10,6 +10,7 @@
 //! synchronous but the fastboot and Sahara sessions and inspect, which are async only so
 //! that the browser's USB can drive them; the transport is the edge's.
 
+pub mod artifacts;
 pub mod derive;
 pub mod efivar;
 pub mod emergency_read;
@@ -19,6 +20,7 @@ pub mod firehose;
 pub mod format1;
 pub mod fsprobe;
 pub mod glassine_read;
+pub mod gpt_build;
 pub mod host_setup;
 pub mod inspect;
 pub mod lock;
@@ -26,6 +28,7 @@ pub mod pcfacts;
 pub mod plan;
 pub mod ram_backup;
 pub mod recognize;
+pub mod record;
 pub mod release;
 pub mod report;
 pub mod sahara;
