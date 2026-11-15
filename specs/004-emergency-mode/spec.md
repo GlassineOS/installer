@@ -1,7 +1,7 @@
 # Feature Specification: Reading a device in its emergency mode, with the person's own programmer
 
 **Feature branch:** `emergency-mode`
-**Created:** 2026-11-13 · **Status:** spec, for review
+**Created:** 2026-11-13 · **Status:** spec, for review; the emergency read is built, see the README's Status
 **Builds on:** [001-install-from-stock](../001-install-from-stock/spec.md) (FR-009 the
 full backup), [002-device-description](../002-device-description/spec.md),
 [003-check](../003-check/spec.md) · **Decisions:**

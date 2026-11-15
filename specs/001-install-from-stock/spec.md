@@ -1,7 +1,7 @@
 # Feature Specification: Install GlassineOS from the stock system
 
 **Feature branch:** `install-from-stock`
-**Created:** 2026-11-12 · **Status:** spec, for review; nothing built
+**Created:** 2026-11-12 · **Status:** spec, for review; partly built, see the README's Status
 **Decision:** [docs 0014](https://docs.glassine.org/decisions/0014-installation-and-provisioning/)
 · **Builds on:** [docs 0010](https://docs.glassine.org/decisions/0010-root-and-deployments/)
 (bases, deployments), [docs 0008](https://docs.glassine.org/decisions/0008-bring-your-own-stock-kernel/)
