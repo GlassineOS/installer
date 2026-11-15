@@ -142,9 +142,22 @@
       "steps": [
         "write-vendor"
       ]
+    },
+    {
+      "partition": "boot",
+      "class": "replace",
+      "actions": [
+        "reads",
+        "writes"
+      ],
+      "size": 67108864,
+      "loses_files": false,
+      "steps": [
+        "patch-stock-boot"
+      ]
     }
   ],
-  "untouched_partitions": 44,
+  "untouched_partitions": 43,
   "imaged_partitions": 0,
   "boot_settings": [
     {
@@ -246,7 +259,7 @@
     {
       "id": "keep-stock",
       "status": "needs",
-      "with": "slot A's boot image changed to mount its own slot's vendor partition, which the installation doesn't do yet",
+      "with": "slot A's boot image changed to mount its own slot's vendor partition; the installation's step changes it only where the vendor partition's check is already off, which the stock image's isn't, so it refuses the stock image",
       "tried": false
     },
     {
@@ -404,6 +417,26 @@
       }
     },
     {
+      "id": "patch-stock-boot",
+      "kind": "patch-boot-image",
+      "mode": "ram",
+      "done": "false",
+      "writes": true,
+      "tried": false,
+      "point_of_no_return": false,
+      "safe_stop": true,
+      "on_failure": {
+        "leaves": "installer-can-finish",
+        "hardware": null,
+        "way_out": "step set-slot"
+      },
+      "on_interruption": {
+        "leaves": "installer-can-finish",
+        "hardware": null,
+        "way_out": "step set-slot"
+      }
+    },
+    {
       "id": "set-slot",
       "kind": "set-boot-slot",
       "mode": "ram",
@@ -431,6 +464,7 @@
     "write-kernel",
     "write-base",
     "write-vendor",
+    "patch-stock-boot",
     "set-slot"
   ],
   "left_out": [
