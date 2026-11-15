@@ -10,6 +10,8 @@
 //   install-record.json           the record (spec 001 FR-014): each save a whole copy, written
 //                                 first as install-record.json.partial, then put under its name
 //   install-record.kept/NAME      what a step read before it first wrote (a boot image)
+//   install-record.inputs.json    the person's answers the record doesn't hold: { developer }
+//                                 (untried write steps run only for a developer who asked)
 //   manifest.json, emmc-user.img.gz
 //                                 the backup itself: only read
 //
@@ -23,6 +25,7 @@
 export const RECORD = 'install-record.json';
 const PARTIAL = `${RECORD}.partial`;
 const KEPT = `${RECORD}.kept`;
+const INPUTS = 'install-record.inputs.json';
 const USER_AREA = 'emmc-user.img.gz';
 const MANIFEST = 'manifest.json';
 export const RELEASE_MANIFEST = 'release.json';
@@ -110,6 +113,13 @@ export async function readRecord(dir) {
   return b ? new TextDecoder().decode(b) : null;
 }
 
+// The answers kept beside the record, or null.
+export async function readInputs(dir) {
+  const b = await bytesOf(dir, INPUTS);
+  if (!b) return null;
+  try { return JSON.parse(new TextDecoder().decode(b)); } catch { return null; }
+}
+
 // The record's store (wasm AsyncRecordStore): write_temp, commit, read.
 function recordStore(dir) {
   let temp = null;
@@ -131,9 +141,10 @@ function recordStore(dir) {
 }
 
 // A new record: refused when the folder holds one (that installation is resumed, not replaced).
-export async function saveNewRecord(dir, text) {
+export async function saveNewRecord(dir, text, inputs) {
   if ((await folderState(dir)).record) throw new Error(`${dir.name} holds an installation record already: resume that installation instead`);
   try { await dir.removeEntry(KEPT, { recursive: true }); } catch { /* none */ }
+  await writeWhole(dir, INPUTS, new TextEncoder().encode(JSON.stringify(inputs) + '\n'));
   const st = recordStore(dir);
   await st.write_temp(new TextEncoder().encode(text));
   await st.commit();
@@ -150,21 +161,24 @@ function backupReader(dir) {
       const f = await file(dir, USER_AREA);
       if (!f) throw new Error(`${dir.name} has no ${USER_AREA}`);
       const r = f.stream().pipeThrough(new DecompressionStream('gzip')).getReader();
+      // Kept: the head (up to HEAD_KEEP), or only [offset, end) for a read further in.
+      const keepFrom = end <= HEAD_KEEP ? 0 : offset;
       const chunks = [];
-      let got = 0;
-      while (got < end) {
+      let pos = 0;
+      while (pos < end) {
         const { done, value } = await r.read();
         if (done) break;
-        chunks.push(value);
-        got += value.length;
+        const a = Math.max(keepFrom - pos, 0), b = Math.min(end - pos, value.length);
+        if (b > a) chunks.push(value.subarray(a, b));
+        pos += value.length;
       }
       r.cancel().catch(() => {});
-      const all = new Uint8Array(got);
+      if (pos < end) throw new Error(`the backup ends at ${pos} bytes, before ${end}`);
+      const all = new Uint8Array(end - keepFrom);
       let at = 0;
       for (const c of chunks) { all.set(c, at); at += c.length; }
-      if (end > all.length) throw new Error(`the backup ends at ${all.length} bytes, before ${end}`);
-      if (end <= HEAD_KEEP) head = all.length > HEAD_KEEP ? all.slice(0, HEAD_KEEP) : all;
-      return all.slice(offset, end);
+      if (keepFrom === 0) head = all;
+      return all.slice(offset - keepFrom, end - keepFrom);
     }
     return head.slice(offset, end);
   };
