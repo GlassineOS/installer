@@ -4,7 +4,7 @@
 
 mod common;
 use common::*;
-use glassine_installer::derive::{derive, device_data_list, kept_system_slot, slots_conf};
+use glassine_installer::derive::{deploy_conf, derive, device_data_list, kept_system_slot, slots_conf, system_partitions};
 use glassine_installer::validate::{Loaded, load};
 
 fn rejects(t: &str, path: &str) {
@@ -36,11 +36,65 @@ fn the_note_airs_files_are_golden() {
         names,
         [
             ("device-data.list", "/usr/share/glassine/device-data.list"),
-            ("slots.conf", "/etc/glassine/slots.conf")
+            ("slots.conf", "/etc/glassine/slots.conf"),
+            ("deploy.conf.device", "/usr/share/glassine/deploy.conf.device"),
         ]
     );
     golden("core/tests/golden/onyx-noteair.device-data.list", &files[0].content);
     golden("core/tests/golden/onyx-noteair.slots.conf", &files[1].content);
+    golden("core/tests/golden/onyx-noteair.deploy.conf.device", &files[2].content);
+}
+
+/// FR-018c: the facts glassine-deploy reads (GlassineOS/boot conf/deploy.conf.example),
+/// as the lines the device's hand-written deploy.conf had, and the space Android's
+/// encryption footer needs.
+#[test]
+fn the_note_airs_deploy_facts() {
+    let d = valid(&noteair());
+    assert_eq!(system_partitions(&d), ["system_b"]);
+    let c = deploy_conf(&d).unwrap().unwrap();
+    assert_eq!(
+        entries(&c),
+        [
+            ["SYSTEM_DEV=/dev/disk/by-partlabel/system_b"],
+            ["USERDATA_DEV=/dev/disk/by-partlabel/userdata"],
+            ["USERDATA_RESERVE_KIB=16"],
+        ]
+    );
+}
+
+#[test]
+fn no_kept_free_space_is_zero() {
+    let t = mutate(&noteair(), "keep_free_at_end = \"16KiB\"\n", "");
+    let c = deploy_conf(&valid(&t)).unwrap().unwrap();
+    assert!(c.lines().any(|l| l == "USERDATA_RESERVE_KIB=0"), "{c}");
+    let t = mutate(&noteair(), "keep_free_at_end = \"16KiB\"", "keep_free_at_end = \"2MiB\"");
+    let c = deploy_conf(&valid(&t)).unwrap().unwrap();
+    assert!(c.lines().any(|l| l == "USERDATA_RESERVE_KIB=2048"), "{c}");
+}
+
+#[test]
+fn no_data_partition_no_deploy_conf() {
+    let t = mutate(&noteair(), "[data_partition]\nname = \"userdata\"\nkeep_free_at_end = \"16KiB\"\n", "");
+    let d = valid(&t);
+    assert_eq!(deploy_conf(&d).unwrap(), None);
+    assert!(derive(&d).unwrap().iter().all(|f| f.file != "deploy.conf.device"));
+}
+
+#[test]
+fn a_data_partition_without_one_system_partition() {
+    let mut d = valid(&noteair());
+    let mut s = d.step("partition-table").unwrap().clone();
+    s.id = "partition-table-2".into();
+    let p: toml::Table = "partitions = [{ name = \"system_c\", role = \"system\" }]".parse().unwrap();
+    s.params.extend(p);
+    d.steps.push(s);
+    assert!(deploy_conf(&d).unwrap_err().contains("ambiguous"));
+    let mut d = valid(&noteair());
+    d.steps.iter_mut().for_each(|s| {
+        s.params.remove("partitions");
+    });
+    assert!(deploy_conf(&d).unwrap_err().contains("no step creates"));
 }
 
 /// The facts the hand-written files of device-onyx-noteair held (GlassineOS/packages
