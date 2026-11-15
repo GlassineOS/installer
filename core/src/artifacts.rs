@@ -11,7 +11,7 @@
 //! The source itself (files, HTTP, the browser's File API) is the edge's.
 
 use crate::release::Release;
-use crate::table::ReadAt;
+use crate::table::{AsyncReadAt, ReadAt};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -25,13 +25,15 @@ const MANIFEST_MAX: u64 = 1 << 20;
 const PIECE: usize = 1 << 20;
 
 /// The files of one release. Paths are the manifest's, relative, `/`-separated.
+/// Reads may have to be waited for (a browser's file API); a source on a
+/// computer's file system answers at once.
 pub trait ArtifactSource {
     /// Where the release comes from, for messages (a folder, a release's name).
     fn origin(&self) -> String;
     /// The size of `file`, or why it can't be had.
-    fn size(&mut self, file: &str) -> Result<u64, String>;
+    fn size(&mut self, file: &str) -> impl Future<Output = Result<u64, String>>;
     /// Fills `buf` from `offset` of `file`; a short read is an error.
-    fn read_at(&mut self, file: &str, offset: u64, buf: &mut [u8]) -> Result<(), String>;
+    fn read_at(&mut self, file: &str, offset: u64, buf: &mut [u8]) -> impl Future<Output = Result<(), String>>;
 }
 
 /// A release held in memory (tests; a browser that has the files already).
@@ -45,12 +47,12 @@ impl ArtifactSource for MemorySource {
     fn origin(&self) -> String {
         self.origin.clone()
     }
-    fn size(&mut self, file: &str) -> Result<u64, String> {
+    async fn size(&mut self, file: &str) -> Result<u64, String> {
         self.files.get(file).map(|f| f.len() as u64).ok_or_else(|| format!("no file {file}"))
     }
-    fn read_at(&mut self, file: &str, offset: u64, buf: &mut [u8]) -> Result<(), String> {
+    async fn read_at(&mut self, file: &str, offset: u64, buf: &mut [u8]) -> Result<(), String> {
         let mut f: &[u8] = self.files.get(file).ok_or_else(|| format!("no file {file}"))?;
-        f.read_at(offset, buf)
+        ReadAt::read_at(&mut f, offset, buf)
     }
 }
 
@@ -160,13 +162,13 @@ pub struct Artifacts<S: ArtifactSource> {
 }
 
 impl<S: ArtifactSource> Artifacts<S> {
-    pub fn open(mut source: S) -> Result<Self, ArtifactError> {
+    pub async fn open(mut source: S) -> Result<Self, ArtifactError> {
         let origin = source.origin();
         let no = |message: String| ArtifactError::NoManifest {
             origin: origin.clone(),
             message,
         };
-        let n = source.size(MANIFEST).map_err(no)?;
+        let n = source.size(MANIFEST).await.map_err(no)?;
         if n > MANIFEST_MAX {
             return Err(ArtifactError::BadManifest {
                 origin,
@@ -174,7 +176,7 @@ impl<S: ArtifactSource> Artifacts<S> {
             });
         }
         let mut buf = vec![0u8; n as usize];
-        source.read_at(MANIFEST, 0, &mut buf).map_err(no)?;
+        source.read_at(MANIFEST, 0, &mut buf).await.map_err(no)?;
         let text = String::from_utf8(buf).map_err(|_| ArtifactError::BadManifest {
             origin: origin.clone(),
             message: "not UTF-8".into(),
@@ -222,8 +224,8 @@ impl<S: ArtifactSource> Artifacts<S> {
         })
     }
 
-    fn checked_size(&mut self, a: &Artifact) -> Result<(), ArtifactError> {
-        let found = self.source.size(&a.file).map_err(|message| ArtifactError::Unreadable {
+    async fn checked_size(&mut self, a: &Artifact) -> Result<(), ArtifactError> {
+        let found = self.source.size(&a.file).await.map_err(|message| ArtifactError::Unreadable {
             role: a.role.clone(),
             file: a.file.clone(),
             message,
@@ -241,13 +243,13 @@ impl<S: ArtifactSource> Artifacts<S> {
 
     /// Reads the whole file once and checks its size and hash. `progress`
     /// gets the bytes read so far.
-    pub fn verify(&mut self, role: &str, progress: &mut dyn FnMut(u64)) -> Result<Artifact, ArtifactError> {
-        let mut r = self.reader(role)?;
+    pub async fn verify(&mut self, role: &str, progress: &mut dyn FnMut(u64)) -> Result<Artifact, ArtifactError> {
+        let mut r = self.reader(role).await?;
         let mut buf = vec![0u8; r.artifact.size.min(PIECE as u64) as usize];
         while r.at < r.artifact.size {
             let n = (r.artifact.size - r.at).min(buf.len() as u64) as usize;
             let at = r.at;
-            r.read(at, &mut buf[..n])?;
+            r.read(at, &mut buf[..n]).await?;
             progress(r.at);
         }
         r.finish()
@@ -256,9 +258,9 @@ impl<S: ArtifactSource> Artifacts<S> {
     /// A reader of the role's file that checks it while it is read: in
     /// order from 0 (a read at 0 starts over), never past the end; the read
     /// that completes the file fails if the hash differs.
-    pub fn reader(&mut self, role: &str) -> Result<VerifiedReader<'_, S>, ArtifactError> {
+    pub async fn reader(&mut self, role: &str) -> Result<VerifiedReader<'_, S>, ArtifactError> {
         let artifact = self.artifact(role)?;
-        self.checked_size(&artifact)?;
+        self.checked_size(&artifact).await?;
         Ok(VerifiedReader {
             source: &mut self.source,
             artifact,
@@ -283,7 +285,7 @@ impl<S: ArtifactSource> VerifiedReader<'_, S> {
         self.at
     }
 
-    fn read(&mut self, offset: u64, buf: &mut [u8]) -> Result<(), ArtifactError> {
+    async fn read(&mut self, offset: u64, buf: &mut [u8]) -> Result<(), ArtifactError> {
         let a = &self.artifact;
         if offset == 0 && self.at != 0 {
             self.at = 0;
@@ -305,7 +307,7 @@ impl<S: ArtifactSource> VerifiedReader<'_, S> {
                 file: a.file.clone(),
                 message: format!("read of {} bytes at {offset} is past its end ({})", buf.len(), a.size),
             })?;
-        self.source.read_at(&a.file, offset, buf).map_err(|message| ArtifactError::Unreadable {
+        self.source.read_at(&a.file, offset, buf).await.map_err(|message| ArtifactError::Unreadable {
             role: a.role.clone(),
             file: a.file.clone(),
             message,
@@ -348,8 +350,8 @@ impl<S: ArtifactSource> VerifiedReader<'_, S> {
     }
 }
 
-impl<S: ArtifactSource> ReadAt for VerifiedReader<'_, S> {
-    fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> Result<(), String> {
-        self.read(offset, buf).map_err(String::from)
+impl<S: ArtifactSource> AsyncReadAt for VerifiedReader<'_, S> {
+    async fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> Result<(), String> {
+        self.read(offset, buf).await.map_err(String::from)
     }
 }

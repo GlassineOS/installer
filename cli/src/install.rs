@@ -55,11 +55,11 @@ impl ArtifactSource for DirSource {
     fn origin(&self) -> String {
         self.0.display().to_string()
     }
-    fn size(&mut self, file: &str) -> Result<u64, String> {
+    async fn size(&mut self, file: &str) -> Result<u64, String> {
         let p = self.path(file)?;
         std::fs::metadata(&p).map(|m| m.len()).map_err(|e| format!("{}: {e}", p.display()))
     }
-    fn read_at(&mut self, file: &str, offset: u64, buf: &mut [u8]) -> Result<(), String> {
+    async fn read_at(&mut self, file: &str, offset: u64, buf: &mut [u8]) -> Result<(), String> {
         use std::io::{Seek, SeekFrom};
         let p = self.path(file)?;
         let mut f = File::open(&p).map_err(|e| format!("{}: {e}", p.display()))?;
@@ -265,7 +265,7 @@ impl InstallEdge for CliEdge<'_> {
         }
     }
 
-    fn save(&mut self, r: &Record) -> Result<(), String> {
+    async fn save(&mut self, r: &Record) -> Result<(), String> {
         record::save(&mut self.store, r)
     }
 
@@ -279,7 +279,7 @@ impl InstallEdge for CliEdge<'_> {
         }
     }
 
-    fn backup_bytes(&mut self, offset: u64, len: usize) -> Result<Vec<u8>, String> {
+    async fn backup_bytes(&mut self, offset: u64, len: usize) -> Result<Vec<u8>, String> {
         let dir = self.backup.as_ref().ok_or("no backup folder")?;
         let p = dir.join(format!("{USER_AREA_NAME}.img.gz"));
         let f = File::open(&p).map_err(|e| format!("{}: {e}", p.display()))?;
@@ -290,7 +290,7 @@ impl InstallEdge for CliEdge<'_> {
         Ok(b)
     }
 
-    fn keep(&mut self, name: &str, bytes: &[u8]) -> Result<(), String> {
+    async fn keep(&mut self, name: &str, bytes: &[u8]) -> Result<(), String> {
         if !glassine_installer::artifacts::plain_path(name) || name.contains('/') {
             return Err(format!("{name:?} isn't a plain file name"));
         }
@@ -305,7 +305,7 @@ impl InstallEdge for CliEdge<'_> {
         Ok(())
     }
 
-    fn kept(&mut self, name: &str) -> Result<Option<Vec<u8>>, String> {
+    async fn kept(&mut self, name: &str) -> Result<Option<Vec<u8>>, String> {
         let p = self.kept.join(name);
         match std::fs::read(&p) {
             Ok(b) => Ok(Some(b)),
@@ -349,7 +349,7 @@ fn execute(
     backup: Option<PathBuf>,
     record_path: &Path,
 ) -> Result<ExitCode, String> {
-    let mut artifacts = Artifacts::open(DirSource(release.to_path_buf())).map_err(|e| e.to_string())?;
+    let mut artifacts = pollster::block_on(Artifacts::open(DirSource(release.to_path_buf()))).map_err(|e| e.to_string())?;
     let mut cancel = record_path.as_os_str().to_owned();
     cancel.push(".cancel");
     let mut edge = CliEdge {
@@ -449,7 +449,7 @@ pub fn install_cmd(args: &[String]) -> Result<ExitCode, String> {
     }
     let (d, sha) = load_description(Path::new(desc))?;
     let rel = PathBuf::from(rel);
-    let artifacts = Artifacts::open(DirSource(rel.clone())).map_err(|e| e.to_string())?;
+    let artifacts = pollster::block_on(Artifacts::open(DirSource(rel.clone()))).map_err(|e| e.to_string())?;
     let mut input = plan_input(&o)?;
     input.release = Some(Release::parse(&read(&rel.join(glassine_installer::artifacts::MANIFEST))?)?);
     let facts: Snapshot = match o.one("--facts") {
@@ -583,12 +583,12 @@ mod tests {
         let t = TempDir::new("release");
         std::fs::write(t.0.join("k.img"), b"kernel").unwrap();
         let mut s = DirSource(t.0.clone());
-        assert_eq!(s.size("k.img").unwrap(), 6);
+        assert_eq!(pollster::block_on(s.size("k.img")).unwrap(), 6);
         let mut b = [0u8; 3];
-        s.read_at("k.img", 3, &mut b).unwrap();
+        pollster::block_on(s.read_at("k.img", 3, &mut b)).unwrap();
         assert_eq!(&b, b"nel");
-        assert!(s.size("../k.img").is_err());
-        assert!(s.size("/etc/passwd").is_err());
+        assert!(pollster::block_on(s.size("../k.img")).is_err());
+        assert!(pollster::block_on(s.size("/etc/passwd")).is_err());
     }
 
     #[test]
@@ -615,12 +615,12 @@ mod tests {
             cancel_file: t.0.join("cancel"),
             shown: BTreeMap::new(),
         };
-        assert_eq!(e.backup_bytes(512, 4).unwrap(), [0, 1, 2, 3]);
+        assert_eq!(pollster::block_on(e.backup_bytes(512, 4)).unwrap(), [0, 1, 2, 3]);
         // a step's original, kept whole under its name
-        assert_eq!(e.kept("patch-boot_a-original").unwrap(), None);
-        e.keep("patch-boot_a-original", b"stock").unwrap();
-        assert_eq!(e.kept("patch-boot_a-original").unwrap().unwrap(), b"stock");
-        assert!(e.keep("../x", b"").is_err());
+        assert_eq!(pollster::block_on(e.kept("patch-boot_a-original")).unwrap(), None);
+        pollster::block_on(e.keep("patch-boot_a-original", b"stock")).unwrap();
+        assert_eq!(pollster::block_on(e.kept("patch-boot_a-original")).unwrap().unwrap(), b"stock");
+        assert!(pollster::block_on(e.keep("../x", b"")).is_err());
         assert!(!e.cancel_requested());
         std::fs::write(t.0.join("cancel"), b"").unwrap();
         assert!(e.cancel_requested());

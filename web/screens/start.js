@@ -39,6 +39,7 @@ export function Start({ s, state }) {
             <p>To install on a PC, start that PC from a GlassineOS USB stick. The installer opens there by itself, with these same screens.</p>`}
         </section>
       </div>
+      ${s && s.liveDevice ? html`<p class="ins-small">An installation was cut off, or you stopped it? <a class="il-link" id="carry-on" href="#/resume">Carry on with an installation</a>: it resumes from its record, next to its backup.</p>` : null}
       <p class="ins-soft ins-small">Only want to know? The check and the plan change nothing. You can stop after either and keep the report.</p>`}
     <${Actions} next=${noUsb ? 'Nothing more is possible from this browser.' : 'The installer finds out what your machine is. Nothing is written.'}
       out="Close this page. Nothing has happened."

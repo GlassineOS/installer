@@ -31,6 +31,26 @@
 //   backupRun(machine) / onBackupRun(fn)
 //                             -> that run: { state, folder, images, record, error, notes }, and
 //                                fn called whenever it changes
+//   chooseRelease(machine) / release(machine)
+//                             -> the release folder the person picked for that device (live): its
+//                                manifest goes into the plan; { name, artifacts }
+//   chooseEarlierBackup(machine)
+//                             -> a backup folder made before (manifest.json and the user area)
+//   installFolder(machine)    -> the backup folder the installation rests on: this page's finished
+//                                backup, or the earlier one chosen; { name, from }
+//   confirmPlan(machine, input, text) / confirmed(machine, input)
+//                             -> the person confirmed this plan on Confirm (its button), for this
+//                                input and release; kept in this page's memory only
+//   startInstall(machine, input)
+//                             -> the record of the confirmed plan into that folder, then the run;
+//                                refused unless confirmPlan was given for the same plan
+//   openInstall()             -> a folder with an installation record (call from a click): the
+//                                record's view, to resume it after a reload or another day
+//   chooseRunRelease()        -> the release folder for that resume
+//   resumeInstall()           -> runs the opened record on
+//   stopInstall()             -> stops after the next step the plan names a safe stop
+//   installRun() / onInstallRun(fn)
+//                             -> the installation of this page: see `inst` below
 //
 // A picked file (spec 004 FR-003) lives only in this page's memory: its bytes, the core's check
 // and whether the person confirmed the warning. It is never uploaded, put in an address or kept
@@ -42,14 +62,16 @@
 // - Live (the default): the core itself, built for the browser (web/pkg, `make web-pkg`). The
 //   person picks the device in the browser's chooser; the core inspects it over WebUSB (reads
 //   only: getvar) and gives a facts snapshot, kept in this page's memory as machine `live-N`,
-//   with the fastboot session still open. The one command besides getvar ever sent is
-//   `reboot`, in that session: when the person clicks Restart it, or, best effort, when the
+//   with the fastboot session still open. The one command besides getvar ever sent in that
+//   session is `reboot`: when the person clicks Restart it, or, best effort, when the
 //   page is closed or reloaded while the session is open (pagehide). The session is kept
 //   because the Note Air's boot loader only answers a fresh start: once it is closed, the page
 //   can't restart the device any more, and it stays in its USB mode until its power button is
 //   held. Every check report and plan is the core's answer for those facts and
 //   the person's choices. The descriptions are the copies the core carries. Nothing is fetched
 //   but the core: the site works without the rest of the repository.
+//   The writes of an installation are the core executor's (install_run), in its own sessions,
+//   after Confirm, with the release and the backup the person chose (startInstall).
 //
 // - Fixtures (?fixtures=1, for the screen tests): `machine` names a facts snapshot of the
 //   core's tests (core/tests/fixtures/facts/), and the records are the core's own output for
@@ -64,6 +86,7 @@
 
 import { descriptionTexts } from './description-texts.js';
 import { storeSupported, pickFolder, newFolder, folderName, folderStore } from '../lib/store.js';
+import { openRelease, folderState, readRecord, readInputs, saveNewRecord, installHost } from '../lib/install.js';
 
 const at = (path) => new URL(path, import.meta.url);
 
@@ -267,6 +290,9 @@ export async function connectDevice() {
   return machine;
 }
 
+// Whether this page has the answers of that machine (live; a reload forgets them).
+export const knows = (machine) => machine === THIS_PC || live.has(machine);
+
 function liveFacts(machine) {
   if (machine === THIS_PC) {
     throw new Error('A browser can’t read this PC. Start the PC from the GlassineOS USB stick: the installer opens there and reads it.');
@@ -287,6 +313,9 @@ export async function plan(machine, input) {
   if (FIXTURES) return fixturePlan(machine, input);
   const got = liveFacts(machine), m = await wasm();
   const { release: _fixture, ...answers } = normalInput(input);
+  // The release the person chose for this device: its manifest is part of the plan (002 FR-019a).
+  const rel = releases.get(machine);
+  if (rel) answers.release = JSON.parse(rel.manifest);
   return call(() => m.plan(got.facts, JSON.stringify(answers)));
 }
 
@@ -367,7 +396,7 @@ export const canStoreBackup = () => !FIXTURES && storeSupported();
 
 export function backupRun(machine) {
   if (!run || run.machine !== machine) return null;
-  const { parent: _p, store: st, ...v } = run;
+  const { parent: _p, store: st, dir: _d, ...v } = run;
   v.stopping = !!(st && st.stopped());
   return { ...v, images: run.images.map((i) => ({ ...i })), notes: run.notes.slice() };
 }
@@ -431,6 +460,7 @@ export async function startBackup(machine, device, file, scope = 'whole-disk') {
   const store = folderStore(async () => {
     const dir = await newFolder(parent, name);
     r.folder = `${parent.name}/${name}`;
+    r.dir = dir;
     runChanged();
     return dir;
   }, (ev) => onStore(r, ev));
@@ -447,4 +477,221 @@ export async function startBackup(machine, device, file, scope = 'whole-disk') {
   r.store = null;
   runChanged();
   return backupRun(machine);
+}
+
+// ---- the installation (spec 001: the plan carried out by the core's executor) -----------------
+
+const releases = new Map(); // machine -> the release folder picked for it (lib/install.js openRelease)
+const earlier = new Map(); // machine -> a backup folder made before, picked by the person
+
+// The confirmations given on Confirm: machine -> { key, text }. The key is the input without
+// the release's name and the release itself (a reload forgets both, and the answers they rest on).
+const confirmations = new Map();
+const confirmKey = (machine, input) => {
+  const { release: _name, ...rest } = normalInput(input);
+  const rel = releases.get(machine);
+  return JSON.stringify([rest.choices, rest.hardware, rest.developer, rel ? rel.manifest : null]);
+};
+
+export function confirmPlan(machine, input, text) {
+  confirmations.set(machine, { key: confirmKey(machine, input), text });
+}
+
+export function confirmed(machine, input) {
+  const c = confirmations.get(machine);
+  return !!c && c.key === confirmKey(machine, input) && !!releases.get(machine);
+}
+
+let releaseCount = 0;
+export async function chooseRelease(machine) {
+  let dir;
+  try { dir = await globalThis.showDirectoryPicker({ id: 'glassine-release', mode: 'read' }); } catch (e) {
+    if (e && e.name === 'AbortError') return release(machine);
+    throw e;
+  }
+  releases.set(machine, await openRelease(dir));
+  releaseCount += 1;
+  return release(machine);
+}
+
+export function release(machine) {
+  const r = releases.get(machine);
+  // tag: the release's place in the address (`release=`): which choice, never the folder's name.
+  return r ? { name: r.name, artifacts: r.artifacts, tag: `chosen-${releaseCount}` } : null;
+}
+
+async function backupFolder(dir) {
+  const st = await folderState(dir);
+  if (!st.manifest || !st.userArea) throw new Error(`${dir.name} isn’t a finished backup of the whole device: it needs manifest.json and emmc-user.img.gz`);
+  return st;
+}
+
+export async function chooseEarlierBackup(machine) {
+  let dir;
+  try { dir = await pickFolder(); } catch (e) {
+    if (e && e.name === 'AbortError') return installFolder(machine);
+    throw e;
+  }
+  const st = await backupFolder(dir);
+  earlier.set(machine, { dir, record: st.record });
+  return installFolder(machine);
+}
+
+function folderOf(machine) {
+  if (run && run.machine === machine && run.state === 'done' && run.dir) return { dir: run.dir, from: 'this-page', name: run.folder };
+  const e = earlier.get(machine);
+  return e ? { dir: e.dir, from: 'earlier', name: e.dir.name, record: e.record } : null;
+}
+
+export function installFolder(machine) {
+  const f = folderOf(machine);
+  return f ? { name: f.name, from: f.from, record: !!f.record } : null;
+}
+
+// The installation of this page (one at a time):
+//   state    found (a record was opened, not run yet) | running | stopping | stopped | waiting |
+//            complete | not-started (nothing was run: error says why)
+//   view     the core's view of the record as last saved (record_view_format 1)
+//   result   how the run ended (install_run_format 1)
+//   progress { step, done, total } of the step running; prompt: what the person is asked
+//   folder   the backup folder's name; release: the release folder's name
+let inst = null;
+const instWatchers = new Set();
+let instTick = 0;
+const instChanged = (now) => {
+  if (!now) {
+    // Progress comes often: the screens hear of it at most ten times a second.
+    if (instTick) return;
+    instTick = setTimeout(() => { instTick = 0; instChanged(true); }, 100);
+    return;
+  }
+  for (const f of instWatchers) f(installRun());
+};
+
+export function installRun() {
+  if (!inst) return null;
+  const { dir: _d, rel: _r, host: _h, cancel: _c, ...v } = inst;
+  return { ...v, notes: inst.notes.slice() };
+}
+
+export function onInstallRun(fn) {
+  instWatchers.add(fn);
+  return () => instWatchers.delete(fn);
+}
+
+const busy = () => inst && (inst.state === 'running' || inst.state === 'stopping');
+
+// Leaving the page while it runs: the browser asks first. A run cut off this way is resumed
+// from its record (Resume).
+if (!FIXTURES && typeof addEventListener === 'function') {
+  addEventListener('beforeunload', (ev) => {
+    if (busy()) { ev.preventDefault(); ev.returnValue = ''; }
+  });
+}
+
+function view(m, text) {
+  return call(() => m.install_record_view(text));
+}
+
+async function runIt() {
+  const m = await wasm();
+  const r = inst;
+  const desc = await description(r.view.description);
+  const modes = desc ? desc.modes.map((x) => ({ id: x.id, kind: x.kind })) : [];
+  r.cancel = false;
+  r.host = installHost({
+    dir: r.dir,
+    modes,
+    cancelled: () => r.cancel,
+    on: (ev) => {
+      if (ev.kind === 'saved') { try { r.view = view(m, ev.record); } catch { /* the next save tells */ } instChanged(true); }
+      else if (ev.kind === 'progress') { r.progress = { step: ev.step, done: ev.done, total: ev.total }; instChanged(); }
+      else if (ev.kind === 'note') { r.notes.push(ev.line); if (r.notes.length > 50) r.notes.shift(); instChanged(); }
+      else if (ev.kind === 'prompt') { r.prompt = ev.prompt; instChanged(true); }
+    },
+  });
+  Object.assign(r, { state: 'running', result: null, error: null, progress: null, prompt: null });
+  instChanged(true);
+  const record = await readRecord(r.dir);
+  // Untried write steps run only for a developer who asked for them: the person's answer, kept
+  // beside the record (lib/install.js); without it, no.
+  const developer = !!r.developer;
+  try {
+    r.result = JSON.parse(await m.install_run(record, developer, r.rel.files, r.host));
+    r.view = view(m, r.result.record);
+    r.state = r.result.outcome;
+  } catch (e) {
+    r.state = 'not-started';
+    r.error = failure(e);
+  }
+  r.prompt = null;
+  r.progress = null;
+  instChanged(true);
+  return installRun();
+}
+
+// Makes the record of the confirmed plan in the backup folder, then runs it (call from a click).
+export async function startInstall(machine, input) {
+  if (busy()) return installRun();
+  if (!confirmed(machine, input)) throw new Error('Confirm the plan first: the installation runs only the plan you confirmed, with this release.');
+  const confirmation = confirmations.get(machine).text;
+  const f = folderOf(machine);
+  if (!f) throw new Error('Choose the backup the installation rests on first.');
+  const rel = releases.get(machine);
+  if (!rel) throw new Error('Choose the release folder first.');
+  if (current && current.machine === machine && current.state === 'open') throw new Error('Restart the device first: the check’s connection still holds it.');
+  const m = await wasm();
+  const got = liveFacts(machine);
+  const { release: _fixture, ...answers } = normalInput(input);
+  const p = await plan(machine, input);
+  if (!p || !p.description) throw new Error('There is no plan for this device.');
+  const text = (() => { try { return m.install_new(p.description, got.facts, JSON.stringify(answers), rel.manifest, confirmation, new Date().toISOString().replace(/\.\d+Z$/, 'Z')); } catch (e) { throw failure(e); } })();
+  const developer = !!normalInput(input).developer;
+  await saveNewRecord(f.dir, text, { developer });
+  inst = { state: 'found', dir: f.dir, folder: f.name, rel, release: rel.name, developer, view: view(m, text), result: null, error: null, progress: null, prompt: null, notes: [] };
+  return runIt();
+}
+
+// Opens a folder with an installation record (call from a click).
+export async function openInstall() {
+  if (busy()) throw new Error('The installation is running.');
+  let dir;
+  try { dir = await pickFolder(); } catch (e) {
+    if (e && e.name === 'AbortError') return installRun();
+    throw e;
+  }
+  const text = await readRecord(dir);
+  const inputs = text ? await readInputs(dir) : null;
+  if (!text) throw new Error(`${dir.name} holds no installation record (${'install-record.json'}): choose the backup folder the installation used`);
+  const m = await wasm();
+  inst = { state: 'found', dir, folder: dir.name, rel: null, release: null, developer: !!(inputs && inputs.developer === true), view: view(m, text), result: null, error: null, progress: null, prompt: null, notes: [] };
+  instChanged(true);
+  return installRun();
+}
+
+export async function chooseRunRelease() {
+  if (!inst || busy()) return installRun();
+  let dir;
+  try { dir = await globalThis.showDirectoryPicker({ id: 'glassine-release', mode: 'read' }); } catch (e) {
+    if (e && e.name === 'AbortError') return installRun();
+    throw e;
+  }
+  inst.rel = await openRelease(dir);
+  inst.release = inst.rel.name;
+  instChanged(true);
+  return installRun();
+}
+
+export async function resumeInstall() {
+  if (!inst || busy()) return installRun();
+  if (!inst.rel) throw new Error('Choose the release folder first.');
+  if (current && current.state === 'open') throw new Error('Restart the device first: the check’s connection still holds it.');
+  return runIt();
+}
+
+export function stopInstall() {
+  if (!busy()) return;
+  inst.cancel = true;
+  inst.state = 'stopping';
+  instChanged(true);
 }

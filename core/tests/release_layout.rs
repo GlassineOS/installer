@@ -138,10 +138,10 @@ fn images_release() -> (MemorySource, BTreeMap<&'static str, (String, Vec<u8>)>)
 #[test]
 fn a_release_folder_in_images_format_is_accepted() {
     let (src, files) = images_release();
-    let mut a = Artifacts::open(src).unwrap();
+    let mut a = pollster::block_on(Artifacts::open(src)).unwrap();
     assert_eq!(a.roles(), files.keys().map(|r| r.to_string()).collect::<Vec<_>>());
     for role in files.keys() {
-        a.verify(role, &mut |_| {}).unwrap_or_else(|e| panic!("{role}: {e}"));
+        pollster::block_on(a.verify(role, &mut |_| {})).unwrap_or_else(|e| panic!("{role}: {e}"));
     }
     assert_eq!(a.artifact("partition-layout").unwrap().kind.as_deref(), Some("gpt-recipe"));
     assert_eq!(a.artifact("boot-loader").unwrap().kind.as_deref(), Some("raw-image"));
