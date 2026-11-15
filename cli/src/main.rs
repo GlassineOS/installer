@@ -113,7 +113,8 @@ boot loader, restarted afterwards), shows the plan and the release's artifacts (
 --release-dir) and runs it only after the person types \"install\". A plan with untried write
 steps runs only with --developer. The record (default install-record.json; beside it
 PATH.inputs.json) holds every step's intent before it starts and its outcome with evidence; it is
-replaced whole on every change. Creating PATH.cancel stops the run after the next step that is safe
+replaced whole on every change; PATH.kept/ holds what a step read before it first changed
+it (a kept Android's boot image), so a resume changes the original again. Creating PATH.cancel stops the run after the next step that is safe
 to stop after. resume --record PATH goes on from the record: it refuses another plan, description
 or artifact, checks a cut step before running it again, and never rewrites a boot loader that
 already answers as the new one. The installer restarts the device itself where it can (adb reboot

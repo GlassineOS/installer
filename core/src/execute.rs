@@ -43,7 +43,7 @@
 
 use crate::artifacts::{ArtifactSource, Artifacts};
 use crate::facts::{InstallerFacts, Obs, Snapshot, Storage, Truth, VarFacts, test};
-use crate::fastboot::{FbError, Reply, Session, Transport, WriteRules};
+use crate::fastboot::{FbError, Reply, Session, Transport};
 use crate::format1::{Condition, Description, EscapeCase, Mode, Step};
 use crate::glassine_read::Reboot;
 use crate::glassine_write::{RamError, Range, STATUS_ALREADY_ARMED, Writer, Writes};
@@ -53,6 +53,7 @@ use crate::lock::sha256_hex;
 use crate::ops::{self, Evidence, Gpt, OpError};
 use crate::record::{Backup, FinalRestart, Outcome as Done, Record, Result_, StepState};
 use crate::vocab::INSTALLER_MODE;
+use crate::write_rules::ModeRules;
 use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
@@ -101,6 +102,11 @@ pub trait InstallEdge {
     /// Bytes of the backed-up disk the partition table is on (the verified
     /// backup's image), from `offset`.
     fn backup_bytes(&mut self, offset: u64, len: usize) -> Result<Vec<u8>, String>;
+    /// Keeps `bytes` on the computer under `name`, whole before it returns:
+    /// what a step read before it first wrote (a boot image's original).
+    fn keep(&mut self, name: &str, bytes: &[u8]) -> Result<(), String>;
+    /// What [`InstallEdge::keep`] kept under `name`, if anything.
+    fn kept(&mut self, name: &str) -> Result<Option<Vec<u8>>, String>;
     fn progress(&mut self, step: &str, done: u64, total: u64);
     fn note(&mut self, line: &str);
     /// True once the person asked to stop; honoured after a safe-stop step.
@@ -118,10 +124,27 @@ pub struct Job<'a> {
     pub description_sha256: String,
     /// The person is a developer who asked for untried write steps.
     pub developer: bool,
-    /// The fastboot write rules per mode id, from the description.
-    /// TODO(write_rules.rs): the planner's builder makes these; a mode not
-    /// in the map gets [`ops::minimal_write_rules`].
-    pub write_rules: BTreeMap<String, WriteRules>,
+    /// The write rules of each fastboot mode, from the description
+    /// ([`crate::write_rules::mode_rules`]); a write in a mode without them
+    /// is refused.
+    pub write_rules: BTreeMap<String, ModeRules>,
+}
+
+impl<'a> Job<'a> {
+    /// A job for `description` with the write rules of every fastboot mode
+    /// it has, for the steps of job `job` (the plan's).
+    pub fn new(description: &'a Description, description_sha256: String, developer: bool, job: &str) -> Result<Job<'a>, String> {
+        let mut write_rules = BTreeMap::new();
+        for m in description.modes.iter().filter(|m| m.kind == "fastboot") {
+            write_rules.insert(m.id.clone(), crate::write_rules::mode_rules(description, &m.id, job)?);
+        }
+        Ok(Job {
+            description,
+            description_sha256,
+            developer,
+            write_rules,
+        })
+    }
 }
 
 /// How a run ended.
@@ -181,6 +204,14 @@ impl std::error::Error for Stopped {}
 struct PlanView {
     status: String,
     steps: Vec<PlanStep>,
+    #[serde(default)]
+    choices: Vec<PlanChoice>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct PlanChoice {
+    choice: String,
+    value: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -237,6 +268,7 @@ pub async fn run<E: InstallEdge, S: ArtifactSource>(
         here: Here::Unknown,
         new_table: None,
         disk: None,
+        choices: BTreeMap::new(),
     };
     let r = x.run(plan).await;
     if r.is_err() {
@@ -256,6 +288,8 @@ struct Exec<'a, E: InstallEdge, S: ArtifactSource> {
     new_table: Option<(Built, Vec<u8>)>,
     /// The RAM environment's disk the table is on, and its sector size and size.
     disk: Option<(u32, u64, u64)>,
+    /// The plan's choices (a partition rule's `when` reads them).
+    choices: BTreeMap<String, String>,
 }
 
 fn stop(why: impl Into<String>) -> Stopped {
@@ -321,6 +355,7 @@ impl<E: InstallEdge, S: ArtifactSource> Exec<'_, E, S> {
             "developer-only" => return Err(stop("the plan has untried write steps: only a developer who asks for them runs it")),
             s => return Err(stop(format!("the plan is {s}: nothing is run"))),
         }
+        self.choices = pv.choices.iter().map(|c| (c.choice.clone(), c.value.clone())).collect();
         let order = self.order(&pv)?;
         self.check_artifacts(&order)?;
         for id in &order {
@@ -493,6 +528,15 @@ impl<E: InstallEdge, S: ArtifactSource> Exec<'_, E, S> {
             );
         let ev = match self.op(st, again).await {
             Ok(ev) => ev,
+            Err(e) if e.goes_on => {
+                // Refused before anything was written: recorded, and the run
+                // goes on past the step.
+                let o = self.outcome(Result_::Failed, Evidence::new(), Some(e.why.clone()));
+                self.record.finish(&st.id, o).map_err(|x| self.fail(st, x, false, false))?;
+                self.save(Some(st))?;
+                self.edge.note(&format!("{}: {}; going on", st.id, e.why));
+                return Ok(());
+            }
             Err(e) => {
                 let o = self.outcome(Result_::Failed, Evidence::new(), Some(e.why.clone()));
                 let _ = self.record.finish(&st.id, o);
@@ -770,22 +814,21 @@ impl<E: InstallEdge, S: ArtifactSource> Exec<'_, E, S> {
             }
         } else {
             match std::mem::replace(&mut self.here, Here::Unknown) {
-                Here::Fastboot { mode, mut s, used } => {
+                Here::Fastboot { mode, mut s, .. } => {
                     let r = if to.kind == "fastboot" {
                         s.reboot_bootloader().await
                     } else if to.kind == crate::ram_backup::RAM_MODE_KIND {
                         if !from.departures.iter().any(|x| x.kind == "oem-reboot-recovery") {
                             return Err(fail(self, format!("mode {mode} has no way the installer knows into {}", to.id)));
                         }
-                        if used {
-                            // The verb must open a fresh start of the boot loader.
-                            s.reboot_bootloader().await.map_err(|e| fail(self, format!("restarting {mode}: {e}")))?;
-                            let link = self.edge.reach(&from, Reach::Sent { transition: None }).await.map_err(|e| fail(self, e))?;
-                            self.adopt(link, st).await?;
-                            return Box::pin(self.hop(tid, st)).await;
+                        // In the same session as the commands before it (the
+                        // inspect's getvars, a flash): the boot loader's
+                        // equal-length framing answers later commands.
+                        let rules = self.rules(&mode).map_err(|e| fail(self, e))?;
+                        match rules.check_oem(crate::write_rules::OEM_REBOOT_RECOVERY_VERB) {
+                            Ok(()) => s.oem(&rules.rules, crate::write_rules::OEM_REBOOT_RECOVERY_VERB).await,
+                            Err(e) => Err(e),
                         }
-                        let rules = self.rules(&mode);
-                        s.oem(&rules, "reboot-recovery").await
                     } else {
                         s.reboot().await
                     };
@@ -815,12 +858,12 @@ impl<E: InstallEdge, S: ArtifactSource> Exec<'_, E, S> {
         self.adopt(link, st).await
     }
 
-    fn rules(&self, mode: &str) -> WriteRules {
+    fn rules(&self, mode: &str) -> Result<ModeRules, String> {
         self.job
             .write_rules
             .get(mode)
             .cloned()
-            .unwrap_or_else(|| ops::minimal_write_rules(self.d, mode))
+            .ok_or_else(|| format!("no write rules for mode {mode}: nothing is written there"))
     }
 
     /// Takes what the edge found: a fastboot session (its mode told by the
@@ -958,16 +1001,6 @@ impl<E: InstallEdge, S: ArtifactSource> Exec<'_, E, S> {
         Ok(r.sector)
     }
 
-    /// The table step of the plan, if it has one.
-    fn table_step(&self) -> Option<Step> {
-        let ids = self.record.plan_steps().unwrap_or_default();
-        self.d
-            .steps
-            .iter()
-            .find(|s| s.kind == "write-partition-table" && s.mode == self.here.mode().unwrap_or("") && ids.contains(&s.id))
-            .cloned()
-    }
-
     /// The new table (built once per run).
     async fn new_table(&mut self, table_step: &Step) -> Result<Built, Stopped> {
         if let Some((b, _)) = &self.new_table {
@@ -1077,13 +1110,13 @@ impl<E: InstallEdge, S: ArtifactSource> Exec<'_, E, S> {
         let (disk, sector, _) = self.ram_disk(st).await?;
         let table_pending = pending.iter().find(|s| s.kind == "write-partition-table").cloned();
         // The table as it will be: its parts, and both copies' places.
-        let (parts, copies): (Gpt, Vec<(u64, u64)>) = match (&table_pending, self.table_step()) {
-            (Some(ts), _) => {
+        let (parts, copies): (Gpt, Vec<(u64, u64)>) = match &table_pending {
+            Some(ts) => {
                 let b = self.new_table(ts).await?;
                 let g = ops::parse_gpt(&b.primary, sector).map_err(|e| self.fail(st, e, false, false))?;
                 (g, vec![(0, b.primary.len() as u64), (b.backup_offset(), b.backup.len() as u64)])
             }
-            (None, _) => {
+            None => {
                 let g = match self.live_gpt(st).await {
                     Ok(g) => g,
                     // A primary torn by a cut slot-flag write: the places
@@ -1099,7 +1132,7 @@ impl<E: InstallEdge, S: ArtifactSource> Exec<'_, E, S> {
                 (g, copies)
             }
         };
-        let never = ops::never_write(self.d);
+        let never = ops::never_write(self.d, &self.choices);
         let mut out: BTreeSet<Range> = BTreeSet::new();
         for p in &pending {
             match p.kind.as_str() {
@@ -1108,9 +1141,9 @@ impl<E: InstallEdge, S: ArtifactSource> Exec<'_, E, S> {
                         out.insert(Range { disk, offset: *o, length: *l });
                     }
                 }
-                "write-image" | "write-base" | "copy-partition" => {
+                "write-image" | "write-base" | "copy-partition" | "patch-boot-image" => {
                     let name = ops::param(p, "partition").map_err(|e| self.fail(st, e.why, false, false))?;
-                    if !p.writes.iter().any(|w| w == name) || never.iter().any(|n| n.eq_ignore_ascii_case(name)) {
+                    if !p.writes.iter().any(|w| w == name) || never.refuses(name) {
                         return Err(self.fail(p, format!("{name} isn't a partition step {} may write", p.id), false, false));
                     }
                     let (o, l) = parts
@@ -1137,11 +1170,12 @@ impl<E: InstallEdge, S: ArtifactSource> Exec<'_, E, S> {
                 .job
                 .write_rules
                 .get(&mode)
-                .cloned()
-                .unwrap_or_else(|| ops::minimal_write_rules(self.d, &mode));
+                .ok_or_else(|| OpError::before(format!("no write rules for mode {mode}: nothing is written there")))?;
+            rules.check(&part).map_err(|e| OpError::before(e.to_string()))?;
+            let rules = &rules.rules;
             return match st.kind.as_str() {
-                "write-boot-loader" => ops::boot_loader::run(s, &rules, &part, &role, self.artifacts).await,
-                "write-image" => ops::write_image::flash(s, &rules, &part, &role, self.artifacts).await,
+                "write-boot-loader" => ops::boot_loader::run(s, rules, &part, &role, self.artifacts).await,
+                "write-image" => ops::write_image::flash(s, rules, &part, &role, self.artifacts).await,
                 k => Err(OpError::before(format!("step kind {k} isn't built for a boot loader's fastboot"))),
             };
         }
@@ -1155,7 +1189,7 @@ impl<E: InstallEdge, S: ArtifactSource> Exec<'_, E, S> {
         } else {
             None
         };
-        let gpt = if matches!(st.kind.as_str(), "write-image" | "write-base" | "copy-partition") {
+        let gpt = if matches!(st.kind.as_str(), "write-image" | "write-base" | "copy-partition" | "patch-boot-image") {
             Some(self.live_gpt(st).await.map_err(|s| OpError::before(s.why))?)
         } else {
             None
@@ -1170,13 +1204,50 @@ impl<E: InstallEdge, S: ArtifactSource> Exec<'_, E, S> {
         } else {
             vec![]
         };
+        // A boot image's original: kept on the computer before the first
+        // write, read from there on a resume (the partition may be half-written).
+        let original = if st.kind == "patch-boot-image" {
+            let part = ops::param(st, "partition")?;
+            let (start, len) = gpt
+                .as_ref()
+                .and_then(|g| g.extent(part))
+                .ok_or_else(|| OpError::before(format!("the partition table has no {part}")))?;
+            let key = format!("{}-{part}-original", st.id);
+            match self.edge.kept(&key).map_err(|e| OpError::before(format!("the kept original of {part}: {e}")))? {
+                Some(b) if b.len() as u64 == len => {
+                    self.edge.note(&format!("{}: the original of {part} as read before the first write", st.id));
+                    Some(b)
+                }
+                Some(b) => {
+                    return Err(OpError::before(format!(
+                        "the original of {part} kept on the computer is {} bytes, the partition {len}",
+                        b.len()
+                    )));
+                }
+                None => {
+                    let Here::Ram { w, .. } = &mut self.here else { unreachable!() };
+                    let b = w.read_all(disk, start, len).await.map_err(|e| ops::ram_err(e, false))?;
+                    self.edge
+                        .keep(&key, &b)
+                        .map_err(|e| OpError::before(format!("keeping the original of {part} on the computer: {e}")))?;
+                    Some(b)
+                }
+            }
+        } else {
+            None
+        };
         let Here::Ram { w, .. } = &mut self.here else { unreachable!() };
         let max_hash = w.list().await.map_err(|e| ops::ram_err(e, false))?.listing.max_hash;
         let edge = &mut *self.edge;
         let mut progress = |d: u64, t: u64| edge.progress(&id, d, t);
         match st.kind.as_str() {
             "write-partition-table" => ops::partition_table::run(w, disk, table.as_ref().unwrap(), &src, resumed, max_hash).await,
-            "set-boot-slot" => ops::set_boot_slot::run(w, disk, sector, disk_bytes, st, resumed, &mbr, max_hash).await,
+            "set-boot-slot" => {
+                let flags = crate::slot_flags::SlotFlags::of(self.d)
+                    .map_err(OpError::before)?
+                    .ok_or_else(|| OpError::before("the description names no slot-flag scheme (its slot-flags boot setting)"))?;
+                ops::set_boot_slot::run(w, disk, sector, disk_bytes, &flags, st, resumed, &mbr, max_hash).await
+            }
             "write-image" => {
                 let part = ops::param(st, "partition")?;
                 ops::write_image::write_ram(w, disk, gpt.as_ref().unwrap(), part, &role, self.artifacts, max_hash, &mut progress).await
@@ -1184,6 +1255,11 @@ impl<E: InstallEdge, S: ArtifactSource> Exec<'_, E, S> {
             "write-base" => {
                 let part = ops::param(st, "partition")?;
                 ops::write_base::run(w, disk, gpt.as_ref().unwrap(), part, &role, self.artifacts, max_hash, &mut progress).await
+            }
+            "patch-boot-image" => {
+                let part = ops::param(st, "partition")?;
+                let (start, _) = gpt.as_ref().and_then(|g| g.extent(part)).unwrap();
+                ops::patch_boot::run(w, disk, part, start, original.as_deref().unwrap(), max_hash, &mut progress).await
             }
             "copy-partition" => {
                 let from = ops::param(st, "from")?;

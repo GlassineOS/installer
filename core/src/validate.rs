@@ -285,6 +285,21 @@ pub fn check(d: &Description) -> Vec<Problem> {
         }
         check_back_up(&mut ck, &b.back_up, &format!("{path}.back_up"));
     }
+    // The slot-flag scheme a set-boot-slot step in a glassine-ram mode writes.
+    match crate::slot_flags::SlotFlags::of(d) {
+        Err(e) => ck.p("boot_settings", e),
+        Ok(None) => {
+            for (i, st) in d.steps.iter().enumerate() {
+                if st.kind == "set-boot-slot" && d.mode(&st.mode).is_some_and(|m| m.kind == "glassine-ram") {
+                    ck.p(
+                        format!("steps[{i}]"),
+                        "a set-boot-slot step in a glassine-ram mode needs the slot-flags boot setting's entry, bits, pinned, fallback and unbootable",
+                    );
+                }
+            }
+        }
+        Ok(Some(_)) => {}
+    }
 
     // What it keeps (FR-017, FR-018a) and writes (FR-019, FR-020).
     unique(&mut ck, d.unit_values.iter().map(|u| u.id.as_str()), "unit_values", "id");

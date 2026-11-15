@@ -16,10 +16,12 @@
 //! with the same device as an uncut run.
 
 mod common;
+use common::bootimg::boot_image;
 use common::fbsim::FbSim;
 use common::ramsim::{CHUNK, RamEnv, Sparse, WriteFaults, image};
 use common::{facts, noteair, valid};
 use glassine_installer::artifacts::{Artifacts, MemorySource};
+use glassine_installer::boot_patch::{Patched, patch_vendor_slotselect};
 use glassine_installer::execute::{InstallEdge, Job, Link, Outcome, Reach, Stopped, run};
 use glassine_installer::fastboot::{FbError, Transport};
 use glassine_installer::format1::{Description, Mode, Step};
@@ -179,6 +181,12 @@ impl World {
         }
     }
 
+    /// The stock boot partition (slot A's, after the table step) holding `img`.
+    fn with_boot(self, img: &[u8]) -> World {
+        let (b, _) = parse_gpt(&self.source, SECTOR).unwrap().extent("boot").unwrap();
+        self.ram.borrow_mut().disks[0].1.write(b, img);
+        self
+    }
     fn glassine_boot_loader(&self) -> bool {
         self.abl.starts_with(&self.boot_loader)
     }
@@ -247,6 +255,8 @@ struct Edge {
     last_done: Vec<String>,
     notes: Vec<String>,
     asked: Vec<String>,
+    /// What the executor kept on the computer (a boot image's original).
+    kept: BTreeMap<String, Vec<u8>>,
 }
 
 impl Edge {
@@ -260,6 +270,7 @@ impl Edge {
             last_done: vec![],
             notes: vec![],
             asked: vec![],
+            kept: BTreeMap::new(),
         }
     }
 }
@@ -321,6 +332,15 @@ impl InstallEdge for Edge {
         Ok(b)
     }
 
+    fn keep(&mut self, name: &str, bytes: &[u8]) -> Result<(), String> {
+        self.kept.insert(name.into(), bytes.to_vec());
+        Ok(())
+    }
+
+    fn kept(&mut self, name: &str) -> Result<Option<Vec<u8>>, String> {
+        Ok(self.kept.get(name).cloned())
+    }
+
     fn progress(&mut self, _: &str, _: u64, _: u64) {}
 
     fn note(&mut self, line: &str) {
@@ -340,11 +360,16 @@ fn description() -> Description {
 
 /// The developer plan without stock Android (every write step of the job).
 fn the_plan(d: &Description, developer: bool) -> String {
+    the_plan_keeping(d, developer, false)
+}
+
+/// The plan with Android kept on slot A (`keep`) or retired.
+fn the_plan_keeping(d: &Description, developer: bool, keep: bool) -> String {
     let ds = [d];
     let f = facts("noteair-stock-fastboot");
     let rec = recognize(&ds, &f);
     let input = Input {
-        choices: BTreeMap::from([("keep-stock".to_string(), "no".to_string())]),
+        choices: BTreeMap::from([("keep-stock".to_string(), if keep { "yes" } else { "no" }.to_string())]),
         hardware: BTreeMap::from([("emergency-cable".to_string(), true)]),
         developer,
         ..Default::default()
@@ -372,12 +397,7 @@ fn new_record(d: &Description, plan: &str, src: MemorySource) -> Record {
 }
 
 fn job(d: &Description) -> Job<'_> {
-    Job {
-        description: d,
-        description_sha256: sha256_hex(noteair().as_bytes()),
-        developer: true,
-        write_rules: BTreeMap::new(),
-    }
+    Job::new(d, sha256_hex(noteair().as_bytes()), true, "install").unwrap()
 }
 
 fn go(d: &Description, plan: &str, record: &mut Record, src: MemorySource, edge: &mut Edge) -> Result<Outcome, Stopped> {
@@ -387,6 +407,11 @@ fn go(d: &Description, plan: &str, record: &mut Record, src: MemorySource, edge:
 
 /// The device as an install leaves it.
 fn installed(w: &World) {
+    installed_as(w, false)
+}
+
+/// The device as an install leaves it, Android kept on slot A (`keep`) or retired.
+fn installed_as(w: &World, keep: bool) {
     let files = release_files();
     assert!(w.glassine_boot_loader(), "abl holds the GlassineOS boot loader");
     assert!(w.recovery.starts_with(&w.ram_environment));
@@ -403,7 +428,11 @@ fn installed(w: &World) {
     }
     let attrs = |n: &str| g.part(n).unwrap().attributes >> 48 & 0xff;
     assert_eq!(attrs("boot_b"), 0x7f, "slot B pinned");
-    assert_eq!(attrs("boot_a"), 0x80, "slot A retired");
+    if keep {
+        assert_eq!(attrs("boot_a"), 0x7d, "slot A a bootable fallback");
+    } else {
+        assert_eq!(attrs("boot_a"), 0x80, "slot A retired");
+    }
     assert_eq!(g.part("vendor_b").unwrap().attributes >> 56, 0x10, "bits above the slot flags kept");
     // the backup copy holds the same table
     let mut whole = DiskRead(disk);
@@ -432,10 +461,13 @@ fn installed(w: &World) {
     // step out and the recovery partition keeps the RAM environment
     // nothing but the table and the steps' partitions was written
     for (_, off, len) in &ram.written {
-        let inside = ["boot_b", "system_b", "vendor_b", "recovery"].iter().any(|n| {
-            let (o, l) = at(n);
-            *off >= o && off + len <= o + l
-        }) || off + len <= 18 * SECTOR
+        let inside = ["boot_b", "system_b", "vendor_b", "recovery", if keep { "boot_a" } else { "boot_b" }]
+            .iter()
+            .any(|n| {
+                let (o, l) = at(n);
+                *off >= o && off + len <= o + l
+            })
+            || off + len <= 18 * SECTOR
             || *off >= (DISK_SECTORS - 17) * SECTOR;
         assert!(inside, "a write at {off}+{len}");
     }
@@ -459,6 +491,23 @@ impl ReadAt for TornPrimary<'_> {
         }
         Ok(())
     }
+}
+
+/// A run that keeps Android, its boot partition holding `boot`.
+fn fresh_keeping(boot: &[u8]) -> (Description, String, MemorySource, Record, Edge) {
+    let d = description();
+    let plan = the_plan_keeping(&d, true, true);
+    let src = source(&release_files());
+    let rec = new_record(&d, &plan, src.clone());
+    (d, plan, src, rec, Edge::new(World::new().with_boot(boot)))
+}
+
+/// Slot A's boot partition as the device holds it, `n` bytes.
+fn boot_a(w: &World, n: usize) -> Vec<u8> {
+    let ram = w.ram.borrow();
+    let disk = &ram.disks[0].1;
+    let g = parse_gpt(&disk.read(0, 18 * SECTOR), SECTOR).unwrap();
+    disk.read(g.extent("boot_a").unwrap().0, n as u64)
 }
 
 fn fresh() -> (Description, String, MemorySource, Record, Edge) {
@@ -627,6 +676,107 @@ fn a_cut_inside_a_slot_flag_write_resumes_from_the_whole_copy() {
 }
 
 #[test]
+fn a_kept_android_gets_its_boot_image_changed_in_place() {
+    let img = boot_image(b"wait", 5000);
+    let (d, plan, src, mut rec, mut edge) = fresh_keeping(&img);
+    assert!(plan.contains("patch-stock-boot") && !plan.contains("\"retire-stock\""), "{plan}");
+    let r = go(&d, &plan, &mut rec, src, &mut edge);
+    assert!(matches!(r, Ok(Outcome::WaitingForAcceptance { .. })), "{r:?}\n{:#?}", edge.notes);
+    edge.w.sync();
+    installed_as(&edge.w, true);
+    let Patched::Changed(want) = patch_vendor_slotselect(&img).unwrap() else {
+        panic!()
+    };
+    assert_eq!(boot_a(&edge.w, want.len()), want);
+    assert_eq!(rec.state("patch-stock-boot"), StepState::Done);
+    let ev = &rec
+        .journal
+        .iter()
+        .find(|e| e.step == "patch-stock-boot")
+        .unwrap()
+        .outcome
+        .as_ref()
+        .unwrap()
+        .evidence;
+    assert_eq!(ev["original-sha256"].len(), 64);
+    assert!(ev["written"].starts_with(&format!("{} of", 16 * MIB)), "{ev:?}");
+    // the original was kept on the computer before the first write
+    assert!(edge.kept.values().any(|b| b.starts_with(&img)));
+}
+
+#[test]
+fn a_boot_image_the_change_refuses_is_left_and_the_run_goes_on() {
+    // the stock image's vendor entry still checks the partition
+    let img = boot_image(b"wait,verify", 5000);
+    let (d, plan, src, mut rec, mut edge) = fresh_keeping(&img);
+    let r = go(&d, &plan, &mut rec, src.clone(), &mut edge);
+    assert!(matches!(r, Ok(Outcome::WaitingForAcceptance { .. })), "{r:?}");
+    edge.w.sync();
+    installed_as(&edge.w, true);
+    assert_eq!(boot_a(&edge.w, img.len()), img, "nothing written");
+    assert_eq!(rec.state("patch-stock-boot"), StepState::Failed);
+    let o = rec
+        .journal
+        .iter()
+        .rev()
+        .find(|e| e.step == "patch-stock-boot")
+        .unwrap()
+        .outcome
+        .clone()
+        .unwrap();
+    assert!(o.message.as_deref().unwrap().contains("Nothing was written"), "{o:?}");
+    assert_eq!(rec.state("set-slot"), StepState::Done, "the run went on to the slot");
+    // a nothing-to-do image is done without a write
+    let Patched::Changed(done) = patch_vendor_slotselect(&boot_image(b"wait", 100)).unwrap() else {
+        panic!()
+    };
+    let (d, plan, src, mut rec, mut edge) = fresh_keeping(&done);
+    go(&d, &plan, &mut rec, src, &mut edge).unwrap();
+    let e = rec.journal.iter().find(|e| e.step == "patch-stock-boot").unwrap();
+    assert!(e.outcome.as_ref().unwrap().evidence["found"].contains("already"));
+}
+
+#[test]
+fn a_cut_inside_the_boot_image_write_resumes_from_the_kept_original() {
+    // a kernel past half of the first WRITE: the cut leaves the new header
+    // and the old device tree
+    let img = boot_image(b"wait", 9 * MIB);
+    let (d, plan, src, mut rec, mut edge) = fresh_keeping(&img);
+    go(&d, &plan, &mut rec, src.clone(), &mut edge).unwrap();
+    let boot_at = {
+        let ram = edge.w.ram.borrow();
+        let g = parse_gpt(&ram.disks[0].1.read(0, 18 * SECTOR), SECTOR).unwrap();
+        let (o, _) = g.extent("boot_a").unwrap();
+        ram.written.iter().position(|(_, off, _)| *off == o).expect("boot_a written")
+    };
+    let (d, plan, src, mut rec, mut edge) = fresh_keeping(&img);
+    edge.w.ram.borrow_mut().faults = WriteFaults {
+        cut_write: Some(boot_at),
+        ..Default::default()
+    };
+    let s = go(&d, &plan, &mut rec, src.clone(), &mut edge).unwrap_err();
+    assert_eq!(s.step.as_deref(), Some("patch-stock-boot"), "{s:?}");
+    assert!(s.may_have_changed);
+    let torn = boot_a(&edge.w, img.len());
+    assert_ne!(torn, img);
+    assert!(
+        patch_vendor_slotselect(&torn).is_err(),
+        "the half-written image is refused: only the original can be changed again"
+    );
+    edge.w.ram.borrow_mut().faults = WriteFaults::default();
+    let mut rec = Record::parse(edge.saved.as_ref().unwrap()).unwrap();
+    let r = go(&d, &plan, &mut rec, src, &mut edge);
+    assert!(matches!(r, Ok(Outcome::WaitingForAcceptance { .. })), "{r:?}\n{:#?}", edge.notes);
+    edge.w.sync();
+    installed_as(&edge.w, true);
+    let Patched::Changed(want) = patch_vendor_slotselect(&img).unwrap() else {
+        panic!()
+    };
+    assert_eq!(boot_a(&edge.w, want.len()), want);
+    assert!(edge.notes.iter().any(|n| n.contains("as read before the first write")));
+}
+
+#[test]
 fn a_cut_between_the_table_copies_leaves_a_whole_copy_and_resumes() {
     let (d, plan, src, mut rec, mut edge) = fresh();
     // the RAM environment's writes: 0 = the backup copy, 1 = the primary
@@ -790,6 +940,23 @@ fn the_partition_table_is_never_sent_to_a_boot_loader() {
     let fb = edge.w.fb.as_ref().unwrap().borrow();
     assert!(!fb.sent("flash:partition") && !fb.sent("download:"));
     assert!(!fb.erased_whole_disk);
+}
+
+#[test]
+fn a_system_partition_is_never_flashed_and_steps_write_only_their_own() {
+    // abl switches verified boot to enforcing before a system* flash, which writes devinfo
+    let (mut d, plan, src, mut rec, mut edge) = fresh();
+    with_param(&mut d, "write-ram-environment", "partition", "system_b");
+    let s = go(&d, &plan, &mut rec, src, &mut edge).unwrap_err();
+    assert!(s.why.contains("devinfo"), "{s}");
+    let fb = edge.w.fb.as_ref().unwrap().borrow();
+    assert!(!fb.sent("flash:system_b") && !fb.sent("download:"));
+    // a partition no step of the job writes in that mode
+    let (mut d, plan, src, mut rec, mut edge) = fresh();
+    let st = d.steps.iter_mut().find(|s| s.id == "write-ram-environment").unwrap();
+    st.params.insert("partition".into(), toml::Value::String("glassine_scratch".into()));
+    let s = go(&d, &plan, &mut rec, src, &mut edge).unwrap_err();
+    assert!(s.why.contains("no step of the installation writes glassine_scratch"), "{s}");
 }
 
 #[test]

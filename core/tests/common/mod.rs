@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #![allow(dead_code)]
+pub mod bootimg;
 pub mod fbsim;
 pub mod img;
 pub mod ramsim;

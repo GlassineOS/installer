@@ -32,6 +32,7 @@ pub async fn flash<T: Transport, S: ArtifactSource>(
             return Err(OpError {
                 why: format!("{part}: {e}"),
                 may_have_changed: e.partition_may_have_changed(),
+                goes_on: false,
             });
         }
     }
@@ -75,6 +76,7 @@ pub async fn write_ram<T: Transport, S: ArtifactSource>(
         r.read_at(at, &mut buf[..real]).map_err(|e| OpError {
             why: e,
             may_have_changed: at > 0,
+            goes_on: false,
         })?;
         w.write(disk, start + at, &buf[..n]).await.map_err(|e| ram_err(e, true))?;
         hashes.feed(&buf[..n]);
