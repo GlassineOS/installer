@@ -126,6 +126,17 @@ export const PARTITION_FOR = {
   recovery: 'the recovery partition',
 };
 
+// What an artifact is, for a partition that keeps it at the end of a plan that leaves a
+// step out (plan left_out[].holds_instead[].artifact; vocab ARTIFACT_ROLES).
+export const ARTIFACT = {
+  'ram-environment': 'the installer’s helper',
+  recovery: 'GlassineOS’s recovery',
+  kernel: 'GlassineOS’s kernel',
+  base: 'GlassineOS',
+  'boot-loader': 'GlassineOS’s boot loader',
+  'partition-layout': 'the partition table',
+};
+
 // Operating systems found (report systems[].kind; plan systems[].system is "system N (kind)").
 export const SYSTEM_KIND = { windows: 'Windows', linux: 'Linux', macos: 'macOS', android: 'Android', other: 'Another system' };
 

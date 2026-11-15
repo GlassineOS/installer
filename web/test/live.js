@@ -201,17 +201,18 @@ async function main() {
     const sent = (await usbLog(page)).outs.length;
     await page.click('#plan');
     await rendered(page, 'plan');
-    assert.ok(await page.$('#needs-answers'), 'the plan has a question first');
+    // For people the Note Air is refused until its recovery is built; the question is still asked.
+    assert.match(await page.$eval('#refused', (x) => x.textContent), /can’t be installed yet/);
     const golden = (g) => json(`core/tests/golden/${g}.json`);
     assert.deepStrictEqual((await records(page, 'plan', 'live-1', {})).steps.map((x) => x.id), golden('noteair-keep-stock').steps.map((x) => x.id));
     // Answering re-plans from the same facts: no new inspect.
     await page.evaluate(() => document.querySelectorAll('input[name="hw-emergency-cable"]')[0].click());
     await page.waitForFunction(() => document.documentElement.dataset.hash.includes('hardware.emergency-cable=yes') && document.documentElement.dataset.hash === location.hash && document.documentElement.dataset.ready === 'plan', { timeout: 15000 });
-    await page.waitForSelector('#developer-only', { timeout: 15000 });
+    await page.waitForSelector('#refused', { timeout: 15000 });
     const p = await records(page, 'plan', 'live-1', { hardware: { 'emergency-cable': true } });
     assert.strictEqual(p.status, golden('noteair-cable-yes').status);
     assert.deepStrictEqual(p.steps.map((x) => x.id), golden('noteair-cable-yes').steps.map((x) => x.id));
-    assert.strictEqual(await page.$$eval('li[data-step]:not(details li)', (x) => x.length), p.steps.length);
+    assert.strictEqual(await page.$$eval('li[data-step]:not(details li)', (x) => x.length), 0, 'a refused plan shows no steps');
     // A choice the core's tests never planned still gets the core's answer (with fixtures it had none).
     await page.evaluate(() => document.querySelectorAll('input[name="hw-emergency-cable"]')[1].click());
     await page.waitForFunction(() => document.documentElement.dataset.hash.includes('hardware.emergency-cable=no') && document.documentElement.dataset.hash === location.hash && document.documentElement.dataset.ready === 'plan', { timeout: 15000 });

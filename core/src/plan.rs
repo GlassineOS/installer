@@ -65,6 +65,9 @@ pub struct Plan {
     pub job: Option<String>,
     pub status: Status,
     pub reasons: Vec<String>,
+    /// Refused only because the release doesn't have an artifact yet: a
+    /// developer who asks may run it without (001 FR-016a).
+    pub developer_may: bool,
     pub questions: Vec<Question>,
     pub choices: Vec<ChoiceMade>,
     pub systems: Vec<SystemOutcome>,
@@ -80,6 +83,43 @@ pub struct Plan {
     pub capabilities: Vec<CapabilityPlan>,
     pub steps: Vec<StepPlan>,
     pub untried_steps: Vec<String>,
+    /// Steps a developer's plan leaves out (001 FR-016a, 002 FR-022).
+    pub left_out: Vec<LeftOut>,
+}
+
+/// A step a developer's plan leaves out: it writes an artifact the release
+/// doesn't have yet, one a capability `needs` (001 FR-016a, 002 FR-022).
+#[derive(Debug, Clone, Serialize)]
+pub struct LeftOut {
+    pub step: String,
+    pub artifact: String,
+    /// The capability the device ends without.
+    pub capability: String,
+    /// What is missing, in the description's words (its `with`).
+    pub missing: Option<String>,
+    /// What each partition the step would write holds instead.
+    pub holds_instead: Vec<HoldsInstead>,
+}
+
+/// What a partition holds instead: what the last kept step that writes it
+/// writes (its artifact, when it has one), or, with no such step, what it
+/// holds now.
+#[derive(Debug, Clone, Serialize)]
+pub struct HoldsInstead {
+    pub partition: String,
+    pub step: Option<String>,
+    pub artifact: Option<String>,
+}
+
+impl HoldsInstead {
+    /// In words, for the text plan.
+    pub fn text(&self) -> String {
+        match (&self.step, &self.artifact) {
+            (Some(st), Some(a)) => format!("the {a}, which step {st} writes"),
+            (Some(st), None) => format!("what step {st} writes"),
+            _ => "what it holds now".into(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -293,6 +333,7 @@ fn refused(d: Option<&Description>, facts: &Snapshot, state: Option<String>, rea
         job: None,
         status: Status::Refused,
         reasons,
+        developer_may: false,
         questions: vec![],
         choices: vec![],
         systems: vec![],
@@ -306,6 +347,7 @@ fn refused(d: Option<&Description>, facts: &Snapshot, state: Option<String>, rea
         capabilities: vec![],
         steps: vec![],
         untried_steps: vec![],
+        left_out: vec![],
     }
 }
 
@@ -475,6 +517,16 @@ pub fn plan(ds: &[&Description], facts: &Snapshot, rec: &Recognition, input: &In
         }
     }
 
+    // The artifacts the release doesn't have yet: those a capability the
+    // choices select still `needs` (001 FR-016a, 002 FR-022).
+    let missing: BTreeMap<&str, &crate::format1::CapabilityEntry> = d
+        .capabilities
+        .iter()
+        .filter(|c| c.status == "needs" && c.when.as_ref().is_none_or(|w| holds(w, None)))
+        .filter_map(|c| Some((vocab::CAPABILITIES.iter().find(|v| v.id == c.id)?.artifact?, c)))
+        .collect();
+    let artifact_of = |s: &Step| s.params.get("artifact").and_then(|v| v.as_str()).map(str::to_string);
+
     // The steps the choices select, in their order.
     let mut insts: Vec<Inst> = Vec::new();
     for s in d.steps.iter().filter(|s| s.job == job.id) {
@@ -496,7 +548,51 @@ pub fn plan(ds: &[&Description], facts: &Snapshot, rec: &Recognition, input: &In
             });
         }
     }
-    let insts = order(insts);
+    // A developer's plan leaves out the steps that write a missing artifact;
+    // for people the installation is refused while one is missing.
+    let mut dropped: Vec<Inst> = Vec::new();
+    let mut needed_by: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut kept = Vec::new();
+    for i in insts {
+        match artifact_of(i.step).filter(|a| missing.contains_key(a.as_str())) {
+            Some(a) => {
+                needed_by.entry(a).or_default().push(i.id.clone());
+                if input.developer {
+                    dropped.push(i);
+                } else {
+                    kept.push(i);
+                }
+            }
+            None => kept.push(i),
+        }
+    }
+    let mut people_reasons = Vec::new();
+    if !input.developer {
+        for (a, ids) in &needed_by {
+            let c = missing[a.as_str()];
+            people_reasons.push(format!(
+                "the installation needs {}: it is refused until that is there (step {} writes it); a developer may install without it",
+                c.with.clone().unwrap_or_else(|| format!("the {a}")),
+                ids.join(", ")
+            ));
+        }
+    }
+    let insts = order(kept);
+    let left: BTreeSet<&str> = dropped.iter().map(|i| i.step.id.as_str()).collect();
+
+    // Partitions the table step renames (002 FR-014b): a step or a rule may
+    // name one by either name, whichever table inspecting finds.
+    let mut alias: BTreeMap<String, String> = BTreeMap::new();
+    for s in d.steps.iter().filter(|s| s.job == job.id && s.kind == "write-partition-table") {
+        if let Some(toml::Value::Table(r)) = s.params.get("renames") {
+            for (old, new) in r {
+                if let Some(new) = new.as_str() {
+                    alias.insert(old.clone(), new.to_string());
+                    alias.insert(new.to_string(), old.clone());
+                }
+            }
+        }
+    }
 
     // Partitions as the facts show them.
     let parts = parts_of(d, facts, target_disk);
@@ -526,7 +622,11 @@ pub fn plan(ds: &[&Description], facts: &Snapshot, rec: &Recognition, input: &In
                 _ => parts.iter().filter(|p| p.roles.contains(role)).cloned().collect(),
             };
         }
-        match parts.iter().find(|p| p.name.as_deref() == Some(r)) {
+        let found = parts
+            .iter()
+            .find(|p| p.name.as_deref() == Some(r))
+            .or_else(|| alias.get(r).and_then(|a| parts.iter().find(|p| p.name.as_deref() == Some(a.as_str()))));
+        match found {
             Some(p) => vec![p.clone()],
             None if creating => vec![Part {
                 display: r.to_string(),
@@ -560,9 +660,9 @@ pub fn plan(ds: &[&Description], facts: &Snapshot, rec: &Recognition, input: &In
                     .type_guid
                     .as_deref()
                     .is_some_and(|t| t.eq_ignore_ascii_case(s.type_guid.as_deref().unwrap_or_default())),
-                (Some(n), s) => {
+                (Some(n), s) => std::iter::once(n).chain(alias.get(n)).any(|n| {
                     s.name.as_deref() == Some(n) || s.names.as_ref().is_some_and(|x| x.contains(n)) || s.pattern.as_deref().is_some_and(|pat| glob(pat, n))
-                }
+                }),
                 (None, _) => false,
             };
             if hit {
@@ -713,11 +813,7 @@ pub fn plan(ds: &[&Description], facts: &Snapshot, rec: &Recognition, input: &In
         let esc = |e: &crate::format1::EscapeCase| EscapePlan {
             leaves: e.leaves.clone(),
             hardware: e.hardware.clone(),
-            way_out: match (&e.way_out.step, &e.way_out.transition) {
-                (Some(st), _) => format!("step {st}"),
-                (_, Some(t)) => format!("transition {t}"),
-                _ => String::new(),
-            },
+            way_out: way_out(d, &e.way_out, &left),
         };
         steps.push(StepPlan {
             id: inst.id.clone(),
@@ -996,10 +1092,11 @@ pub fn plan(ds: &[&Description], facts: &Snapshot, rec: &Recognition, input: &In
     if let Some(c) = caps.iter().find(|c| c.id == "keep-stock") {
         systems.push(SystemOutcome {
             system: "stock system".into(),
-            outcome: if c.status == "have" {
-                "kept and still startable".into()
-            } else {
-                "not kept".into()
+            outcome: match c.status.as_str() {
+                "have" => "kept and still startable".into(),
+                // Kept on the device, but it doesn't start until what it needs is there.
+                "needs" => "kept, not startable".into(),
+                _ => "not kept".into(),
             },
         });
     }
@@ -1028,6 +1125,9 @@ pub fn plan(ds: &[&Description], facts: &Snapshot, rec: &Recognition, input: &In
             answer,
         });
     }
+    // Refused for people only: a developer who asks may run it (001 FR-016a).
+    let developer_may = reasons.is_empty() && !people_reasons.is_empty();
+    reasons.extend(people_reasons);
     let status = if !reasons.is_empty() {
         Status::Refused
     } else if questions.iter().any(|q| q.answer.is_none()) {
@@ -1043,6 +1143,37 @@ pub fn plan(ds: &[&Description], facts: &Snapshot, rec: &Recognition, input: &In
             untried.join(", ")
         ));
     }
+
+    // What a left-out step's partitions hold instead: what the last kept
+    // step that writes them writes, else what they hold now.
+    let left_out = dropped
+        .iter()
+        .map(|i| {
+            let artifact = artifact_of(i.step).unwrap_or_default();
+            let c = missing[artifact.as_str()];
+            let holds_instead = i
+                .step
+                .writes
+                .iter()
+                .map(|w| {
+                    let same = |x: &String| x == w || alias.get(x) == Some(w);
+                    let by = insts.iter().rev().find(|k| k.step.writes.iter().any(same));
+                    HoldsInstead {
+                        partition: w.clone(),
+                        step: by.map(|k| k.id.clone()),
+                        artifact: by.and_then(|k| artifact_of(k.step)),
+                    }
+                })
+                .collect();
+            LeftOut {
+                step: i.id.clone(),
+                artifact,
+                capability: c.id.clone(),
+                missing: c.with.clone(),
+                holds_instead,
+            }
+        })
+        .collect();
 
     let touched: BTreeSet<&str> = pplans.keys().map(String::as_str).collect();
     let imaged: BTreeSet<u32> = backup.images.iter().map(|i| i.index).collect();
@@ -1066,6 +1197,7 @@ pub fn plan(ds: &[&Description], facts: &Snapshot, rec: &Recognition, input: &In
         job: Some(job.id.clone()),
         status,
         reasons,
+        developer_may,
         questions,
         choices: made,
         systems,
@@ -1083,6 +1215,27 @@ pub fn plan(ds: &[&Description], facts: &Snapshot, rec: &Recognition, input: &In
         capabilities: caps,
         steps,
         untried_steps: untried,
+        left_out,
+    }
+}
+
+/// A way out as the plan shows it. A way out through a step the plan leaves
+/// out goes on where that step's own interruption would.
+fn way_out(d: &Description, w: &crate::format1::WayOut, left: &BTreeSet<&str>) -> String {
+    let mut w = w;
+    for _ in 0..d.steps.len() {
+        match (&w.step, &w.transition) {
+            (Some(st), _) if left.contains(st.as_str()) => match d.step(st) {
+                Some(s) => w = &s.escape.interruption.way_out,
+                None => break,
+            },
+            _ => break,
+        }
+    }
+    match (&w.step, &w.transition) {
+        (Some(st), _) => format!("step {st}"),
+        (_, Some(t)) => format!("transition {t}"),
+        _ => String::new(),
     }
 }
 
@@ -1439,6 +1592,27 @@ pub fn render(p: &Plan, d: Option<&Description>) -> String {
         for c in &p.capabilities {
             let w = c.with.as_ref().map(|w| format!(" ({w})")).unwrap_or_default();
             line(&mut o, format!("  {} {}{w}{}", c.status, c.id, if c.tried { "" } else { " [untried]" }));
+        }
+    }
+    if !p.left_out.is_empty() {
+        line(&mut o, "\nLeft out (a developer's run; the release doesn't have what they write):".into());
+        for l in &p.left_out {
+            let doc = crate::vocab::CAPABILITIES
+                .iter()
+                .find(|c| c.id == l.capability)
+                .map_or(l.capability.as_str(), |c| c.doc);
+            line(
+                &mut o,
+                format!(
+                    "  {}: writes the {}, which the release doesn't have{}. The device ends without {doc}.",
+                    l.step,
+                    l.artifact,
+                    l.missing.as_ref().map(|m| format!(" ({m})")).unwrap_or_default()
+                ),
+            );
+            for h in &l.holds_instead {
+                line(&mut o, format!("    {} holds {} instead.", h.partition, h.text()));
+            }
         }
     }
     if !p.steps.is_empty() {

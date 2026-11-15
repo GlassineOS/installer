@@ -1042,11 +1042,16 @@ pub fn step_kind(id: &str) -> Option<&'static Kind> {
 }
 
 /// A capability id. `safe_boot`: a device lacking it is refused (001 FR-016).
+/// `artifact`: the artifact role that brings it; while the description says
+/// the capability `needs` something, the release doesn't have that artifact,
+/// so an installation is refused for people and a developer's plan leaves
+/// out the steps that write it (001 FR-016a, 002 FR-022).
 #[derive(Debug)]
 pub struct Capability {
     pub id: &'static str,
     pub doc: &'static str,
     pub safe_boot: bool,
+    pub artifact: Option<&'static str>,
 }
 
 pub const CAPABILITIES: &[Capability] = &[
@@ -1054,36 +1059,43 @@ pub const CAPABILITIES: &[Capability] = &[
         id: "start-kernel",
         doc: "starts a GlassineOS kernel of the installation's choice",
         safe_boot: true,
+        artifact: None,
     },
     Capability {
         id: "fallback-boot",
         doc: "falls back to the previous boot when a new one isn't accepted",
         safe_boot: false,
+        artifact: None,
     },
     Capability {
         id: "trial-boot",
         doc: "a one-shot trial boot of a new kernel or deployment",
         safe_boot: false,
+        artifact: None,
     },
     Capability {
         id: "recovery",
         doc: "the GlassineOS recovery",
         safe_boot: false,
+        artifact: Some("recovery"),
     },
     Capability {
         id: "keep-stock",
         doc: "keeps the stock system next to GlassineOS",
         safe_boot: false,
+        artifact: None,
     },
     Capability {
         id: "secondary-recovery",
         doc: "the kept system's own recovery stays reachable",
         safe_boot: false,
+        artifact: None,
     },
     Capability {
         id: "choose-at-start",
         doc: "the person picks the system at start-up",
         safe_boot: false,
+        artifact: None,
     },
 ];
 

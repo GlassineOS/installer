@@ -1,0 +1,98 @@
+Plan (dry run) for Onyx Boox Note Air
+State: stock. Job: install.
+Status: needs answers
+
+Questions:
+  Do you have the emergency-cable? Only it gets the device out if step replace-boot-loader goes wrong. Answer: not answered
+
+Choices:
+  keep-stock = yes (default)
+  backup = full (default)
+  backup-to = computer (default)
+
+Systems:
+  stock system: kept, not startable
+
+Partitions:
+  abl (replace, 1.0 MiB): writes
+  recovery (replace, 64.0 MiB): writes
+  partition table (replace): writes
+  boot_b (create): creates, writes
+  system_b (create): creates, writes
+  vendor_b (create): creates, writes
+  userdata (resize, 24.0 GiB): resizes
+    Everything on it is deleted: files on it are lost.
+  vendor (never-write, 800.0 MiB): reads
+  44 other partitions are only read, into the backup; 0 are not touched.
+
+Backup (default), to this computer, checked by reading it back before the first write:
+  disk 0, whole: the partition table and every partition; about 8.6 GiB, stored compressed; only the used blocks where the file system tells them, every block elsewhere
+  You can switch it off (choice backup = off). Without the backup there is no way back to the maker's system and no repair from the backup. The values unique to the device are still kept.
+
+How the machine starts:
+  boot-loader (boot-loader): back-up, change
+  slot-flags (slot-flags): back-up, change
+
+Kept from the device:
+  device data: display waveform
+  device data: modem and audio processor firmware
+  device data: Wi-Fi board file
+  device data: Bluetooth firmware
+  device data: graphics firmware
+  device data: speaker tuning
+  device data: sensor calibration
+
+Space on the computer:
+  backup 8.6 GiB
+  artifacts 0 B plus base, boot-loader, kernel, partition-layout, ram-environment of unknown size
+  at least 8.6 GiB
+
+Least sizes from the release:
+  system_b (for the base): 3.0 GiB; what the release asks is not known yet
+
+Afterwards the device:
+  have start-kernel [untried]
+  have fallback-boot [untried]
+  lack trial-boot [untried]
+  needs recovery (the GlassineOS recovery, which isn't built yet) [untried]
+  needs keep-stock (slot A's boot image changed to mount its own slot's vendor partition, which the installation doesn't do yet) [untried]
+  lack secondary-recovery [untried]
+  needs choose-at-start (a way to pick a slot at start-up, which isn't decided) [untried]
+
+Left out (a developer's run; the release doesn't have what they write):
+  write-recovery: writes the recovery, which the release doesn't have (the GlassineOS recovery, which isn't built yet). The device ends without the GlassineOS recovery.
+    recovery holds the ram-environment, which step write-ram-environment writes instead.
+
+Steps:
+  1. back-up (back-up, in emergency) [safe stop]
+     Back up the device's whole storage, every partition and the partition table, to this computer, through its emergency mode and the programmer you supplied, and check the backup by reading it back.
+     if it fails: previous-system-starts via transition emergency-by-hand
+     if cut off after it: previous-system-starts via transition emergency-by-hand
+  2. replace-boot-loader (write-boot-loader, in fastboot-stock) [untried, point of no return, safe stop]
+     Replace the boot loader with GlassineOS's. From here there is no way back without the backup, and if this step fails only the emergency-mode cable helps.
+     if it fails: special-hardware (emergency-cable) via transition cable-to-emergency
+     if cut off after it: previous-system-starts via transition fastboot-to-android
+  3. write-ram-environment (write-image, in fastboot) [untried, safe stop]
+     Put the installer's helper on the device, in place of the stock recovery. The device restarts into it to write the rest.
+     if it fails: previous-system-starts via transition fastboot-to-android
+     if cut off after it: previous-system-starts via transition fastboot-to-android
+  4. partition-table (write-partition-table, in ram) [untried, point of no return, safe stop]
+     Give the device a second slot for GlassineOS. The data partition is made smaller: everything on it is deleted.
+     if it fails: installer-can-finish via step partition-table
+     if cut off after it: installer-can-finish via step write-kernel
+  5. write-kernel (write-image, in ram) [untried, safe stop]
+     Write the GlassineOS kernel to slot B.
+     if it fails: installer-can-finish via step write-kernel
+     if cut off after it: installer-can-finish via step write-base
+  6. write-base (write-base, in ram) [untried, safe stop]
+     Write GlassineOS to slot B.
+     if it fails: installer-can-finish via step write-base
+     if cut off after it: installer-can-finish via step write-vendor
+  7. write-vendor (copy-partition, in ram) [untried, safe stop]
+     Copy the device's own vendor files to slot B.
+     if it fails: installer-can-finish via step write-vendor
+     if cut off after it: installer-can-finish via step set-slot
+  8. set-slot (set-boot-slot, in ram) [untried, safe stop]
+     Start GlassineOS by default.
+     if it fails: installer-can-finish via step set-slot
+     if cut off after it: glassine-starts via transition ram-to-glassine

@@ -1,6 +1,7 @@
 Plan (dry run) for Onyx Boox Note Air
 State: stock. Job: install.
-Status: needs answers
+Status: refused
+  - the installation needs the GlassineOS recovery, which isn't built yet: it is refused until that is there (step write-recovery writes it); a developer may install without it
 
 Questions:
   Do you have the emergency-cable? Only it gets the device out if step replace-boot-loader goes wrong. Answer: not answered
@@ -11,7 +12,7 @@ Choices:
   backup-to = computer (default)
 
 Systems:
-  stock system: not kept
+  stock system: kept, not startable
 
 Partitions:
   abl (replace, 1.0 MiB): writes
