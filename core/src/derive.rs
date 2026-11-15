@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //! The files of the installed system that state a device fact the description
 //! holds (spec 002 FR-030), derived from the description: the device-data list
-//! (FR-018, boot 006 FR-001) and the slot of the system an installation keeps
-//! next to GlassineOS. The device's package runs this at its build, so no such
-//! file is written by hand.
+//! (FR-018, boot 006 FR-001), the slot of the system an installation keeps next
+//! to GlassineOS, and where glassine-deploy finds the system and the data
+//! partitions (FR-018c). The device's package runs this at its build, so no
+//! such file is written by hand.
 
 use crate::format1::{Description, DeviceDataFile, DeviceDatum};
 
@@ -36,8 +37,20 @@ pub fn derive(d: &Description) -> Result<Vec<Derived>, String> {
             content,
         });
     }
+    if let Some(content) = deploy_conf(d)? {
+        out.push(Derived {
+            file: "deploy.conf.device",
+            installed_at: DEPLOY_DEVICE_AT,
+            content,
+        });
+    }
     Ok(out)
 }
+
+/// Where the installed system holds the device's part of glassine-deploy's
+/// configuration. The device's package puts these lines into
+/// `/etc/glassine/deploy.conf` with its own settings, which aren't device facts.
+pub const DEPLOY_DEVICE_AT: &str = "/usr/share/glassine/deploy.conf.device";
 
 const WIDTH: usize = 88;
 
@@ -171,5 +184,65 @@ pub fn slots_conf(d: &Description) -> Result<Option<String>, String> {
         &format!("Derived from the device's description ({INSTALLED_AT}) when its package is built: change the description, never this file."),
     );
     o.push_str(&format!("ANDROID_SLOT={slot}\n"));
+    Ok(Some(o))
+}
+
+/// The partitions the steps create for the system GlassineOS installs (a
+/// `role = "system"` entry of a step's `partitions`), each name once.
+pub fn system_partitions(d: &Description) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for s in &d.steps {
+        let Some(toml::Value::Array(ps)) = s.params.get("partitions") else {
+            continue;
+        };
+        for p in ps {
+            if p.get("role").and_then(|v| v.as_str()) != Some("system") {
+                continue;
+            }
+            if let Some(n) = p.get("name").and_then(|v| v.as_str())
+                && !out.iter().any(|x| x == n)
+            {
+                out.push(n.to_string());
+            }
+        }
+    }
+    out
+}
+
+/// The device's part of glassine-deploy's configuration (GlassineOS/boot
+/// conf/deploy.conf.example): `SYSTEM_DEV`, `USERDATA_DEV` and
+/// `USERDATA_RESERVE_KIB`, from the system partition the steps create and the
+/// data partition (FR-018c). `None` when the description names no data
+/// partition.
+pub fn deploy_conf(d: &Description) -> Result<Option<String>, String> {
+    let Some(data) = &d.data_partition else {
+        return Ok(None);
+    };
+    let system = match system_partitions(d).as_slice() {
+        [one] => one.clone(),
+        [] => return Err("the description names a data partition but no step creates a system partition".into()),
+        more => return Err(format!("the system partition is ambiguous: the steps create {}", more.join(", "))),
+    };
+    let Some(reserve) = data.keep_free_kib() else {
+        return Err(format!("data_partition.keep_free_at_end {:?} is not a size", data.keep_free_at_end));
+    };
+    let mut o = String::new();
+    comment(
+        &mut o,
+        &format!(
+            "The {}'s facts for glassine-deploy (GlassineOS/boot conf/deploy.conf.example): the \
+             system partition, the person's data partition and the space the first start leaves \
+             free at the data partition's end. The device's package puts these lines into \
+             /etc/glassine/deploy.conf with its own settings.",
+            d.name
+        ),
+    );
+    comment(
+        &mut o,
+        &format!("Derived from the device's description ({INSTALLED_AT}) when its package is built: change the description, never this file."),
+    );
+    o.push_str(&format!("SYSTEM_DEV=/dev/disk/by-partlabel/{system}\n"));
+    o.push_str(&format!("USERDATA_DEV=/dev/disk/by-partlabel/{}\n", data.name));
+    o.push_str(&format!("USERDATA_RESERVE_KIB={reserve}\n"));
     Ok(Some(o))
 }

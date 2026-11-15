@@ -1,0 +1,9 @@
+# The Onyx Boox Note Air's facts for glassine-deploy (GlassineOS/boot
+# conf/deploy.conf.example): the system partition, the person's data partition and the
+# space the first start leaves free at the data partition's end. The device's package
+# puts these lines into /etc/glassine/deploy.conf with its own settings.
+# Derived from the device's description (/usr/share/glassine/device.toml) when its
+# package is built: change the description, never this file.
+SYSTEM_DEV=/dev/disk/by-partlabel/system_b
+USERDATA_DEV=/dev/disk/by-partlabel/userdata
+USERDATA_RESERVE_KIB=16

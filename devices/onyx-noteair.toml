@@ -7,7 +7,7 @@
 # ships a copy (devices/lock.toml). Only what a recorded run shows is
 # `verified`; everything else is `untried`, with what is known in its note.
 
-format = 3
+format = 4
 id = "onyx-noteair"
 name = "Onyx Boox Note Air"
 backend = "android-bootloader"
@@ -374,6 +374,15 @@ destroys = true
 select = { role = "disk" }
 class = "never-write"
 back_up = { mode = "emergency", means = "emergency-read", check = "read-back-compare", size = 9200000000 }
+
+# The person's data on the installed system: GlassineOS keeps its deployments
+# and the person's files on the data partition the installation shrinks. Its
+# last 16 KiB stay free: stock Android on slot A keeps its encryption footer
+# there and refuses a data file system that reaches into it ("Orig filesystem
+# overlaps crypto footer region", seen in development, 2026-06-02).
+[data_partition]
+name = "userdata"
+keep_free_at_end = "16KiB"
 
 [[boot_settings]]
 id = "boot-loader"
