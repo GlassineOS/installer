@@ -103,12 +103,8 @@ enum At {
 
 /// The artifacts of the test release, by role.
 fn release_files() -> BTreeMap<&'static str, (Vec<u8>, Option<&'static str>)> {
-    let mut recipe: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(common::root().join("core/tests/fixtures/gpt/noteair-ab.recipe.json")).unwrap()).unwrap();
-    // GUIDs derived from the unit's disk GUID
-    for n in recipe["new"].as_array_mut().unwrap() {
-        n["guid"] = "".into();
-    }
+    // The layout releases carry (GUIDs left empty: derived from the unit's disk GUID).
+    let recipe: serde_json::Value = serde_json::from_slice(&std::fs::read(common::root().join("layouts/onyx-noteair.json")).unwrap()).unwrap();
     BTreeMap::from([
         ("boot-loader", (image(200 * 1024, 31), Some("raw-image"))),
         ("ram-environment", (image(MIB, 32), Some("raw-image"))),
