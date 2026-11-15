@@ -210,6 +210,49 @@ pub async fn read_gpt<T: Transport>(w: &mut Writer<T>, disk: u32, sector: u64) -
     parse_gpt(&all, sector)
 }
 
+/// The primary table as the backup copy at the disk's end holds it, with
+/// `mbr` as sector 0: for a primary torn by a cut write (the backup copy is
+/// always written first and checked).
+pub async fn gpt_from_backup<T: Transport>(w: &mut Writer<T>, disk: u32, sector: u64, disk_bytes: u64, mbr: &[u8]) -> Result<Gpt, String> {
+    if mbr.len() as u64 != sector || mbr[510..512] != [0x55, 0xaa] {
+        return Err("no protective MBR to put in front of the backup copy".into());
+    }
+    let last = disk_bytes / sector - 1;
+    let h = w.read(disk, last * sector, sector).await.map_err(|e| e.to_string())?;
+    if &h[0..8] != b"EFI PART" {
+        return Err("no GPT header in the disk's last sector".into());
+    }
+    let hsize = le32(&h, 12) as usize;
+    if !(92..=sector as usize).contains(&hsize) {
+        return Err(format!("a backup header of {hsize} bytes"));
+    }
+    let mut hc = h[..hsize].to_vec();
+    hc[16..20].fill(0);
+    if crc32(&hc) != le32(&h, 16) || le64(&h, 24) != last {
+        return Err("the backup header is broken".into());
+    }
+    let (at, n, esize) = (le64(&h, 72), le32(&h, 80) as u64, le32(&h, 84) as u64);
+    if esize != 128 || n == 0 || n > 1024 || at >= last {
+        return Err(format!("a backup table this installer doesn't write ({n} entries of {esize} bytes at {at})"));
+    }
+    let array_sectors = (n * 128).div_ceil(sector);
+    let array = w.read_all(disk, at * sector, array_sectors * sector).await.map_err(|e| e.to_string())?;
+    if crc32(&array[..(n * 128) as usize]) != le32(&h, 88) {
+        return Err("the backup entry array CRC is wrong".into());
+    }
+    let mut ph = h.clone();
+    ph[24..32].copy_from_slice(&1u64.to_le_bytes());
+    ph[32..40].copy_from_slice(&last.to_le_bytes());
+    ph[72..80].copy_from_slice(&2u64.to_le_bytes());
+    ph[16..20].fill(0);
+    let c = crc32(&ph[..hsize]);
+    ph[16..20].copy_from_slice(&c.to_le_bytes());
+    let mut primary = mbr.to_vec();
+    primary.extend_from_slice(&ph);
+    primary.extend_from_slice(&array);
+    parse_gpt(&primary, sector)
+}
+
 /// A unique partition GUID derived from the unit's own disk GUID and the
 /// partition's name: the same on every build for this unit (a resumed
 /// table step writes the same bytes again), different between units. The

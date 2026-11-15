@@ -159,23 +159,28 @@ fn open_error(e: usb::OpenError) -> String {
 }
 
 impl CliEdge<'_> {
-    fn try_fastboot(&self) -> Result<Option<usb::UsbTransport>, String> {
-        match usb::find_kind(usb::Kind::Fastboot) {
-            Ok(info) => usb::open_kind(&info, usb::Kind::Fastboot).map(|(t, _)| Some(t)).map_err(open_error),
-            Err(usb::OpenError::NoDevice) => Ok(None),
-            Err(e) => Err(open_error(e)),
-        }
-    }
-    fn try_ram(&self) -> Result<Option<usb::UsbTransport>, String> {
-        match usb::find_kind(usb::Kind::RamRead) {
-            Ok(info) => usb::open_kind(&info, usb::Kind::RamRead)
-                .map(|(mut t, _)| {
-                    t.set_timeout(RAM_TRANSFER_TIMEOUT);
+    /// The device's interface of `kind`, if one is there. An open that fails
+    /// (busy, no access yet: udev applies it a moment after the device shows
+    /// up) is kept as `last` and tried again until the deadline.
+    fn try_kind(&self, kind: usb::Kind, last: &mut String) -> Option<usb::UsbTransport> {
+        match usb::find_kind(kind) {
+            Ok(info) => match usb::open_kind(&info, kind) {
+                Ok((mut t, _)) => {
+                    if kind == usb::Kind::RamRead {
+                        t.set_timeout(RAM_TRANSFER_TIMEOUT);
+                    }
                     Some(t)
-                })
-                .map_err(open_error),
-            Err(usb::OpenError::NoDevice) => Ok(None),
-            Err(e) => Err(open_error(e)),
+                }
+                Err(e) => {
+                    *last = open_error(e);
+                    None
+                }
+            },
+            Err(usb::OpenError::NoDevice) => None,
+            Err(e) => {
+                *last = open_error(e);
+                None
+            }
         }
     }
 }
@@ -213,14 +218,15 @@ impl InstallEdge for CliEdge<'_> {
             Reach::AskPerson { text, .. } => eprintln!("{text}"),
         }
         let deadline = Instant::now() + REACH_WAIT;
+        let mut last = String::from("nothing came up");
         loop {
             if (any || mode.kind == "fastboot")
-                && let Some(t) = self.try_fastboot()?
+                && let Some(t) = self.try_kind(usb::Kind::Fastboot, &mut last)
             {
                 return Ok(Link::Fastboot(t));
             }
             if (any || mode.kind == glassine_installer::ram_backup::RAM_MODE_KIND)
-                && let Some(t) = self.try_ram()?
+                && let Some(t) = self.try_kind(usb::Kind::RamRead, &mut last)
             {
                 return Ok(Link::Ram(t));
             }
@@ -231,7 +237,7 @@ impl InstallEdge for CliEdge<'_> {
                 return Ok(Link::Elsewhere(m.id.clone()));
             }
             if Instant::now() >= deadline {
-                return Err(format!("the device didn't show up in {} within {} s", mode.id, REACH_WAIT.as_secs()));
+                return Err(format!("the device didn't show up in {} within {} s ({last})", mode.id, REACH_WAIT.as_secs()));
             }
             std::thread::sleep(Duration::from_secs(1));
         }
