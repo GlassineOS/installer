@@ -168,7 +168,7 @@ pub fn check(d: &Description) -> Vec<Problem> {
             Some(k) => {
                 for (j, dep) in m.departures.iter().enumerate() {
                     let dp = format!("{path}.departures[{j}]");
-                    if let Some(dk) = vocab::DEPARTURES.iter().find(|x| x.id == dep.kind) {
+                    if let Some(dk) = vocab::departures(d.format).iter().find(|x| x.id == dep.kind) {
                         if !dk.backends.contains(&backend) {
                             ck.p(
                                 format!("{dp}.kind"),
@@ -183,7 +183,7 @@ pub fn check(d: &Description) -> Vec<Problem> {
                         }
                     }
                     if let Some(toml::Value::String(op)) = dep.params.get("operation")
-                        && !k.operations.contains(&op.as_str())
+                        && !vocab::operations(k, d.format).contains(&op.as_str())
                     {
                         ck.p(format!("{dp}.params.operation"), format!("mode kind {:?} has no operation {op:?}", m.kind));
                     }
@@ -835,7 +835,7 @@ fn check_step(ck: &mut Ck, i: usize, s: &Step) {
     if mode.is_none() {
         ck.p(format!("{path}.mode"), format!("no mode {:?}", s.mode));
     }
-    if let Some(k) = vocab::step_kind(&s.kind) {
+    if let Some(k) = vocab::step_kinds(d.format).iter().find(|k| k.id == s.kind) {
         if !k.backends.contains(&d.backend.as_str()) {
             ck.p(
                 format!("{path}.kind"),
@@ -843,7 +843,7 @@ fn check_step(ck: &mut Ck, i: usize, s: &Step) {
             );
         }
         if let Some(m) = mode
-            && !k.modes.contains(&m.kind.as_str())
+            && !vocab::step_modes(k, d.format).contains(&m.kind.as_str())
         {
             ck.p(format!("{path}.mode"), format!("a {:?} step can't run in a mode of kind {:?}", s.kind, m.kind));
         }

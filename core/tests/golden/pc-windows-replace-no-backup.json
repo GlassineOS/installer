@@ -7,6 +7,7 @@
   "job": "install",
   "status": "ready",
   "reasons": [],
+  "developer_may": false,
   "questions": [],
   "choices": [
     {
@@ -350,5 +351,6 @@
     "write-base",
     "write-boot",
     "add-boot-entry"
-  ]
+  ],
+  "left_out": []
 }

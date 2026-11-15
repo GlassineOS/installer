@@ -7,6 +7,7 @@
   "job": "install",
   "status": "ready",
   "reasons": [],
+  "developer_may": false,
   "questions": [
     {
       "hardware": "emergency-cable",
@@ -36,7 +37,7 @@
   "systems": [
     {
       "system": "stock system",
-      "outcome": "not kept"
+      "outcome": "kept, not startable"
     }
   ],
   "partitions": [
@@ -61,8 +62,7 @@
       "size": 67108864,
       "loses_files": false,
       "steps": [
-        "write-ram-environment",
-        "write-recovery"
+        "write-ram-environment"
       ]
     },
     {
@@ -142,9 +142,22 @@
       "steps": [
         "write-vendor"
       ]
+    },
+    {
+      "partition": "boot",
+      "class": "replace",
+      "actions": [
+        "reads",
+        "writes"
+      ],
+      "size": 67108864,
+      "loses_files": false,
+      "steps": [
+        "patch-stock-boot"
+      ]
     }
   ],
-  "untouched_partitions": 44,
+  "untouched_partitions": 43,
   "imaged_partitions": 0,
   "boot_settings": [
     {
@@ -203,8 +216,7 @@
       "boot-loader",
       "kernel",
       "partition-layout",
-      "ram-environment",
-      "recovery"
+      "ram-environment"
     ],
     "total_at_least": 0,
     "exact": false,
@@ -247,7 +259,7 @@
     {
       "id": "keep-stock",
       "status": "needs",
-      "with": "slot A's boot image changed to mount its own slot's vendor partition, which the installation doesn't do yet",
+      "with": "slot A's boot image changed to mount its own slot's vendor partition; the installation's step changes it only where the vendor partition's check is already off, which the stock image's isn't, so it refuses the stock image",
       "tried": false
     },
     {
@@ -401,12 +413,12 @@
       "on_interruption": {
         "leaves": "installer-can-finish",
         "hardware": null,
-        "way_out": "step write-recovery"
+        "way_out": "step set-slot"
       }
     },
     {
-      "id": "write-recovery",
-      "kind": "write-image",
+      "id": "patch-stock-boot",
+      "kind": "patch-boot-image",
       "mode": "ram",
       "done": "false",
       "writes": true,
@@ -416,7 +428,7 @@
       "on_failure": {
         "leaves": "installer-can-finish",
         "hardware": null,
-        "way_out": "step write-ram-environment"
+        "way_out": "step set-slot"
       },
       "on_interruption": {
         "leaves": "installer-can-finish",
@@ -452,7 +464,22 @@
     "write-kernel",
     "write-base",
     "write-vendor",
-    "write-recovery",
+    "patch-stock-boot",
     "set-slot"
+  ],
+  "left_out": [
+    {
+      "step": "write-recovery",
+      "artifact": "recovery",
+      "capability": "recovery",
+      "missing": "the GlassineOS recovery, which isn't built yet",
+      "holds_instead": [
+        {
+          "partition": "recovery",
+          "step": "write-ram-environment",
+          "artifact": "ram-environment"
+        }
+      ]
+    }
   ]
 }

@@ -923,16 +923,6 @@ pub const STEP_KINDS: &[Kind] = &[
         ],
     },
     Kind {
-        id: "copy-partition",
-        doc: "copies one partition of the device to another of the same size on the device, and checks the copy by reading it back",
-        backends: &["android-bootloader"],
-        modes: &["glassine-ram"],
-        params: &[
-            p("from", T::Text, true, "the partition copied, which the step reads"),
-            p("partition", T::Partition, true, "the partition it goes to"),
-        ],
-    },
-    Kind {
         id: "create-partitions",
         doc: "creates partitions in the target disk's free space",
         backends: &["uefi-pc"],
@@ -963,18 +953,112 @@ pub const STEP_KINDS: &[Kind] = &[
         modes: &["local"],
         params: &[p("partition", T::Partition, true, "the partition the entry starts from")],
     },
+    // From format 3 on (STEP_KINDS_SINCE_3): keep them last.
+    Kind {
+        id: "copy-partition",
+        doc: "copies one partition of the device to another of the same size on the device, and checks the copy by reading it back",
+        backends: &["android-bootloader"],
+        modes: &["glassine-ram"],
+        params: &[
+            p("from", T::Text, true, "the partition copied, which the step reads"),
+            p("partition", T::Partition, true, "the partition it goes to"),
+        ],
+    },
+    Kind {
+        id: "patch-boot-image",
+        doc: "changes the stock boot image in one partition in place so the system on it mounts its own slot's vendor partition (the vendor entry's fsmgr_flags in the kernel's appended device tree, wait to slotselect), recomputes the header's id, clears a verified-boot 1.0 signature, and checks the write by reading it back; it refuses an image it doesn't recognize and changes nothing then",
+        backends: &["android-bootloader"],
+        modes: &["glassine-ram"],
+        params: &[p("partition", T::Partition, true, "the partition holding the boot image")],
+    },
 ];
+
+/// The step kinds that exist from format 3 on; they stand last in [`STEP_KINDS`].
+pub const STEP_KINDS_SINCE_3: &[&str] = &["copy-partition", "patch-boot-image"];
+
+/// The step kinds of `format`.
+pub fn step_kinds(format: i64) -> &'static [Kind] {
+    let n = STEP_KINDS.len();
+    if format >= 3 {
+        STEP_KINDS
+    } else {
+        &STEP_KINDS[..n - STEP_KINDS_SINCE_3.len()]
+    }
+}
+
+/// The mode kinds a step kind runs in from format 3 on only, as (step kind,
+/// mode kind): the RAM environment writes from format 3.
+pub const STEP_MODES_SINCE_3: &[(&str, &str)] = &[
+    ("write-partition-table", "glassine-ram"),
+    ("write-image", "glassine-ram"),
+    ("write-base", "glassine-ram"),
+    ("set-boot-slot", "glassine-ram"),
+];
+
+/// The mode kinds a step of kind `k` runs in, in `format`.
+pub fn step_modes(k: &Kind, format: i64) -> Vec<&'static str> {
+    k.modes
+        .iter()
+        .copied()
+        .filter(|m| format >= 3 || !STEP_MODES_SINCE_3.contains(&(k.id, *m)))
+        .collect()
+}
+
+/// The operations of a mode kind that exist from format 3 on only, as (mode
+/// kind, operation).
+pub const OPERATIONS_SINCE_3: &[(&str, &str)] = &[
+    ("fastboot", "reboot-recovery"),
+    ("fastboot", "flash-partition-table"),
+    ("glassine-ram", "write"),
+];
+
+/// The operations of mode kind `m` a departure may name in `format`.
+pub fn operations(m: &ModeKind, format: i64) -> Vec<&'static str> {
+    m.operations
+        .iter()
+        .copied()
+        .filter(|o| format >= 3 || !OPERATIONS_SINCE_3.contains(&(m.id, *o)))
+        .collect()
+}
+
+/// What an entry meant before format 3, where format 3 changed its meaning
+/// (`mode:<id>` for a mode kind, `step:<id>` for a step kind): an earlier
+/// format's schema keeps the earlier text.
+pub const DOCS_BEFORE_3: &[(&str, &str)] = &[
+    (
+        "mode:glassine-ram",
+        "a GlassineOS environment the boot loader starts from memory (the ram-environment artifact), over USB; it reads the device's storage and changes nothing (not built yet)",
+    ),
+    (
+        "step:write-partition-table",
+        "writes a new partition table from the layout artifact: its backup copy first, then the primary",
+    ),
+    ("step:set-boot-slot", "changes the A/B slot flags"),
+];
+
+/// The meaning of entry `key` (`mode:<id>` or `step:<id>`) in `format`.
+pub fn doc_in(key: &str, doc: &'static str, format: i64) -> &'static str {
+    match DOCS_BEFORE_3.iter().find(|(k, _)| *k == key) {
+        Some((_, d)) if format < 3 => d,
+        _ => doc,
+    }
+}
 
 pub fn step_kind(id: &str) -> Option<&'static Kind> {
     STEP_KINDS.iter().find(|k| k.id == id)
 }
 
 /// A capability id. `safe_boot`: a device lacking it is refused (001 FR-016).
+/// `artifact`: the artifact role that brings it; while the description says
+/// the capability `needs` something, the release doesn't have that artifact,
+/// so an installation is refused for people and a developer's plan leaves
+/// out the steps that write it (001 FR-016a, 002 FR-022).
 #[derive(Debug)]
 pub struct Capability {
     pub id: &'static str,
     pub doc: &'static str,
     pub safe_boot: bool,
+    pub artifact: Option<&'static str>,
 }
 
 pub const CAPABILITIES: &[Capability] = &[
@@ -982,36 +1066,43 @@ pub const CAPABILITIES: &[Capability] = &[
         id: "start-kernel",
         doc: "starts a GlassineOS kernel of the installation's choice",
         safe_boot: true,
+        artifact: None,
     },
     Capability {
         id: "fallback-boot",
         doc: "falls back to the previous boot when a new one isn't accepted",
         safe_boot: false,
+        artifact: None,
     },
     Capability {
         id: "trial-boot",
         doc: "a one-shot trial boot of a new kernel or deployment",
         safe_boot: false,
+        artifact: None,
     },
     Capability {
         id: "recovery",
         doc: "the GlassineOS recovery",
         safe_boot: false,
+        artifact: Some("recovery"),
     },
     Capability {
         id: "keep-stock",
         doc: "keeps the stock system next to GlassineOS",
         safe_boot: false,
+        artifact: None,
     },
     Capability {
         id: "secondary-recovery",
         doc: "the kept system's own recovery stays reachable",
         safe_boot: false,
+        artifact: None,
     },
     Capability {
         id: "choose-at-start",
         doc: "the person picks the system at start-up",
         safe_boot: false,
+        artifact: None,
     },
 ];
 

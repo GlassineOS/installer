@@ -186,7 +186,10 @@ async function main() {
   });
 
   await test('answering the plan’s question re-plans with the core’s record', async () => {
+    // For people the Note Air is refused until its recovery is built: a developer's plan has the question.
     await go(page, '#/plan?plan=noteair-keep-stock');
+    assert.match(await page.$eval('#refused', (x) => x.textContent), /can’t be installed yet/);
+    await go(page, '#/plan?plan=noteair-developer');
     assert.ok(await page.$('#needs-answers'));
     assert.ok(await page.$eval('#confirm', (b) => b.disabled));
     const answer = async (v, rendered) => {
@@ -194,8 +197,11 @@ async function main() {
       await page.waitForFunction((w) => document.documentElement.dataset.hash.includes(w) && document.documentElement.dataset.hash === location.hash, { timeout: 10000 }, `hardware.emergency-cable=${v}`);
       await page.waitForSelector(rendered, { timeout: 10000 });
     };
-    await answer('yes', '#developer-only');
-    await answer('no', '#no-record'); // "no" without developer=1 was never planned
+    await answer('yes', '#left-out');
+    const left = await page.$eval('#left-out', (x) => x.innerText);
+    assert.match(left, /Write the GlassineOS recovery\.\s+Left out: it needs the GlassineOS recovery, which isn’t built yet|Left out: it needs the GlassineOS recovery, which isn't built yet/);
+    assert.match(left, /Its recovery partition keeps the installer’s helper instead\./);
+    await answer('no', '#refused');
   });
 
   await test('a refused plan stops: no steps, Continue off', async () => {
@@ -277,7 +283,7 @@ async function main() {
     const rows = async () => page.evaluate(() => document.body.innerText);
     await go(page, '#/plan?plan=pc-small-disk-no-release');
     assert.match(await rows(), /On disk 0\s+1\.0 GiB and GlassineOS’s system partition, whose size is not known yet, of 6\.0 GiB free/);
-    await go(page, '#/plan?plan=noteair-keep-stock');
+    await go(page, '#/plan?plan=noteair-developer');
     assert.match(await rows(), /GlassineOS’s system partition\s+3\.0 GiB; what this release needs there is not known yet/);
     assert.ok(!/null|undefined|NaN/.test(await rows()), 'a size that isn’t known shows as a word');
     // A release that states more than the fixed partition holds: refused, with the core's reason.
@@ -309,7 +315,7 @@ async function main() {
   });
 
   await test('the plan’s escapes come with the description’s words', async () => {
-    await go(page, '#/plan?plan=noteair-cable-yes');
+    await go(page, '#/plan?plan=noteair-developer-cable-yes');
     await unfold();
     const t = await page.evaluate(() => document.querySelector('#ifwrong li[data-step="replace-boot-loader"]').innerText);
     assert.match(t, /Replace the boot loader with GlassineOS’s|Replace the boot loader with GlassineOS's/);

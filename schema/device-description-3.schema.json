@@ -1790,45 +1790,6 @@
             "if": {
               "properties": {
                 "kind": {
-                  "const": "copy-partition"
-                }
-              },
-              "required": [
-                "kind"
-              ]
-            },
-            "then": {
-              "properties": {
-                "params": {
-                  "additionalProperties": false,
-                  "description": "parameters of copy-partition",
-                  "properties": {
-                    "from": {
-                      "description": "the partition copied, which the step reads",
-                      "type": "string"
-                    },
-                    "partition": {
-                      "description": "the partition it goes to",
-                      "pattern": "^(role:[a-z-]+|[A-Za-z0-9_.-]+)$",
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "from",
-                    "partition"
-                  ],
-                  "type": "object"
-                }
-              },
-              "required": [
-                "params"
-              ]
-            }
-          },
-          {
-            "if": {
-              "properties": {
-                "kind": {
                   "const": "create-partitions"
                 }
               },
@@ -1997,6 +1958,79 @@
                   "properties": {
                     "partition": {
                       "description": "the partition the entry starts from",
+                      "pattern": "^(role:[a-z-]+|[A-Za-z0-9_.-]+)$",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "partition"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "params"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "kind": {
+                  "const": "copy-partition"
+                }
+              },
+              "required": [
+                "kind"
+              ]
+            },
+            "then": {
+              "properties": {
+                "params": {
+                  "additionalProperties": false,
+                  "description": "parameters of copy-partition",
+                  "properties": {
+                    "from": {
+                      "description": "the partition copied, which the step reads",
+                      "type": "string"
+                    },
+                    "partition": {
+                      "description": "the partition it goes to",
+                      "pattern": "^(role:[a-z-]+|[A-Za-z0-9_.-]+)$",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "from",
+                    "partition"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "params"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "kind": {
+                  "const": "patch-boot-image"
+                }
+              },
+              "required": [
+                "kind"
+              ]
+            },
+            "then": {
+              "properties": {
+                "params": {
+                  "additionalProperties": false,
+                  "description": "parameters of patch-boot-image",
+                  "properties": {
+                    "partition": {
+                      "description": "the partition holding the boot image",
                       "pattern": "^(role:[a-z-]+|[A-Za-z0-9_.-]+)$",
                       "type": "string"
                     }
@@ -2363,11 +2397,12 @@
               "write-image",
               "write-base",
               "set-boot-slot",
-              "copy-partition",
               "create-partitions",
               "remove-partitions",
               "write-boot-files",
-              "add-boot-entry"
+              "add-boot-entry",
+              "copy-partition",
+              "patch-boot-image"
             ],
             "type": "string"
           },
@@ -3956,30 +3991,6 @@
       },
       {
         "backends": [
-          "android-bootloader"
-        ],
-        "doc": "copies one partition of the device to another of the same size on the device, and checks the copy by reading it back",
-        "id": "copy-partition",
-        "modes": [
-          "glassine-ram"
-        ],
-        "params": [
-          {
-            "doc": "the partition copied, which the step reads",
-            "name": "from",
-            "required": true,
-            "type": "Text"
-          },
-          {
-            "doc": "the partition it goes to",
-            "name": "partition",
-            "required": true,
-            "type": "Partition"
-          }
-        ]
-      },
-      {
-        "backends": [
           "uefi-pc"
         ],
         "doc": "creates partitions in the target disk's free space",
@@ -4043,6 +4054,48 @@
         "params": [
           {
             "doc": "the partition the entry starts from",
+            "name": "partition",
+            "required": true,
+            "type": "Partition"
+          }
+        ]
+      },
+      {
+        "backends": [
+          "android-bootloader"
+        ],
+        "doc": "copies one partition of the device to another of the same size on the device, and checks the copy by reading it back",
+        "id": "copy-partition",
+        "modes": [
+          "glassine-ram"
+        ],
+        "params": [
+          {
+            "doc": "the partition copied, which the step reads",
+            "name": "from",
+            "required": true,
+            "type": "Text"
+          },
+          {
+            "doc": "the partition it goes to",
+            "name": "partition",
+            "required": true,
+            "type": "Partition"
+          }
+        ]
+      },
+      {
+        "backends": [
+          "android-bootloader"
+        ],
+        "doc": "changes the stock boot image in one partition in place so the system on it mounts its own slot's vendor partition (the vendor entry's fsmgr_flags in the kernel's appended device tree, wait to slotselect), recomputes the header's id, clears a verified-boot 1.0 signature, and checks the write by reading it back; it refuses an image it doesn't recognize and changes nothing then",
+        "id": "patch-boot-image",
+        "modes": [
+          "glassine-ram"
+        ],
+        "params": [
+          {
+            "doc": "the partition holding the boot image",
             "name": "partition",
             "required": true,
             "type": "Partition"
