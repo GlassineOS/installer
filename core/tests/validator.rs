@@ -43,7 +43,7 @@ fn unknown_key() {
 
 #[test]
 fn unknown_nested_key() {
-    na("id = \"write-base\"\n", "id = \"write-base\"\ncolour = \"red\"\n", "steps[4].colour");
+    na("id = \"write-base\"\n", "id = \"write-base\"\ncolour = \"red\"\n", "steps[5].colour");
 }
 
 #[test]
@@ -53,7 +53,7 @@ fn missing_required_key() {
 
 #[test]
 fn missing_nested_key() {
-    na("id = \"write-base\"\njob = \"install\"\n", "id = \"write-base\"\n", "steps[4].job");
+    na("id = \"write-base\"\njob = \"install\"\n", "id = \"write-base\"\n", "steps[5].job");
 }
 
 #[test]
@@ -63,7 +63,7 @@ fn wrong_type() {
 
 #[test]
 fn unknown_enum_value() {
-    na("kind = \"write-base\"", "kind = \"dance\"", "steps[4].kind");
+    na("kind = \"write-base\"", "kind = \"dance\"", "steps[5].kind");
 }
 
 #[test]
@@ -71,7 +71,7 @@ fn missing_kind_parameter() {
     na(
         "params = { artifact = \"kernel\", partition = \"boot_b\" }",
         "params = { artifact = \"kernel\" }",
-        "steps[3].params.partition",
+        "steps[4].params.partition",
     );
 }
 
@@ -80,7 +80,7 @@ fn unknown_kind_parameter() {
     na(
         "params = { slot = \"b\", pin = true }",
         "params = { slot = \"b\", pin = true, speed = 3 }",
-        "steps[6].params.speed",
+        "steps[8].params.speed",
     );
 }
 
@@ -111,7 +111,7 @@ fn every_problem_at_once() {
     );
     let t = mutate(&t, "kind = \"write-base\"", "kind = \"dance\"");
     let Loaded::Invalid(ps) = load(&t) else { panic!() };
-    assert!(ps.iter().any(|p| p.path == "colour") && ps.iter().any(|p| p.path == "steps[4].kind"), "{ps:#?}");
+    assert!(ps.iter().any(|p| p.path == "colour") && ps.iter().any(|p| p.path == "steps[5].kind"), "{ps:#?}");
 }
 
 #[test]
@@ -277,8 +277,8 @@ fn a_mode_needs_a_supplied_file_that_exists() {
 #[test]
 fn only_a_route_that_runs_a_program_needs_a_file() {
     na(
-        "restarts_into = [\"glassine\", \"android\", \"emergency\"]",
-        "restarts_into = [\"glassine\", \"android\", \"emergency\"]\nneeds = \"emergency-programmer\"",
+        "restarts_into = [\"glassine\", \"android\", \"emergency\", \"ram\"]",
+        "restarts_into = [\"glassine\", \"android\", \"emergency\", \"ram\"]\nneeds = \"emergency-programmer\"",
         "modes[1].needs",
     );
 }
@@ -454,8 +454,8 @@ fn mode_kind_the_backend_lacks() {
 fn step_kind_the_backend_lacks_with_parameters() {
     // A kind of another backend, with parameters that don't fit it: both are named.
     let t = mutate(&noteair(), "kind = \"write-base\"", "kind = \"add-boot-entry\"");
-    rejects(&t, "steps[4].kind");
-    rejects(&t, "steps[4].params.artifact");
+    rejects(&t, "steps[5].kind");
+    rejects(&t, "steps[5].params.artifact");
 }
 
 #[test]
@@ -488,7 +488,7 @@ fn unknown_operation() {
 
 #[test]
 fn unknown_role() {
-    na("writes = [\"role:partition-table\"]", "writes = [\"role:swap\"]", "steps[2].writes[0]");
+    na("writes = [\"role:partition-table\"]", "writes = [\"role:swap\"]", "steps[3].writes[0]");
 }
 
 #[test]
@@ -582,8 +582,8 @@ fn condition_observable_in_its_mode() {
 #[test]
 fn restart_target_exists() {
     na(
-        "restarts_into = [\"glassine\", \"android\", \"emergency\"]",
-        "restarts_into = [\"glassine\", \"android\", \"heaven\"]",
+        "restarts_into = [\"glassine\", \"android\", \"emergency\", \"ram\"]",
+        "restarts_into = [\"glassine\", \"android\", \"heaven\", \"ram\"]",
         "modes[1].restarts_into[2]",
     );
 }
@@ -591,9 +591,9 @@ fn restart_target_exists() {
 #[test]
 fn installer_transition_needs_a_restart() {
     na(
-        "restarts_into = [\"glassine\", \"android\", \"emergency\"]",
-        "restarts_into = [\"glassine\", \"emergency\"]",
-        "transitions[11].by",
+        "restarts_into = [\"glassine\", \"android\", \"emergency\", \"ram\"]",
+        "restarts_into = [\"glassine\", \"emergency\", \"ram\"]",
+        "transitions[12].by",
     );
 }
 
@@ -692,7 +692,7 @@ fn backup_mode_exists() {
 
 #[test]
 fn step_beyond_its_rule() {
-    na("writes = [\"boot_b\"]", "writes = [\"persist\"]", "steps[3].writes[0]");
+    na("writes = [\"boot_b\"]", "writes = [\"persist\"]", "steps[4].writes[0]");
 }
 
 /// A full backup reads every partition: never-write forbids writing, not reading.
@@ -704,7 +704,7 @@ fn never_write_partitions_may_be_backed_up() {
 
 #[test]
 fn unselected_partition_is_never_write() {
-    na("writes = [\"boot_b\"]", "writes = [\"some-other\"]", "steps[3].writes[0]");
+    na("writes = [\"boot_b\"]", "writes = [\"some-other\"]", "steps[4].writes[0]");
 }
 
 #[test]
@@ -712,7 +712,7 @@ fn param_partition_is_in_the_steps_writes() {
     na(
         "params = { artifact = \"kernel\", partition = \"boot_b\" }",
         "params = { artifact = \"kernel\", partition = \"system_b\" }",
-        "steps[3].params.partition",
+        "steps[4].params.partition",
     );
 }
 
@@ -783,16 +783,16 @@ fn step_job_exists() {
     na(
         "id = \"write-base\"\njob = \"install\"",
         "id = \"write-base\"\njob = \"repair\"",
-        "steps[4].job",
+        "steps[5].job",
     );
 }
 
 #[test]
 fn step_mode_can_write() {
     na(
-        "id = \"write-base\"\njob = \"install\"\nkind = \"write-base\"\nmode = \"fastboot\"",
+        "id = \"write-base\"\njob = \"install\"\nkind = \"write-base\"\nmode = \"ram\"",
         "id = \"write-base\"\njob = \"install\"\nkind = \"write-base\"\nmode = \"glassine\"",
-        "steps[4].mode",
+        "steps[5].mode",
     );
 }
 
@@ -801,7 +801,7 @@ fn done_names_its_mode() {
     na(
         "done = [{ key = \"installer.step.write-base\", present = true, mode = \"installer\" }]",
         "done = [{ key = \"installer.step.write-base\", present = true }]",
-        "steps[4].done[0].mode",
+        "steps[5].done[0].mode",
     );
 }
 
@@ -819,7 +819,7 @@ fn a_way_out_needing_the_cable_says_so() {
     na(
         "escape.failure = { leaves = \"installer-can-finish\", way_out = { step = \"write-kernel\" } }",
         "escape.failure = { leaves = \"installer-can-finish\", way_out = { transition = \"cable-to-emergency\" } }",
-        "steps[3].escape.failure.leaves",
+        "steps[4].escape.failure.leaves",
     );
 }
 
@@ -828,7 +828,7 @@ fn way_out_step_exists() {
     na(
         "way_out = { step = \"write-base\" } }\npoint_of_no_return",
         "way_out = { step = \"write-floor\" } }\npoint_of_no_return",
-        "steps[3].escape.interruption.way_out.step",
+        "steps[4].escape.interruption.way_out.step",
     );
 }
 
@@ -913,7 +913,7 @@ fn a_fixed_size_takes_only_the_release_least() {
     na(
         "size = \"3GiB\", at_least = \"release:base\"",
         "size = \"3GiB\", at_least = \"2GiB\"",
-        "steps[2].params.partitions[0].at_least",
+        "steps[3].params.partitions[0].at_least",
     );
 }
 
@@ -922,6 +922,59 @@ fn a_sized_partition_is_one_the_step_creates() {
     na(
         "{ name = \"system_b\", size",
         "{ name = \"userdata\", size",
-        "steps[2].params.partitions[0].name",
+        "steps[3].params.partitions[0].name",
+    );
+}
+
+// ---- FR-011: a RAM environment started from a partition, never-send verbs ----
+
+/// started-from-partition is a RAM environment's departure only.
+#[test]
+fn started_from_partition_is_a_ram_departure() {
+    na(
+        "kind = \"oem-reboot-recovery\"",
+        "kind = \"started-from-partition\"\nparams = { partition = \"recovery\" }",
+        "modes[1].departures[5].kind",
+    );
+}
+
+/// oem-reboot-recovery is a boot loader's departure only.
+#[test]
+fn oem_reboot_recovery_is_a_fastboot_departure() {
+    na(
+        "kind = \"started-from-partition\"\nparams = { partition = \"recovery\" }",
+        "kind = \"oem-reboot-recovery\"",
+        "modes[2].departures[0].kind",
+    );
+}
+
+/// The departures of a RAM environment started from a partition are format 3's.
+#[test]
+fn format_2_has_no_ram_environment_departures() {
+    for kind in ["started-from-partition", "oem-reboot-recovery"] {
+        let t = mutate(&format2(), "kind = \"single-variables-only\"", &format!("kind = \"{kind}\""));
+        rejects(&t, "modes[1].departures[2].kind");
+    }
+}
+
+/// The partition-table write is an operation a never-use departure can name;
+/// a RAM environment's mode has none of a boot loader's operations.
+#[test]
+fn never_use_names_an_operation_of_its_mode_kind() {
+    assert!(noteair().contains("operation = \"flash-partition-table\""));
+    na(
+        "kind = \"oem-reboot-recovery\"",
+        "kind = \"never-use\"\nparams = { operation = \"flash-everything\", reason = \"r\" }",
+        "modes[1].departures[5].params.operation",
+    );
+}
+
+/// A copy from one partition to another runs only in a RAM environment.
+#[test]
+fn copy_partition_runs_in_a_ram_environment_only() {
+    na(
+        "kind = \"copy-partition\"\nmode = \"ram\"",
+        "kind = \"copy-partition\"\nmode = \"fastboot\"",
+        "steps[6].mode",
     );
 }

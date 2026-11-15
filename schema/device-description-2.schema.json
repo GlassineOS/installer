@@ -1705,6 +1705,45 @@
             "if": {
               "properties": {
                 "kind": {
+                  "const": "copy-partition"
+                }
+              },
+              "required": [
+                "kind"
+              ]
+            },
+            "then": {
+              "properties": {
+                "params": {
+                  "additionalProperties": false,
+                  "description": "parameters of copy-partition",
+                  "properties": {
+                    "from": {
+                      "description": "the partition copied, which the step reads",
+                      "type": "string"
+                    },
+                    "partition": {
+                      "description": "the partition it goes to",
+                      "pattern": "^(role:[a-z-]+|[A-Za-z0-9_.-]+)$",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "from",
+                    "partition"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "params"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "kind": {
                   "const": "create-partitions"
                 }
               },
@@ -2239,6 +2278,7 @@
               "write-image",
               "write-base",
               "set-boot-slot",
+              "copy-partition",
               "create-partitions",
               "remove-partitions",
               "write-boot-files",
@@ -3166,7 +3206,9 @@
           "boot-image",
           "reboot",
           "set-active",
-          "fetch"
+          "fetch",
+          "reboot-recovery",
+          "flash-partition-table"
         ]
       },
       {
@@ -3200,10 +3242,11 @@
         "backends": [
           "android-bootloader"
         ],
-        "doc": "a GlassineOS environment the boot loader starts from memory (the ram-environment artifact), over USB; it reads the device's storage and changes nothing (not built yet)",
+        "doc": "a GlassineOS environment the boot loader starts from memory (the ram-environment artifact), over USB; it reads the device's storage, and writes only ranges the installer armed in that start",
         "id": "glassine-ram",
         "operations": [
           "read",
+          "write",
           "reboot",
           "reboot-bootloader"
         ]
@@ -3371,11 +3414,12 @@
         "backends": [
           "android-bootloader"
         ],
-        "doc": "writes a new partition table from the layout artifact: its backup copy first, then the primary",
+        "doc": "writes a new partition table from the layout artifact: its backup copy first, then the primary; never through a boot loader verb its mode marks never-use",
         "id": "write-partition-table",
         "modes": [
           "fastboot",
-          "emergency-download"
+          "emergency-download",
+          "glassine-ram"
         ],
         "params": [
           {
@@ -3408,6 +3452,7 @@
         "modes": [
           "fastboot",
           "emergency-download",
+          "glassine-ram",
           "local"
         ],
         "params": [
@@ -3435,6 +3480,7 @@
         "modes": [
           "fastboot",
           "local",
+          "glassine-ram",
           "glassine-usb"
         ],
         "params": [
@@ -3456,10 +3502,11 @@
         "backends": [
           "android-bootloader"
         ],
-        "doc": "changes the A/B slot flags",
+        "doc": "changes the A/B slot flags (in a glassine-ram mode: the flags in the partition table's entries, backup copy first)",
         "id": "set-boot-slot",
         "modes": [
-          "fastboot"
+          "fastboot",
+          "glassine-ram"
         ],
         "params": [
           {
@@ -3479,6 +3526,30 @@
             "name": "unbootable",
             "required": false,
             "type": "Bool"
+          }
+        ]
+      },
+      {
+        "backends": [
+          "android-bootloader"
+        ],
+        "doc": "copies one partition of the device to another of the same size on the device, and checks the copy by reading it back",
+        "id": "copy-partition",
+        "modes": [
+          "glassine-ram"
+        ],
+        "params": [
+          {
+            "doc": "the partition copied, which the step reads",
+            "name": "from",
+            "required": true,
+            "type": "Text"
+          },
+          {
+            "doc": "the partition it goes to",
+            "name": "partition",
+            "required": true,
+            "type": "Partition"
           }
         ]
       },
