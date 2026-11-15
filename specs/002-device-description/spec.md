@@ -4,7 +4,7 @@
 **Created:** 2026-11-12 · **Status:** spec, for review; nothing built
 **Decision:** [docs 0014](https://docs.glassine.org/decisions/0014-installation-and-provisioning/),
 [docs 0015](https://docs.glassine.org/decisions/0015-installer-stack/) · **Builds on:**
-[001](../001-install-from-stock/spec.md) · **Contract:** owned by this repository, format 3
+[001](../001-install-from-stock/spec.md) · **Contract:** owned by this repository, format 4
 
 ## Summary
 
@@ -80,7 +80,7 @@ pinned to,
 ### File and versions
 
 - **FR-001**: A description is one TOML file. Its first key is `format`; this spec is
-  `format = 3`. The format includes its vocabularies: the fact keys signals read, the mode
+  `format = 4`. The format includes its vocabularies: the fact keys signals read, the mode
   kinds, step kinds, boot-setting kinds and capability ids, each with what its parameters
   are.
 - **FR-002**: A reader rejects a description with an unknown key, a missing required key, a
@@ -94,7 +94,8 @@ pinned to,
   |--------|-------------------------------|
   | 1      | No `disk` role (FR-016a): each `back-up` and `replace` rule names its own backup, and no job must image whole disks. The classes `read` and `back-up` exist and mean `never-write`. A new partition has no `at_least`, a layout's partitions have no sizes (FR-014a), and device data is only named (FR-018). |
   | 2      | No `[[supplied_files]]` (FR-018b): a mode never needs a file from the person, and the emergency mode's boot ROM facts are not fact keys. |
-  | 3      | This spec. |
+  | 3      | No `[data_partition]` (FR-018c): a description doesn't say which partition holds the person's data or what stays free at its end. |
+  | 4      | This spec. |
 - **FR-004**: The format, vocabularies included, is also published as a machine-readable
   schema for each `format`, so editors and the device repositories' own checks validate a
   description completely without the installer. The schema names every key of the format;
@@ -285,6 +286,16 @@ pinned to,
   shown to the person (what goes wrong with it) and whether that was verified. A
   checksum is never both. It names no place to get a file. The file stays on the person's computer for the session
   only and is never uploaded.
+- **FR-018c**: `[data_partition]` names the partition that holds the person's data on the
+  installed system (`name`, as the installed system finds it in the table), and the space
+  that stays free at its end when the installed system makes its file system there
+  (`keep_free_at_end`, a fixed size in whole KiB; none when absent), for what another
+  system on the device keeps there. A rule selects it, and it is never the partition a
+  step creates for the system (`role = "system"`). The installed system's
+  [glassine-deploy](https://github.com/GlassineOS/boot/blob/main/docs/deployments.md)
+  configuration takes from it, and from that system partition, where the two
+  partitions are and what stays free (FR-030). A description without it names no data
+  partition, and nothing is derived from it.
 
 ### What an installation does
 
@@ -367,7 +378,11 @@ pinned to,
 - **FR-030**: Every file on the installed system that states a device fact the
   description holds (the device-data list of FR-018; where the description keeps another
   system, the slot that system starts from, which is the slot the step that retires it
-  marks unbootable when the person chooses not to keep it) is derived from the
+  marks unbootable when the person chooses not to keep it; where it names a data
+  partition (FR-018c), glassine-deploy's device part: the system partition, the data
+  partition and the space kept free at its end, at
+  `/usr/share/glassine/deploy.conf.device`, which the device's package puts into
+  `/etc/glassine/deploy.conf` with its own settings) is derived from the
   description when the device's package is built, and the build fails when a derived file
   and the description disagree. No such file is written by hand.
 
@@ -382,7 +397,7 @@ pinned to,
 
 ## Key entities
 
-- **Description**: one kind of machine, in format 3.
+- **Description**: one kind of machine, in format 4.
 - **Signal**: one test of one fact, required or supporting, verified or not.
 - **State**: an install state and the conditions that tell it, each in the mode it is
   observable in.
@@ -401,7 +416,7 @@ pinned to,
 
 ## Success criteria
 
-- **SC-001**: The descriptions of the Note Air and of a UEFI PC are both written in format 3
+- **SC-001**: The descriptions of the Note Air and of a UEFI PC are both written in format 4
   and accepted, and the same installer recognises and plans for both with no device named
   in its code.
 - **SC-002**: For every rule of FR-002 and FR-025 there is a description that breaks it, and
@@ -410,8 +425,9 @@ pinned to,
   each step a test interrupts the installation right after it and reaches one of 001's
   three end states using only what the description says.
 - **SC-004**: Changing one byte of a shipped copy fails the checks (Scenario 5).
-- **SC-005**: On an installed Note Air, the device-data list and the slot of the other
-  system match what its installed description says, and editing either derived file by
+- **SC-005**: On an installed Note Air, the device-data list, the slot of the other
+  system, and glassine-deploy's system partition, data partition and space kept free at
+  its end match what its installed description says, and editing any derived file by
   hand in the package's sources fails the package's build.
 
 ## Assumptions
