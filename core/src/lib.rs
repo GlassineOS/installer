@@ -21,6 +21,7 @@ pub mod firehose;
 pub mod format1;
 pub mod fsprobe;
 pub mod glassine_read;
+pub mod glassine_write;
 pub mod gpt_build;
 pub mod host_setup;
 pub mod inspect;
