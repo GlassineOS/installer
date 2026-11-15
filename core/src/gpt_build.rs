@@ -240,6 +240,9 @@ pub fn guid_bytes(s: &str) -> Result<[u8; 16], String> {
     Ok(out)
 }
 
+/// A new partition resolved: its recipe entry, sectors, type GUID, unique GUID, attributes.
+type NewSpec<'a> = (&'a NewPartition, u64, [u8; 16], [u8; 16], u64);
+
 /// A slot of the entry array, as raw bytes plus the fields we use.
 #[derive(Clone)]
 struct Slot {
@@ -360,6 +363,9 @@ pub fn build(source: &[u8], disk_bytes: Option<u64>, recipe: &Recipe) -> Result<
     if crc32(src_array) != le32(h, 88) {
         return Err("the source's entry array CRC is wrong: refusing to build from a damaged table".into());
     }
+    if first_usable > last_usable_before || last_usable_before >= alternate || alternate == u64::MAX {
+        return Err("the source's header geometry doesn't hold together".into());
+    }
     let disk_sectors = alternate + 1;
     if let Some(b) = disk_bytes
         && b / s != disk_sectors
@@ -404,9 +410,12 @@ pub fn build(source: &[u8], disk_bytes: Option<u64>, recipe: &Recipe) -> Result<
         ));
     }
     let backup_header = disk_sectors - 1;
-    let backup_array = backup_header - array_sectors;
     // Recomputed from the geometry: the sector before the backup array.
-    let last_usable = backup_array - 1;
+    let last_usable = backup_header
+        .checked_sub(array_sectors + 1)
+        .filter(|l| *l >= first_usable)
+        .ok_or("the disk is too small for the entry array")?;
+    let backup_array = last_usable + 1;
 
     for r in &recipe.renames {
         let i = find(&r.from)?;
@@ -429,7 +438,7 @@ pub fn build(source: &[u8], disk_bytes: Option<u64>, recipe: &Recipe) -> Result<
     }
 
     // New partitions: sizes and types from the source, packed at the end.
-    let mut new_specs = vec![];
+    let mut new_specs: Vec<NewSpec> = vec![];
     for n in &recipe.new {
         let sectors = match &n.size {
             Size::Like(p) => {
@@ -457,9 +466,15 @@ pub fn build(source: &[u8], disk_bytes: Option<u64>, recipe: &Recipe) -> Result<
         if guid == [0; 16] {
             return Err(format!("{}: its unique GUID is zero", n.name));
         }
+        if src.iter().any(|x| !x.empty() && x.raw[16..32] == guid) || new_specs.iter().any(|x| x.3 == guid) {
+            return Err(format!("{}: its unique GUID {} is already in the table", n.name, n.guid));
+        }
         new_specs.push((n, sectors, type_guid, guid, parse_attributes(&n.attributes)?));
     }
-    let total: u64 = new_specs.iter().map(|x| x.1).sum();
+    let total = new_specs
+        .iter()
+        .try_fold(0u64, |t, x| t.checked_add(x.1))
+        .ok_or("the new partitions are larger than the disk")?;
     let end = (last_usable + 1) / recipe.align_sectors * recipe.align_sectors;
     let first_new = end.checked_sub(total).ok_or("the new partitions are larger than the disk")?;
 

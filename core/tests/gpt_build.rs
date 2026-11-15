@@ -9,6 +9,7 @@
 //! builder (a separate Python program) made from it; the new partitions' GUIDs
 //! in the recipe are the ones it chose. Our code never made the expected bytes.
 //!
+//! (Both written as the raw bytes, not the text form of a GUID.)
 //! `GLASSINE_LAB_GPT=<dir>` with the unscrubbed `gpt_main0.bin`,
 //! `gpt_main_new.bin`, `gpt_backup_new.bin` and `ab_layout.json` runs the
 //! same build on the real table (the bytes that went to the device).
@@ -106,6 +107,27 @@ fn a_damaged_or_foreign_source_is_refused() {
     assert!(build(&src, None, &recipe()).unwrap_err().contains("header CRC"));
     let e = build(&fixture("noteair-stock.gpt"), Some(DISK - 512 * 2048), &recipe()).unwrap_err();
     assert!(e.contains("not this disk's table"), "{e}");
+}
+
+#[test]
+fn a_new_partitions_guid_already_in_the_table_is_refused() {
+    let mut r = recipe();
+    r.new[2].guid = r.new[0].guid.clone();
+    assert!(refused(&r).contains("vendor_b: its unique GUID"));
+    let mut r = recipe();
+    // Slot 1's GUID in the fixture, in text form.
+    r.new[0].guid = glassine_installer::table::guid(&fixture("noteair-stock.gpt")[1024 + 16..1024 + 32]);
+    assert!(refused(&r).contains("already in the table"));
+}
+
+#[test]
+fn a_header_with_nonsense_geometry_is_refused_cleanly() {
+    let mut src = fixture("noteair-stock.gpt");
+    src[512 + 32..512 + 40].copy_from_slice(&0u64.to_le_bytes()); // backup header at sector 0
+    src[512 + 16..512 + 20].fill(0);
+    let c = glassine_installer::table::crc32(&src[512..512 + 92]);
+    src[512 + 16..512 + 20].copy_from_slice(&c.to_le_bytes());
+    assert!(build(&src, None, &recipe()).unwrap_err().contains("geometry"));
 }
 
 #[test]
