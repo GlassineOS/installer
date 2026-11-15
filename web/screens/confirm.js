@@ -20,6 +20,7 @@ export function Confirm({ s, state }) {
   const p = s.plan;
   const [ack, setAck] = useState(false);
   const [typed, setTyped] = useState('');
+  const [relErr, setRelErr] = useState(null);
   if (!p) {
     return html`<${Page} s=${s} step="confirm" eyebrow="Confirm" title="Confirm the plan"><${NoRecord} s=${s} what="these choices" />
       <${Actions} next="Nothing, until there is a plan." out="Stop here. Nothing was changed." buttons=${[{ label: 'Back to the plan', href: s.link('plan') }]} /></${Page}>`;
@@ -31,7 +32,11 @@ export function Confirm({ s, state }) {
   const noRoom = state === 'noroom';
   const ready = p.status === 'ready';
   const { need, got, byDevice, ok: fileOk } = suppliedState(s);
-  const ok = ready && (!needAck || ack) && typedOk && !noRoom && fileOk;
+  // Live: the release to install, picked here; its manifest is part of the plan (002 FR-019a).
+  const rel = s.liveDevice && s.release ? s.release(s.machine) : null;
+  const relOk = !s.liveDevice || !!rel;
+  const chooseRelease = () => { setRelErr(null); s.chooseRelease(s.machine).then((r) => { if (r) s.withInput({ ...s.input, release: r.name }); }, setRelErr); };
+  const ok = ready && (!needAck || ack) && typedOk && !noRoom && fileOk && relOk;
   const pc = s.m.kind === 'pc';
   const b = backupView(s);
   const place = (v) => s.withInput({ ...s.input, choices: { ...s.input.choices, 'backup-to': v } });
@@ -40,6 +45,7 @@ export function Confirm({ s, state }) {
     : needAck && !ack ? 'Tick the box under “Erases your files” to install.'
     : !typedOk ? `Type the name of the system that is replaced to install.`
     : noRoom ? 'Nothing, until there is a place with room for the backup.'
+    : !relOk ? 'Nothing, until the release to install is chosen.'
     : b.on ? `The backup starts. It is checked by reading it back before anything on ${s.m.the} is written.`
     : `The installation starts, without a backup: first the values unique to ${s.m.the} are read.`;
   return html`<${Page} s=${s} step="confirm" eyebrow="Confirm · one confirmation for the whole plan" title="Confirm the plan"
@@ -81,6 +87,16 @@ export function Confirm({ s, state }) {
           : got.check.verdict === 'fits-unknown' ? 'Not a known file, and its warning isn’t confirmed: it isn’t sent.'
           : 'It doesn’t fit: it is never sent. Choose another file.'}</p>
         ${fileOk ? null : html`<p class="ins-small"><a class="il-link" href=${s.link('supply')} id="to-supply">${got ? 'Back to the file' : 'Choose the file'}</a></p>`}
+      </div>
+    </section>` : null}
+    ${s.liveDevice ? html`<section class="ins-stack" id="release">
+      <h2 class="ins-h2">The release to install</h2>
+      <div class=${rel ? 'ins-card' : 'ins-card ins-card--warn'}>
+        <span class="il-label">A folder on this computer</span>
+        <span class="ins-card__title" style="overflow-wrap: anywhere" id="release-name">${rel ? rel.name : 'Not chosen yet'}</span>
+        <p class="ins-small">${rel ? `Its manifest names ${Object.keys(rel.artifacts).length} files; the plan above is the plan for them. Each file is checked against the manifest before it is written.` : 'The folder of the GlassineOS release, with its release.json. Its files are read from there while the installation runs; nothing is downloaded.'}</p>
+        ${relErr ? html`<p class="ins-small"><strong>Not taken:</strong> ${String(relErr.message || relErr)}</p>` : null}
+        <div class="ins-buttons"><button type="button" class="il-btn" id="choose-release" onClick=${chooseRelease}>${rel ? 'Choose another' : 'Choose the release folder'}</button></div>
       </div>
     </section>` : null}
     ${word ? html`<section class="ins-stack">
