@@ -21,6 +21,10 @@ What differs between machines comes from a **device description** (how to recogn
 device, its capabilities, its partitions, its device data) and the **backend** of its
 platform family: devices that start from an Android bootloader, and PCs that start from
 UEFI. Device descriptions and recipes live in each device's bootstrap repository.
+Until a device's bootstrap repository holds them, they are here: descriptions in `devices/`,
+and in `layouts/` the partition layout a release carries for a device (role
+`partition-layout`, kind `gpt-recipe`; GlassineOS/images puts `layouts/onyx-noteair.json`
+into the Note Air's releases, pinned by commit and SHA-256).
 
 The decision behind this is
 [0014](https://docs.glassine.org/decisions/0014-installation-and-provisioning/); the first
