@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //! The installer release's manifest (002 FR-019a): what the release states
-//! about each artifact role it supplies. The core reads only the numbers; how
-//! the release works them out is the release's rule, not the installer's.
+//! about each artifact role it supplies: the least partition size, and the
+//! file with its hash, size and kind (read by `artifacts`). How the release
+//! works the numbers out is the release's rule, not the installer's. Every
+//! field is optional, so a manifest of format 1 stays one.
 
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -26,6 +28,18 @@ pub struct Role {
     /// to (for `base`: the system partition).
     #[serde(default)]
     pub min_partition_bytes: Option<u64>,
+    /// The artifact's file, relative to the release (a plain relative path).
+    #[serde(default)]
+    pub file: Option<String>,
+    /// The SHA-256 of the file, lower-case hex.
+    #[serde(default)]
+    pub sha256: Option<String>,
+    /// The file's size in bytes.
+    #[serde(default)]
+    pub size: Option<u64>,
+    /// What the file is (`raw-image`, `btrfs-send`, …); the release's word.
+    #[serde(default)]
+    pub kind: Option<String>,
 }
 
 impl Release {
