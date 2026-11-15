@@ -208,8 +208,10 @@ texts the description provides.
   says.
 - **FR-016a**: An installation whose description says the device's GlassineOS recovery
   needs something that isn't there yet (the recovery isn't built) is refused for people,
-  with what is missing. A developer who asks may run it; the plan then states plainly that
-  the device ends without the GlassineOS recovery and what is missing.
+  with what is missing. A developer who asks may run it: the plan leaves out the steps that
+  write the recovery, names them and what is missing, says plainly that the device ends
+  without the GlassineOS recovery and what its recovery partition holds instead, and goes
+  on with the other steps.
 - **FR-017**: The installer runs from Linux, Windows or a browser on a computer connected
   to the device, and on a PC from removable media started on that PC.
 - **FR-018**: The installer reaches a device through the connections its description

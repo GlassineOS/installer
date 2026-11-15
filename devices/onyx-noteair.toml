@@ -546,11 +546,15 @@ status = "needs"
 with = "the GlassineOS recovery, which isn't built yet"
 untried = "not built"
 
+# On the A/B table the stock boot image can't find its vendor partition (it
+# mounts it by the name `vendor`, now vendor_a): Android stays on slot A but
+# doesn't start until slot A's boot image mounts its own slot's partition.
 [[capabilities]]
 id = "keep-stock"
-status = "have"
+status = "needs"
+with = "slot A's boot image changed to mount its own slot's vendor partition, which the installation doesn't do yet"
 when = { choice = "keep-stock", equals = "yes" }
-untried = "stock Android on slot A next to GlassineOS on slot B runs in development, with slot A's boot image changed to mount its slot's vendor partition; the installation leaves the stock boot image, which mounts `vendor` by that name, so with it Android isn't known to start; not from an installation"
+untried = "stock Android on slot A next to GlassineOS on slot B runs in development only with that change to its boot image; not from an installation"
 
 [[capabilities]]
 id = "keep-stock"
@@ -729,13 +733,14 @@ safe_stop = true
 untried = "the GlassineOS recovery isn't built yet"
 
 # The slot flags live in the partition table's entries: the RAM environment
-# writes them, backup copy first.
+# writes them, backup copy first. Not after write-recovery: a developer run
+# without the GlassineOS recovery leaves that step out and still sets the slot.
 [[steps]]
 id = "set-slot"
 job = "install"
 kind = "set-boot-slot"
 mode = "ram"
-after = ["write-recovery"]
+after = ["write-kernel", "write-base", "write-vendor"]
 params = { slot = "b", pin = true }
 boot_settings = ["slot-flags"]
 done = [{ key = "installer.step.set-slot", present = true, mode = "installer" }]
@@ -782,7 +787,7 @@ cable-to-emergency = "Let the battery run completely empty. Connect the emergenc
 keep-stock = "Keep the stock Android system next to GlassineOS."
 
 [texts.options]
-"keep-stock.yes" = "Keep Android. It stays on the device and can still start. Its data partition is made smaller, so the data on it is deleted."
+"keep-stock.yes" = "Keep Android. It stays on the device, but it can't start yet next to GlassineOS. Its data partition is made smaller, so the data on it is deleted."
 "keep-stock.no" = "Don't keep Android. It is never started again, unless you go back to stock."
 
 [texts.steps]

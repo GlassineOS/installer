@@ -36,7 +36,7 @@
   "systems": [
     {
       "system": "stock system",
-      "outcome": "kept and still startable"
+      "outcome": "not kept"
     }
   ],
   "partitions": [
@@ -265,8 +265,8 @@
     },
     {
       "id": "keep-stock",
-      "status": "have",
-      "with": null,
+      "status": "needs",
+      "with": "slot A's boot image changed to mount its own slot's vendor partition, which the installation doesn't do yet",
       "tried": false
     },
     {
