@@ -37,6 +37,22 @@ pub struct Record {
     pub backup: Option<Backup>,
     #[serde(default)]
     pub journal: Vec<Entry>,
+    /// The restart into the installed system after the last step: saved
+    /// before it is sent (`sent` false) and again once the device took it.
+    /// A record with it sent waits for the person's check; the installer
+    /// doesn't touch the device again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub final_restart: Option<FinalRestart>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FinalRestart {
+    pub transition: String,
+    /// The mode the device restarts into.
+    pub mode: String,
+    /// What the person checks there.
+    pub check: String,
+    pub sent: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -150,6 +166,7 @@ impl Record {
             artifacts,
             backup,
             journal: vec![],
+            final_restart: None,
         };
         r.plan_steps()?;
         Ok(r)

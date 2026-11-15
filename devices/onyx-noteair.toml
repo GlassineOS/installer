@@ -257,7 +257,7 @@ id = "fastboot-to-ram"
 from = "fastboot"
 to = "ram"
 by = "installer"
-untried = "the GlassineOS boot loader's oem reboot-recovery, which starts the recovery partition once; the RAM environment was never started this way"
+untried = "the GlassineOS boot loader's oem reboot-recovery, which starts the recovery partition once, sent in the same fastboot session as the commands before it (the inspect's getvars, the flash of the RAM environment): its equal-length framing answered later commands in development, but this verb was never sent after others and the RAM environment was never started this way"
 
 [[transitions]]
 id = "ram-to-glassine"
@@ -380,9 +380,18 @@ id = "boot-loader"
 kind = "boot-loader"
 back_up = { with = "role:disk" }
 
+# The boot loader reads a slot's flags from bits 48 to 55 of its boot
+# partition's entry in the partition table: priority 48-49, active 50, tries
+# 51-53, successful 54, unbootable 55. Pinned: active, priority 3, 7 tries,
+# successful (the tries cover GlassineOS's first start: a bare boot, a
+# restart, the candidate's boot). The other slot stays a bootable fallback at
+# priority 1. Unbootable: never picked, never fallen back to. The values are
+# the lab's slot tool's, which switched slots and fell back on this device in
+# development (2026-06-03); the installer hasn't written them yet.
 [[boot_settings]]
 id = "slot-flags"
 kind = "slot-flags"
+params = { entry = "boot_{slot}", bits = "0x00ff000000000000", pinned = "0x007f000000000000", fallback = "0x007d000000000000", unbootable = "0x0080000000000000" }
 back_up = { with = "role:disk" }
 
 # ---- what it keeps -------------------------------------------------------------

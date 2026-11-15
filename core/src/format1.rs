@@ -245,6 +245,8 @@ pub struct PartitionRule {
 pub struct BootSetting {
     pub id: String,
     pub kind: String,
+    #[serde(default)]
+    pub params: toml::Table,
     pub back_up: BackUp,
 }
 
@@ -943,14 +945,20 @@ pub fn shape_for(format: i64) -> Table {
             opt("back_up", back_up(format)),
         ],
     ));
-    let boot_setting = table(Table::new(
+    let boot_setting_fields = Table::new(
         "a boot setting (FR-016)",
         vec![
             f("id", sp(ID_PATTERN, "")),
             f("kind", se(&kinds_ids(vocab::BOOT_SETTING_KINDS), "")),
             f("back_up", back_up(format)),
         ],
-    ));
+    );
+    // A kind's parameters from format 3 on (the slot-flag scheme).
+    let boot_setting = if format >= 3 {
+        table(tagged(boot_setting_fields, "kind", vocab::BOOT_SETTING_KINDS, format))
+    } else {
+        table(boot_setting_fields)
+    };
     let unit_value = table(Table::new(
         "a value unique to the unit that GlassineOS can't read itself (FR-017)",
         vec![

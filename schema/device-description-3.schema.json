@@ -53,6 +53,117 @@
     "boot_settings": {
       "items": {
         "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "kind": {
+                  "const": "boot-loader"
+                }
+              },
+              "required": [
+                "kind"
+              ]
+            },
+            "then": {
+              "properties": {
+                "params": {
+                  "additionalProperties": false,
+                  "description": "parameters of boot-loader",
+                  "properties": {},
+                  "type": "object"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "kind": {
+                  "const": "slot-flags"
+                }
+              },
+              "required": [
+                "kind"
+              ]
+            },
+            "then": {
+              "properties": {
+                "params": {
+                  "additionalProperties": false,
+                  "description": "parameters of slot-flags",
+                  "properties": {
+                    "bits": {
+                      "description": "the entry's attribute bits that hold the flags: a 64-bit mask in hex (0x...)",
+                      "type": "string"
+                    },
+                    "entry": {
+                      "description": "the partition whose table entry holds a slot's flags, with {slot} for the slot letter (boot_{slot}); a set-boot-slot step in a glassine-ram mode writes them there",
+                      "type": "string"
+                    },
+                    "fallback": {
+                      "description": "the flags every other slot gets when one is pinned (bootable at a lower priority), in hex inside bits",
+                      "type": "string"
+                    },
+                    "pinned": {
+                      "description": "the flags of a slot a step pins (active, the highest priority, its tries, successful), in hex inside bits",
+                      "type": "string"
+                    },
+                    "unbootable": {
+                      "description": "the flags of a slot a step marks unbootable, in hex inside bits",
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "kind": {
+                  "const": "firmware-boot-entry"
+                }
+              },
+              "required": [
+                "kind"
+              ]
+            },
+            "then": {
+              "properties": {
+                "params": {
+                  "additionalProperties": false,
+                  "description": "parameters of firmware-boot-entry",
+                  "properties": {},
+                  "type": "object"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "kind": {
+                  "const": "firmware-boot-order"
+                }
+              },
+              "required": [
+                "kind"
+              ]
+            },
+            "then": {
+              "properties": {
+                "params": {
+                  "additionalProperties": false,
+                  "description": "parameters of firmware-boot-order",
+                  "properties": {},
+                  "type": "object"
+                }
+              }
+            }
+          }
+        ],
         "description": "a boot setting (FR-016)",
         "properties": {
           "back_up": {
@@ -132,6 +243,9 @@
               "firmware-boot-order"
             ],
             "type": "string"
+          },
+          "params": {
+            "type": "object"
           }
         },
         "required": [
@@ -3124,7 +3238,38 @@
         "doc": "the A/B slot flags: active, priority, tries, successful, unbootable",
         "id": "slot-flags",
         "modes": [],
-        "params": []
+        "params": [
+          {
+            "doc": "the partition whose table entry holds a slot's flags, with {slot} for the slot letter (boot_{slot}); a set-boot-slot step in a glassine-ram mode writes them there",
+            "name": "entry",
+            "required": false,
+            "type": "Text"
+          },
+          {
+            "doc": "the entry's attribute bits that hold the flags: a 64-bit mask in hex (0x...)",
+            "name": "bits",
+            "required": false,
+            "type": "Text"
+          },
+          {
+            "doc": "the flags of a slot a step pins (active, the highest priority, its tries, successful), in hex inside bits",
+            "name": "pinned",
+            "required": false,
+            "type": "Text"
+          },
+          {
+            "doc": "the flags every other slot gets when one is pinned (bootable at a lower priority), in hex inside bits",
+            "name": "fallback",
+            "required": false,
+            "type": "Text"
+          },
+          {
+            "doc": "the flags of a slot a step marks unbootable, in hex inside bits",
+            "name": "unbootable",
+            "required": false,
+            "type": "Text"
+          }
+        ]
       },
       {
         "backends": [
