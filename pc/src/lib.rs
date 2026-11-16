@@ -372,3 +372,65 @@ pub fn inspect(root: &Path) -> Result<Inspected, String> {
         notes,
     })
 }
+
+/// A disk as [`inspect`] numbers it: its index in the facts, its device
+/// name below `dev/`, what sysfs says of it, and whether something holds it
+/// (a mounted file system or a swap area on it, or on a device stacked on it).
+#[derive(Debug, Clone)]
+pub struct DiskName {
+    pub index: u32,
+    pub name: String,
+    pub info: DiskInfo,
+    pub in_use: bool,
+}
+
+/// The disks below `root`, numbered as [`inspect`] numbers them.
+pub fn disk_names(root: &Path) -> Result<Vec<DiskName>, String> {
+    let t = Tree { root: root.to_path_buf() };
+    if !t.path("sys/block").is_dir() {
+        return Err(format!("{} has no sys/block: not a Linux system's tree", t.root.display()));
+    }
+    let bs = blocks(&t);
+    let by_name = names_of(&bs);
+    let ms = mounts(&t);
+    let by_dev = dev_names(&t);
+    let mut used: Vec<u32> = ms.iter().filter_map(|m| disk_of_mount(&t, &ms, m, &by_dev, &by_name, 0)).collect();
+    if let Some(swaps) = t.text("proc/swaps") {
+        for l in swaps.lines().skip(1) {
+            let Some(dev) = l.split_whitespace().next() else { continue };
+            let name = dev.rsplit('/').next().unwrap_or(dev);
+            if let Some(i) = disk_of_name(&t, &ms, name, &by_name, 0) {
+                used.push(i);
+            }
+        }
+    }
+    Ok(bs
+        .into_iter()
+        .enumerate()
+        .map(|(i, b)| DiskName {
+            index: i as u32,
+            in_use: used.contains(&(i as u32)),
+            name: b.name,
+            info: b.info,
+        })
+        .collect())
+}
+
+/// The disk a path of the running system lies on (below `root`'s
+/// mountinfo), if it lies on one of the disks.
+pub fn disk_of(root: &Path, path: &Path) -> Option<u32> {
+    let t = Tree { root: root.to_path_buf() };
+    let bs = blocks(&t);
+    let ms = mounts(&t);
+    disk_of_path(&t, &ms, &path.to_string_lossy(), &names_of(&bs), 0)
+}
+
+fn names_of(bs: &[Block]) -> BTreeMap<String, u32> {
+    let mut by_name = BTreeMap::new();
+    for (i, b) in bs.iter().enumerate() {
+        for (_, n) in &b.devs {
+            by_name.insert(n.clone(), i as u32);
+        }
+    }
+    by_name
+}

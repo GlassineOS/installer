@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+[package]
+name = "glassine-installer-pcwrite"
+description = "The GlassineOS installer's PC writer: the one place that writes a PC's disk and firmware variables (Linux)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+# Fenced: the reader (glassine-installer-pc) stays read-only; every write to
+# a PC's disks and firmware variables is in this crate, and only the PC
+# executor (core pc_execute) drives it, through its Machine.
+[dependencies]
+glassine-installer = { path = "../core" }
+glassine-installer-pc = { path = "../pc" }
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+libc = "0.2"
+serde_json = "1"
+
+[dev-dependencies]
+pollster = "0.4"
