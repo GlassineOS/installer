@@ -965,7 +965,8 @@ fn a_restore_write_that_reads_back_otherwise_stops_and_a_rerun_finishes() {
     };
     let mut m = m0.clone();
     restore(&mut m, &mut edge()).unwrap();
-    let (base, n) = (m0.writes, m.writes - m0.writes);
+    // the disk writes only (a variable write isn't corrupted by the fault)
+    let (base, n) = (m0.writes, m.log.len() - m0.log.len());
     assert!(n > 3, "{n} restore writes");
     for k in 1..=n {
         let mut m = m0.clone();
