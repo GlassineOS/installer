@@ -161,7 +161,7 @@ export function Check({ s }) {
     supported: 'GlassineOS supports it. Here is what it is now, and what an installation would keep, back up, replace and create.',
     not: rec.result === 'conflict' ? `Some of what it reports matches ${name ? 'the ' + name : 'a description'}, some doesn’t. The installer goes by the hardware and treats it as unsupported. Nothing was changed.` : 'The check is done and nothing was changed. Here is what the installer found, and what is missing.',
     mode: `It answered in a mode where the installer can’t see everything it needs. ${rec.needs_modes.length ? 'Restart it into the mode below and check again.' : ''} Nothing was changed.`,
-    refused: 'GlassineOS supports it, but the installation is refused until what is below changes. Nothing was changed.',
+    refused: 'The installer recognises it, but the installation is refused until what is below changes. Nothing was changed.',
   }[variant];
   const unchanged = pc ? 'the PC starts as before.' : 'the device starts its system as before.';
   const facts = factRows(s), tech = techRows(s);

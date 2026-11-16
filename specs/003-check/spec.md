@@ -50,8 +50,8 @@ another Linux; holding an existing EFI system partition and another system; too 
 found, proposes where GlassineOS goes (free space, a disk the person picks, or replacing a
 named system), lists a backup image for each disk it would write to and none for the
 others, and says what happens to the firmware's boot entries. A disk that is too
-small for the release manifest the check is given (002 FR-019a) is refused with the
-space it lacks. With Secure Boot on, every plan is refused with the reason and how to
+small for GlassineOS's partitions (the description's sizes, and the least sizes the release
+manifest the check is given states, 002 FR-019a) is refused with the space it lacks. With Secure Boot on, every plan is refused with the reason and how to
 switch it off (001 FR-016b). The disks and the firmware's stored settings are
 unchanged afterwards.
 

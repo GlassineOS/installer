@@ -462,6 +462,38 @@ fn without_a_release_the_least_is_not_known_yet() {
     assert_eq!(plan_pc("pc-windows", &i).status, Status::Ready);
 }
 
+/// 002 FR-014a: a relative size whose least is the release's counts that
+/// least on the disk; while no release states it, it counts as nothing and
+/// the disk's need is only "at least". (The shipped PC description sizes its
+/// system partition fixed; this one makes it take the rest.)
+#[test]
+fn a_relative_size_counts_the_release_least() {
+    let t = mutate(
+        &pc(),
+        "{ name = \"glassine-system\", size = \"16GiB\", at_least = \"release:base\", role = \"system\" }",
+        "{ name = \"glassine-system\", size = \"rest-of-free-space\", at_least = \"release:base\", role = \"system\" }",
+    );
+    let t = mutate(
+        &t,
+        "{ name = \"glassine-userdata\", size = \"rest-of-free-space\", at_least = \"8GiB\" }",
+        "{ name = \"glassine-userdata\", size = \"8GiB\" }",
+    );
+    let ds = [valid(&t)];
+    let refs: Vec<&Description> = ds.iter().collect();
+    let f = facts("pc-small-disk");
+    let p = plan(&refs, &f, &recognize(&refs, &f), &input(&[], &[], true));
+    let d = p.space.disk.as_ref().unwrap();
+    // 2 GiB boot and 8 GiB userdata fixed; the base's least not known yet.
+    assert_eq!((d.needs, d.exact), (10 * GIB, false));
+    let m = p.space.minimums.iter().find(|m| m.role == "base").unwrap();
+    assert_eq!((m.at_least, m.size), (None, None));
+    let mut i = input(&[], &[], true);
+    i.release = Some(release("base-8gib"));
+    let p = plan(&refs, &f, &recognize(&refs, &f), &i);
+    let d = p.space.disk.as_ref().unwrap();
+    assert_eq!((d.needs, d.free, d.lacks, d.exact), (18 * GIB, 6 * GIB, 12 * GIB, true));
+}
+
 /// 002 FR-019a, boot 010 FR-029: a release whose kernel needs more than the
 /// boot partition, or whose base needs more than the system partition, is
 /// refused with what each lacks.

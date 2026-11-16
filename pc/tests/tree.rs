@@ -414,6 +414,45 @@ fn the_plan_on_what_it_read() {
     assert!(p.reasons.iter().any(|r| r.contains("installer's own disk 1")), "{:?}", p.reasons);
 }
 
+/// Boot 010 FR-036: Secure Boot as the reader reads it. On refuses the plan
+/// (for a developer too); a `SecureBoot` it lists but can't read is unknown,
+/// noted, and refuses nothing by itself.
+#[test]
+fn secure_boot_on_refuses_and_unreadable_is_unknown() {
+    let g = glassine_installer::efivar::GLOBAL;
+    let d = pc_description();
+    let ds = [&d];
+    let i = Input {
+        developer: true,
+        ..Default::default()
+    };
+    let root = tree("pc-tree-secure-boot-on");
+    machine(&root);
+    fs::write(root.join(format!("sys/firmware/efi/efivars/SecureBoot-{g}")), [6, 0, 0, 0, 1]).unwrap();
+    let s = glassine_installer_pc::inspect(&root).unwrap().snapshot;
+    assert_eq!(s.firmware.as_ref().unwrap().secure_boot.as_deref(), Some("on"));
+    let p = plan::plan(&ds, &s, &recognize(&ds, &s), &i);
+    assert_eq!(p.status, Status::Refused);
+    assert_eq!(p.reasons, [plan::SECURE_BOOT_ON]);
+
+    let root = tree("pc-tree-secure-boot-unreadable");
+    machine(&root);
+    let v = root.join(format!("sys/firmware/efi/efivars/SecureBoot-{g}"));
+    fs::remove_file(&v).unwrap();
+    fs::create_dir(&v).unwrap(); // listed, but no read of it succeeds
+    let got = glassine_installer_pc::inspect(&root).unwrap();
+    let f = got.snapshot.firmware.as_ref().unwrap();
+    assert_eq!((f.secure_boot.as_deref(), f.variables.as_deref()), (None, Some("readable")));
+    assert!(
+        got.notes.iter().any(|n| n.contains("SecureBoot are listed but couldn't be read")),
+        "{:?}",
+        got.notes
+    );
+    let p = plan::plan(&ds, &got.snapshot, &recognize(&ds, &got.snapshot), &i);
+    assert_eq!(p.status, Status::Ready, "{:?}", p.reasons);
+    assert_eq!(p.notes, [plan::SECURE_BOOT_UNKNOWN]);
+}
+
 #[test]
 fn without_knowing_the_installers_disk_a_removable_target_is_refused_for_the_backup() {
     let root = tree("pc-tree-unknown");

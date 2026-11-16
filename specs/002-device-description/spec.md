@@ -386,7 +386,7 @@ pinned to,
   description holds (the device-data list of FR-018; where the description keeps another
   system, the slot that system starts from, which is the slot the step that retires it
   marks unbootable when the person chooses not to keep it; where it names a data
-  partition (FR-018c), glassine-deploy's device part: the system partition, the data
+  partition (FR-018c) that the system finds by name, glassine-deploy's device part: the system partition, the data
   partition and the space kept free at its end, at
   `/usr/share/glassine/deploy.conf.device`, which the device's package puts into
   `/etc/glassine/deploy.conf` with its own settings) is derived from the
