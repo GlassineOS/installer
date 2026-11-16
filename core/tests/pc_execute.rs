@@ -1022,3 +1022,32 @@ fn a_format_1_backup_is_restored_too() {
     assert!(r.written_bytes > 0);
     assert_eq!(disk_sha(&m), disk_sha(&before));
 }
+
+#[test]
+fn an_mbr_disk_keeps_its_boot_records_and_the_used_blocks_of_its_logical_partitions() {
+    // a primary FAT16 at 1 MiB, an extended partition at 64 MiB with one
+    // logical FAT16 (its boot record at the extended's start)
+    let mut d = Disk::new(0, DISK, "sata");
+    let (p1, ext, lrel) = (2048u32, 64 * 2048u32, 2048u32);
+    let len = 32 * 2048u32;
+    d.put(0, &img::mbr(&[(0x06, p1, len), (0x05, ext, 2 * len)]));
+    d.put(ext as u64 * 512, &img::ebr(0x06, lrel, len, 0, 0));
+    for base in [p1 as u64 * 512, (ext + lrel) as u64 * 512] {
+        let (w, _) = img::fat16(len, 10);
+        for (o, b) in w {
+            d.put(base + o, &b);
+        }
+        // the boot sector's media byte, as the FAT's first entry has it
+        d.put(base + 21, &[0xf8]);
+    }
+    let k = pc_image::keep(&mut d, DISK, 512);
+    assert_eq!(k.whole, None);
+    let parts: Vec<(u32, String)> = k.partitions.iter().map(|p| (p.partition, p.kept.clone())).collect();
+    assert_eq!(parts, [(1, "used blocks".to_string()), (5, "used blocks".to_string())], "{:?}", k.partitions);
+    let inside = |o: u64| k.ranges.iter().any(|(a, b)| o >= *a && o < *b);
+    assert!(inside(0) && inside(ext as u64 * 512), "the MBR and the extended boot record are kept");
+    // the free space of each FAT16 is left out
+    for base in [p1 as u64 * 512, (ext + lrel) as u64 * 512] {
+        assert!(!inside(base + 16 * MIB), "{:?}", k.ranges);
+    }
+}

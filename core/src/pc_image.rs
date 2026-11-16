@@ -124,7 +124,15 @@ pub fn keep(r: &mut dyn ReadAt, size: u64, sector: u64) -> Keep {
     let mut parts: Vec<(u32, u64, u64)> = match t.kind {
         Kind::Unreadable => return whole("the partition table is damaged".into()),
         Kind::None => vec![(0, 0, size)],
-        Kind::Gpt | Kind::Mbr => t.entries.iter().map(|e| (e.index, e.start, e.size)).collect(),
+        // An MBR's extended partition only holds the logical ones: its own
+        // bytes outside them (the boot records of the chain) are kept as
+        // space outside the partitions.
+        Kind::Gpt | Kind::Mbr => t
+            .entries
+            .iter()
+            .filter(|e| !(t.kind == Kind::Mbr && matches!(e.type_id.as_str(), "0x05" | "0x0f" | "0x85")))
+            .map(|e| (e.index, e.start, e.size))
+            .collect(),
     };
     parts.sort_by_key(|p| p.1);
     for w in parts.windows(2) {
