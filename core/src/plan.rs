@@ -9,7 +9,7 @@ use crate::format1::{Description, Scalar, Step, When};
 use crate::recognize::{Outcome, Recognition, StateResult};
 use crate::validate::glob;
 use crate::vocab;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub const PLAN_FORMAT: i64 = 1;
@@ -170,12 +170,22 @@ pub struct SystemOutcome {
 #[derive(Debug, Clone, Serialize)]
 pub struct PartitionPlan {
     pub partition: String,
+    /// Where inspecting found it: its disk and its number in that disk's
+    /// table (a PC's partitions; a step that removes one names it so).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub at: Option<PartAt>,
     pub class: String,
     pub actions: Vec<String>,
     pub size: Option<u64>,
     /// A destroying change: the person's files on it are lost (FR-015).
     pub loses_files: bool,
     pub steps: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PartAt {
+    pub disk: u32,
+    pub index: u32,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -342,6 +352,8 @@ struct Part {
     display: String,
     /// The disk it is on.
     disk: Option<u32>,
+    /// Its number in that disk's table, where inspecting found it there.
+    index: Option<u32>,
     name: Option<String>,
     size: Option<u64>,
     type_guid: Option<String>,
@@ -632,6 +644,7 @@ pub fn plan(ds: &[&Description], facts: &Snapshot, rec: &Recognition, input: &In
                 "partition-table" => vec![Part {
                     display: "partition table".into(),
                     disk: disk_for(item),
+                    index: None,
                     name: None,
                     size: None,
                     type_guid: None,
@@ -657,6 +670,7 @@ pub fn plan(ds: &[&Description], facts: &Snapshot, rec: &Recognition, input: &In
             None if creating => vec![Part {
                 display: r.to_string(),
                 disk: disk_for(item),
+                index: None,
                 name: Some(r.to_string()),
                 size: None,
                 type_guid: None,
@@ -665,6 +679,7 @@ pub fn plan(ds: &[&Description], facts: &Snapshot, rec: &Recognition, input: &In
             None => vec![Part {
                 display: format!("{r} (not found)"),
                 disk: disk_for(item),
+                index: None,
                 name: Some(r.to_string()),
                 size: None,
                 type_guid: None,
@@ -769,6 +784,7 @@ pub fn plan(ds: &[&Description], facts: &Snapshot, rec: &Recognition, input: &In
                         porder.push(p.display.clone());
                         PartitionPlan {
                             partition: p.display.clone(),
+                            at: p.disk.zip(p.index).map(|(disk, index)| PartAt { disk, index }),
                             class: class.clone(),
                             actions: vec![],
                             size: p.size,
@@ -1368,6 +1384,7 @@ fn parts_of(d: &Description, facts: &Snapshot, target: Option<u32>) -> Vec<Part>
                 out.push(Part {
                     display,
                     disk: Some(disk.index),
+                    index: Some(p.index),
                     name: p.name.clone(),
                     size: Some(p.size),
                     type_guid: p.type_guid.clone(),
@@ -1379,6 +1396,7 @@ fn parts_of(d: &Description, facts: &Snapshot, target: Option<u32>) -> Vec<Part>
                 out.push(Part {
                     display: format!("disk {} free space", disk.index),
                     disk: Some(disk.index),
+                    index: None,
                     name: None,
                     size: Some(free),
                     type_guid: None,
@@ -1393,6 +1411,7 @@ fn parts_of(d: &Description, facts: &Snapshot, target: Option<u32>) -> Vec<Part>
                 out.push(Part {
                     display: name.into(),
                     disk: Some(0),
+                    index: None,
                     name: Some(name.into()),
                     size: crate::facts::parse_number(v).map(|n| n as u64),
                     type_guid: None,

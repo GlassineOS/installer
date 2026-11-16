@@ -40,6 +40,13 @@ pub struct Role {
     /// What the file is (`raw-image`, `btrfs-send`, …); the release's word.
     #[serde(default)]
     pub kind: Option<String>,
+    /// For a kernel that starts as a kernel set (a PC, boot 010): the
+    /// command line it starts with, before the installation's identities.
+    #[serde(default)]
+    pub cmdline: Option<String>,
+    /// For a kernel: its release (boot 004's `release`).
+    #[serde(default)]
+    pub release: Option<String>,
 }
 
 impl Release {

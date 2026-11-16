@@ -13,6 +13,7 @@
             "enum": [
               "base",
               "kernel",
+              "initramfs",
               "boot-loader",
               "recovery",
               "partition-layout",
@@ -1360,6 +1361,7 @@
                       "enum": [
                         "base",
                         "kernel",
+                        "initramfs",
                         "boot-loader",
                         "recovery",
                         "partition-layout",
@@ -1407,6 +1409,7 @@
                       "enum": [
                         "base",
                         "kernel",
+                        "initramfs",
                         "boot-loader",
                         "recovery",
                         "partition-layout",
@@ -1459,6 +1462,7 @@
                       "enum": [
                         "base",
                         "kernel",
+                        "initramfs",
                         "boot-loader",
                         "recovery",
                         "partition-layout",
@@ -1506,6 +1510,7 @@
                       "enum": [
                         "base",
                         "kernel",
+                        "initramfs",
                         "boot-loader",
                         "recovery",
                         "partition-layout",
@@ -1688,6 +1693,33 @@
                       "enum": [
                         "base",
                         "kernel",
+                        "initramfs",
+                        "boot-loader",
+                        "recovery",
+                        "partition-layout",
+                        "ram-environment"
+                      ],
+                      "type": "string"
+                    },
+                    "initramfs": {
+                      "description": "the initramfs of the kernel set",
+                      "enum": [
+                        "base",
+                        "kernel",
+                        "initramfs",
+                        "boot-loader",
+                        "recovery",
+                        "partition-layout",
+                        "ram-environment"
+                      ],
+                      "type": "string"
+                    },
+                    "loader": {
+                      "description": "the boot loader the firmware starts",
+                      "enum": [
+                        "base",
+                        "kernel",
+                        "initramfs",
                         "boot-loader",
                         "recovery",
                         "partition-layout",
@@ -1703,6 +1735,8 @@
                   },
                   "required": [
                     "artifact",
+                    "initramfs",
+                    "loader",
                     "partition"
                   ],
                   "type": "object"
@@ -3342,7 +3376,7 @@
         "backends": [
           "uefi-pc"
         ],
-        "doc": "puts the kernel and the boot loader into a boot partition",
+        "doc": "makes the boot partition's file system and puts the loader (at its own path and the removable-media path), the first kernel set and the loader record on it",
         "id": "write-boot-files",
         "modes": [
           "local"
@@ -3351,6 +3385,18 @@
           {
             "doc": "the kernel",
             "name": "artifact",
+            "required": true,
+            "type": "Artifact"
+          },
+          {
+            "doc": "the initramfs of the kernel set",
+            "name": "initramfs",
+            "required": true,
+            "type": "Artifact"
+          },
+          {
+            "doc": "the boot loader the firmware starts",
+            "name": "loader",
             "required": true,
             "type": "Artifact"
           },

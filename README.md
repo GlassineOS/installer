@@ -61,6 +61,11 @@ installer's release files are a separate matter, read from a folder the person n
 For devices: on a computer connected to them, from Linux, Windows or a browser. For a PC:
 on the PC itself, started from removable media.
 
+A PC's write steps (backup, partition table, system and boot partitions, firmware boot
+entry) are in the core's `pc_execute`, run so far only on a simulated machine
+(`core/tests/pc_execute.rs`: a power cut after every write, a write that reads back
+otherwise, a cut at every save of the record, each resumed). Never on a real PC.
+
 ### Setting up the computer once
 
 The installer talks to a device in its USB modes (its boot loader's, its emergency download
