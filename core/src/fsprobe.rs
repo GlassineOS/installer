@@ -21,10 +21,17 @@ pub struct Probed {
     /// ntfs, swap, crypto_LUKS.
     pub kind: String,
     pub used: Option<u64>,
+    /// How an NTFS volume was left when it wasn't shut down fully
+    /// (`hibernated`, `dirty`, `log-not-clean`: [`crate::used::ntfs_state`]).
+    pub unclean: Option<String>,
 }
 
 fn probed(kind: &str, used: Option<u64>) -> Option<Probed> {
-    Some(Probed { kind: kind.into(), used })
+    Some(Probed {
+        kind: kind.into(),
+        used,
+        unclean: None,
+    })
 }
 
 /// The file system on a partition of `size` bytes at `start`, if its magic
@@ -47,7 +54,12 @@ fn probe_window(w: &mut Window) -> Result<Option<Probed>, String> {
         return Ok(probed("xfs", xfs_used(&head)));
     }
     if &head[3..11] == b"NTFS    " {
-        return Ok(probed("ntfs", ntfs_used(w, &head).ok().flatten()));
+        let mut p = probed("ntfs", ntfs_used(w, &head).ok().flatten());
+        let state = crate::used::ntfs_state(&mut *w.disk, w.start, w.size);
+        if let (Some(p), Ok(Some(s))) = (p.as_mut(), state) {
+            p.unclean = Some(s.into());
+        }
+        return Ok(p);
     }
     if &head[3..11] == b"EXFAT   " {
         return Ok(probed("exfat", None));
@@ -93,6 +105,7 @@ fn ext(sb: &[u8]) -> Probed {
     Probed {
         kind: kind.into(),
         used: used.flatten(),
+        unclean: None,
     }
 }
 

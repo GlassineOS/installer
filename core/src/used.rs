@@ -555,11 +555,15 @@ fn btrfs(w: &mut Window) -> Result<Vec<(u64, u64)>, String> {
 
 // ---- NTFS --------------------------------------------------------------------------
 
+/// An attribute's type and bytes, copied out of its record.
+type Attr = (u32, Vec<u8>);
+
 struct Ntfs {
     bps: u64,
     cluster: u64,
     clusters: u64,
     mft: u64,
+    mirror: u64,
     record: u64,
 }
 
@@ -570,6 +574,82 @@ impl Ntfs {
         let at = self.mft * self.cluster + n * self.record;
         let r = read_vec(w, at, self.record as usize)?;
         Ok(self.fixup(r, b"FILE"))
+    }
+
+    /// Any MFT record, through `$MFT`'s own runs.
+    fn record_any(&self, w: &mut Window, n: u64) -> Result<Option<Vec<u8>>, String> {
+        let Some(mft) = self.record(w, 0)? else { return Ok(None) };
+        let Some((_, a)) = attrs(&mft).into_iter().find(|(t, a)| *t == 0x80 && a[9] == 0) else {
+            return Ok(None);
+        };
+        let Some(rs) = runs(a) else { return Ok(None) };
+        let mut at = n * self.record;
+        for (lcn, len) in rs {
+            let bytes = len * self.cluster;
+            if at + self.record <= bytes {
+                if lcn.checked_add(len).is_none_or(|e| e > self.clusters) {
+                    return Ok(None);
+                }
+                let r = read_vec(w, lcn * self.cluster + at, self.record as usize)?;
+                return Ok(self.fixup(r, b"FILE"));
+            }
+            if at < bytes {
+                return Ok(None); // a record across two runs
+            }
+            at -= bytes;
+        }
+        Ok(None)
+    }
+
+    /// The attributes of a file whose record may have an attribute list:
+    /// those of every record the list names (`None` when a list can't be
+    /// followed).
+    fn all_attrs(&self, w: &mut Window, rec: &[u8]) -> Result<Option<Vec<Attr>>, String> {
+        let own: Vec<Attr> = attrs(rec).into_iter().map(|(t, a)| (t, a.to_vec())).collect();
+        let Some((_, list)) = own.iter().find(|(t, _)| *t == 0x20) else {
+            return Ok(Some(own));
+        };
+        let l = if list[8] == 0 {
+            let (vo, vl) = (le16(list, 0x14) as usize, le32(list, 0x10) as usize);
+            let Some(l) = list.get(vo..vo + vl) else { return Ok(None) };
+            l.to_vec()
+        } else {
+            // kept outside the record: its runs
+            let size = le64(list, 0x30);
+            let Some(rs) = runs(list) else { return Ok(None) };
+            let mut l = vec![];
+            for (lcn, len) in rs {
+                if lcn.checked_add(len).is_none_or(|e| e > self.clusters) || l.len() as u64 > MAX_LIST {
+                    return Ok(None);
+                }
+                l.extend(read_vec(w, lcn * self.cluster, (len * self.cluster) as usize)?);
+            }
+            if (l.len() as u64) < size {
+                return Ok(None);
+            }
+            l.truncate(size as usize);
+            l
+        };
+        let l = &l[..];
+        let mut refs = vec![];
+        let mut e = 0;
+        while e + 0x1a <= l.len() {
+            let len = le16(l, e + 4) as usize;
+            if len < 0x1a {
+                break;
+            }
+            let r = le64(l, e + 0x10) & 0xffff_ffff_ffff;
+            if !refs.contains(&r) {
+                refs.push(r);
+            }
+            e += len;
+        }
+        let mut out = vec![];
+        for r in refs {
+            let Some(x) = self.record_any(w, r)? else { return Ok(None) };
+            out.extend(attrs(&x).into_iter().filter(|(t, _)| *t != 0x20).map(|(t, a)| (t, a.to_vec())));
+        }
+        Ok(Some(out))
     }
 
     fn fixup(&self, mut r: Vec<u8>, magic: &[u8; 4]) -> Option<Vec<u8>> {
@@ -697,8 +777,30 @@ fn logfile_clean(v: &Ntfs, w: &mut Window, rec: &[u8]) -> Result<bool, String> {
     Ok(newest.is_some_and(|(_, c)| c))
 }
 
-fn ntfs(w: &mut Window) -> Result<Vec<(u64, u64)>, String> {
-    let full = |why: &str| Err(format!("ntfs: {why}: kept whole"));
+/// How an NTFS volume was left, from its own metadata, read-only: `None`
+/// when it was shut down fully. `hibernated`: `hiberfil.sys` holds a
+/// hibernation image (Windows hibernated, or shut down with Fast Startup);
+/// `dirty`: the volume is marked dirty; `log-not-clean`: its `$LogFile`
+/// holds changes not yet replayed. Either way Windows will come back to a
+/// view of the volume it keeps elsewhere, so writing to it, or relying on
+/// what it holds now, can lose data. `Err` when the volume can't be read.
+pub fn ntfs_state(disk: &mut dyn ReadAt, start: u64, size: u64) -> Result<Option<&'static str>, String> {
+    let mut w = Window { disk, start, size };
+    let v = ntfs_open(&mut w)?;
+    ntfs_left(&v, &mut w)
+}
+
+/// What [`ntfs_state`] names, said for a person.
+pub fn ntfs_state_said(state: &str) -> &'static str {
+    match state {
+        "hibernated" => "Windows is hibernated on it, or was shut down with Fast Startup",
+        "dirty" => "it is marked dirty: Windows wasn't shut down fully, or a disk check is due",
+        _ => "its log holds changes Windows hasn't written yet (Fast Startup, or Windows didn't shut down fully)",
+    }
+}
+
+fn ntfs_open(w: &mut Window) -> Result<Ntfs, String> {
+    let full = |why: &str| Err(why.to_string());
     let b = read_vec(w, 0, 512)?;
     let bps = le16(&b, 11) as u64;
     let spc = match b[13] {
@@ -723,35 +825,155 @@ fn ntfs(w: &mut Window) -> Result<Vec<(u64, u64)>, String> {
         cluster,
         clusters: sectors / spc,
         mft: le64(&b, 0x30),
+        mirror: le64(&b, 0x38),
         record,
     };
-    let mirror = le64(&b, 0x38);
-    if !(1024..=65536).contains(&record) || v.clusters == 0 || v.mft >= v.clusters || mirror >= v.clusters {
+    if !(1024..=65536).contains(&record) || v.clusters == 0 || v.mft >= v.clusters || v.mirror >= v.clusters {
         return full("an impossible boot sector");
     }
     let _ = v.bps;
     // $MFT's first records and their mirror agree.
     let n = (4 * record).div_ceil(cluster) * cluster;
-    if mirror * cluster + n > w.size || v.mft * cluster + n > w.size {
+    if v.mirror * cluster + n > w.size || v.mft * cluster + n > w.size {
         return full("its MFT lies outside the volume");
     }
-    if read_vec(w, v.mft * cluster, (4 * record) as usize)? != read_vec(w, mirror * cluster, (4 * record) as usize)? {
+    if read_vec(w, v.mft * cluster, (4 * record) as usize)? != read_vec(w, v.mirror * cluster, (4 * record) as usize)? {
         return full("$MFT and $MFTMirr disagree");
     }
-    let Some(vol) = v.record(w, 3)? else { return full("$Volume can't be read") };
+    Ok(v)
+}
+
+/// How the volume was left (see [`ntfs_state`]); `Err` where the metadata
+/// that tells it can't be read.
+fn ntfs_left(v: &Ntfs, w: &mut Window) -> Result<Option<&'static str>, String> {
+    if hibernated(v, w)? {
+        return Ok(Some("hibernated"));
+    }
+    let Some(vol) = v.record(w, 3)? else {
+        return Err("$Volume can't be read".into());
+    };
     let Some((_, info)) = attrs(&vol).into_iter().find(|(t, a)| *t == 0x70 && a[8] == 0) else {
-        return full("$Volume has no volume information");
+        return Err("$Volume has no volume information".into());
     };
     let vo = le16(info, 0x14) as usize;
     if vo + 12 > info.len() {
-        return full("$Volume's information is damaged");
+        return Err("$Volume's information is damaged".into());
     }
     if le16(info, vo + 10) & 0x1 != 0 {
-        return full("marked dirty (Windows wasn't shut down fully, or a check is due)");
+        return Ok(Some("dirty"));
     }
-    let Some(log) = v.record(w, 2)? else { return full("$LogFile can't be read") };
-    if !logfile_clean(&v, w, &log)? {
-        return full("its log isn't clean (Windows' Fast Startup or hibernation)");
+    let Some(log) = v.record(w, 2)? else {
+        return Err("$LogFile can't be read".into());
+    };
+    if !logfile_clean(v, w, &log)? {
+        return Ok(Some("log-not-clean"));
+    }
+    Ok(None)
+}
+
+/// The longest attribute list followed.
+const MAX_LIST: u64 = 1 << 20;
+
+/// The most of the root directory's index read when looking for `hiberfil.sys`.
+const MAX_ROOT_INDEX: u64 = 16 << 20;
+
+/// Whether `hiberfil.sys` in the root directory starts with a hibernation
+/// image's signature (`hibr`, any case). No such file, or one Windows has
+/// cleared (zeros, or `wake` after a resume), is not hibernated.
+fn hibernated(v: &Ntfs, w: &mut Window) -> Result<bool, String> {
+    let Some(n) = root_entry(v, w, "hiberfil.sys")? else { return Ok(false) };
+    let Some(rec) = v.record_any(w, n)? else { return Ok(false) };
+    let Some(head) = data_of(v, w, &rec, 512)? else { return Ok(false) };
+    Ok(head[..4].eq_ignore_ascii_case(b"hibr"))
+}
+
+/// The MFT record number of a file in the root directory (record 5), by its
+/// name compared without case; from the root's index, every entry of every
+/// index block (the order of the tree doesn't matter for finding one name).
+fn root_entry(v: &Ntfs, w: &mut Window, name: &str) -> Result<Option<u64>, String> {
+    let Some(root) = v.record(w, 5)? else { return Ok(None) };
+    let want: Vec<u16> = name.encode_utf16().map(|c| (c as u8).to_ascii_lowercase() as u16).collect();
+    let matches = |key: &[u8]| -> bool {
+        if key.len() < 0x42 {
+            return false;
+        }
+        let len = key[0x40] as usize;
+        if len != want.len() || key.len() < 0x42 + 2 * len || key[0x41] == 2 {
+            return false; // another length, or the DOS-only short name
+        }
+        (0..len).all(|i| {
+            let c = le16(key, 0x42 + 2 * i);
+            c < 0x80 && (c as u8).to_ascii_lowercase() as u16 == want[i]
+        })
+    };
+    // entries from an index header at `h` of `b`: (record, key)
+    let scan = |b: &[u8], h: usize| -> Option<u64> {
+        if h + 16 > b.len() {
+            return None;
+        }
+        let (mut e, end) = (h + le32(b, h) as usize, (h + le32(b, h + 4) as usize).min(b.len()));
+        while e + 16 <= end {
+            let (len, key, flags) = (le16(b, e + 8) as usize, le16(b, e + 10) as usize, le16(b, e + 12));
+            if flags & 2 != 0 || len < 16 || e + len > end {
+                break;
+            }
+            if e + 16 + key <= end && matches(&b[e + 16..e + 16 + key]) {
+                return Some(le64(b, e) & 0xffff_ffff_ffff);
+            }
+            e += len;
+        }
+        None
+    };
+    let Some(all) = v.all_attrs(w, &root)? else { return Ok(None) };
+    let i30 = |a: &[u8]| a[9] == 4 && le16(a, 10) as usize + 8 <= a.len() && &a[le16(a, 10) as usize..le16(a, 10) as usize + 8] == b"$\0I\x003\x000\0";
+    let Some((_, ir)) = all.iter().find(|(t, a)| *t == 0x90 && a[8] == 0 && i30(a)) else {
+        return Ok(None);
+    };
+    let vo = le16(ir, 0x14) as usize;
+    if vo + 0x20 > ir.len() {
+        return Ok(None);
+    }
+    let block = le32(ir, vo + 8) as usize;
+    if let Some(n) = scan(ir, vo + 0x10) {
+        return Ok(Some(n));
+    }
+    if !(512..=65536).contains(&block) || !block.is_power_of_two() {
+        return Ok(None);
+    }
+    // the index blocks: every extent of $INDEX_ALLOCATION, in VCN order
+    let mut extents: Vec<&Vec<u8>> = all.iter().filter(|(t, a)| *t == 0xa0 && a[8] == 1 && i30(a)).map(|(_, a)| a).collect();
+    extents.sort_by_key(|a| le64(a, 0x10));
+    let mut blocks = vec![];
+    for a in extents {
+        let Some(rs) = runs(a) else { return Ok(None) };
+        for (lcn, len) in rs {
+            let bytes = len * v.cluster;
+            if lcn.checked_add(len).is_none_or(|e| e > v.clusters) || blocks.len() as u64 + bytes > MAX_ROOT_INDEX {
+                return Ok(None);
+            }
+            blocks.extend(read_vec(w, lcn * v.cluster, bytes as usize)?);
+        }
+    }
+    for b in blocks.chunks_exact(block) {
+        let Some(b) = v.fixup(b.to_vec(), b"INDX") else { continue };
+        if let Some(n) = scan(&b, 0x18) {
+            return Ok(Some(n));
+        }
+    }
+    Ok(None)
+}
+
+fn ntfs(w: &mut Window) -> Result<Vec<(u64, u64)>, String> {
+    let full = |why: &str| Err(format!("ntfs: {why}: kept whole"));
+    let v = match ntfs_open(w) {
+        Ok(v) => v,
+        Err(e) => return full(&e),
+    };
+    let (cluster, mirror) = (v.cluster, v.mirror);
+    match ntfs_left(&v, w) {
+        Err(e) => return full(&e),
+        Ok(Some(s)) => return full(ntfs_state_said(s)),
+        Ok(None) => {}
     }
     let Some(bm) = v.record(w, 6)? else { return full("$Bitmap can't be read") };
     let need = v.clusters.div_ceil(8);
