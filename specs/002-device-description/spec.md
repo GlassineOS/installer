@@ -296,14 +296,14 @@ pinned to,
   configuration takes from it, and from that system partition, where the two
   partitions are and what stays free (FR-030), except where the installer makes the
   partitions (a PC): there the system finds both by the identities the installer writes
-  into the boot entry's command line (001 FR-012a), so nothing is derived from it. A
+  into the first kernel set's command line (001 FR-012a), so nothing is derived from it. A
   description without it names no data partition, and nothing is derived from it.
 
 ### What an installation does
 
 - **FR-019**: `[[artifacts]]` lists what the installation writes that doesn't come from the
-  device, by role (the base, the kernel, the boot loader, the recovery, the partition
-  layout), never by version or address: the installer's release supplies each role and
+  device, by role (the base, the kernel, the initramfs a PC's kernel set starts with,
+  the boot loader, the recovery, the partition layout), never by version or address: the installer's release supplies each role and
   checks its integrity. A size is marked unknown until the release supplies it.
 - **FR-019a**: The installer's release has a manifest, a JSON object whose
   `release_format` is 1, that states per artifact role what the installer reads: the
@@ -327,7 +327,10 @@ pinned to,
   kernel sets (kernel, initramfs and command line each), two recovery images, and the boot
   splash and its one-time override at their largest (32 MiB each, boot 011 FR-004), all
   twice over, plus the file system's own room (its tables, and the loader at its two
-  paths), rounded up to a whole MiB.
+  paths), rounded up to a whole MiB. A `kernel` that starts as a kernel set may also state `cmdline`, the
+  command line it starts with before the installation adds its identities, and
+  `release`, the kernel's release; a PC's `base` is of kind `btrfs-pool-image`, the
+  system partition's whole file system as one image.
 - **FR-020**: `[[capabilities]]` states each capability the installed device has (choose a
   kernel, a one-shot trial boot, a recovery, keep the stock system, ...): `have`, `lack`, or
   `needs` (with what), each with `verified`. The ids are shared by all descriptions.

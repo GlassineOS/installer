@@ -120,6 +120,15 @@ pub enum Change {
         attributes: String,
         guid: String,
     },
+    /// A partition taken out of the table (its bytes stay where they are
+    /// until something is written there).
+    Removed {
+        slot: u32,
+        name: String,
+        first: u64,
+        last: u64,
+        size_bytes: u64,
+    },
     EntryArray {
         entries_before: u32,
         entries_after: u32,
@@ -165,6 +174,16 @@ impl fmt::Display for Change {
             } => write!(
                 f,
                 "partition {slot}: new {name}, sectors {first}..{last} ({size_bytes} bytes), attributes {attributes}"
+            ),
+            Change::Removed {
+                slot,
+                name,
+                first,
+                last,
+                size_bytes,
+            } => write!(
+                f,
+                "partition {slot}: {name} is removed, sectors {first}..{last} ({size_bytes} bytes; what is on it is lost)"
             ),
             Change::EntryArray {
                 entries_before,
@@ -285,16 +304,16 @@ impl Slot {
 }
 
 /// What both headers share; each copy adds where it is and where the other is.
-struct Header<'a> {
-    sector: u64,
-    first_usable: u64,
-    last_usable: u64,
-    disk_guid: &'a [u8],
-    entries: u32,
-    array_crc: u32,
+pub(crate) struct Header<'a> {
+    pub(crate) sector: u64,
+    pub(crate) first_usable: u64,
+    pub(crate) last_usable: u64,
+    pub(crate) disk_guid: &'a [u8],
+    pub(crate) entries: u32,
+    pub(crate) array_crc: u32,
 }
 
-fn header(g: &Header, current: u64, alternate: u64, array_at: u64) -> Vec<u8> {
+pub(crate) fn header(g: &Header, current: u64, alternate: u64, array_at: u64) -> Vec<u8> {
     let Header {
         sector,
         first_usable,

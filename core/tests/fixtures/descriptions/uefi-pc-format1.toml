@@ -111,6 +111,14 @@ role = "kernel"
 size = "unknown"
 
 [[artifacts]]
+role = "initramfs"
+size = "unknown"
+
+[[artifacts]]
+role = "boot-loader"
+size = "unknown"
+
+[[artifacts]]
 role = "partition-layout"
 size = "unknown"
 
@@ -216,7 +224,7 @@ job = "install"
 kind = "write-boot-files"
 mode = "local"
 after = ["write-base"]
-params = { artifact = "kernel", partition = "glassine-boot" }
+params = { artifact = "kernel", initramfs = "initramfs", loader = "boot-loader", partition = "glassine-boot" }
 writes = ["glassine-boot"]
 done = [{ key = "installer.step.write-boot", present = true, mode = "installer" }]
 escape.failure = { leaves = "previous-system-starts", way_out = { step = "write-boot" } }
