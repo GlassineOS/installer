@@ -78,7 +78,8 @@ person confirmed it.
 found on the PC, whether it is kept and still startable or replaced. Replacing one is never
 the default and is confirmed by name. GlassineOS gets its own boot, system and data
 partitions in the free space of the disk the person picks. A PC whose firmware enforces
-Secure Boot is refused at the check, with how to switch it off (FR-016b).
+Secure Boot is refused at the check, with how to switch it off (FR-016b). So is writing to a
+disk that holds a Windows volume Windows didn't shut down fully, with how to (FR-016c).
 
 ### Scenario 6 – Keep the stock system (P2)
 
@@ -282,6 +283,21 @@ texts the description provides.
   for that alone: a wrong guess leaves a firmware that doesn't start GlassineOS while the
   other systems still start, and the install medium itself doesn't start with Secure Boot
   on.
+- **FR-016c**: On a PC the check reads, without writing, whether each Windows (NTFS) volume
+  was shut down fully: it was not when its `hiberfil.sys` holds a hibernation image
+  (Windows hibernated, or shut down with Fast Startup), when the volume is marked dirty, or
+  when its log holds changes not yet written. Windows comes back to the state it saved
+  rather than to what the disk holds, so writing next to such a volume, or backing it up
+  and restoring it, can lose data on it.
+  - While such a volume is on a disk the installation writes to, the installation is
+    refused, for developers too. The reason names the volume, says why, and says how to
+    shut Windows down fully: hold Shift while choosing Shut down, or turn off Fast Startup
+    in the power options and shut down.
+  - Where the plan replaces that volume, it isn't refused: the plan says that what Windows
+    saved there is lost and how to shut Windows down fully; the backup holds the volume
+    whole (FR-009).
+  - Where the volume is on a disk the installation doesn't write to, the plan says so, with
+    the same advice, and doesn't refuse.
 - **FR-017**: The installer runs from Linux, Windows or a browser on a computer connected
   to the device, and on a PC from removable media started on that PC.
 - **FR-018**: The installer reaches a device through the connections its description

@@ -45,6 +45,7 @@ pub fn disk(index: u32, info: &DiskInfo, l: Option<&Layout>) -> Disk {
         p.as_ref().map(|p| Filesystem {
             kind: p.kind.clone(),
             used: p.used,
+            unclean: p.unclean.clone(),
             ..Default::default()
         })
     };

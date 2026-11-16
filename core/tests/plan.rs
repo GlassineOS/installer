@@ -604,3 +604,53 @@ fn the_release_manifest_is_read_by_its_format() {
     let r = Release::parse(r#"{"release_format": 1, "later": true, "artifacts": {"base": {"min_partition_bytes": 5, "other": 1}}}"#).unwrap();
     assert_eq!(r.min_partition_bytes("base"), Some(5));
 }
+
+/// 001 FR-016c: a Windows volume hibernated or left by Fast Startup refuses a
+/// plan that writes to its disk, for a developer too, with how to shut
+/// Windows down fully and why; replacing it, or writing to another disk
+/// only, is said and doesn't refuse.
+#[test]
+fn a_hibernated_windows_refuses_writing_next_to_it() {
+    let p = run("pc-windows-hibernated-keep", "pc-windows-hibernated", input(&[], &[], true));
+    assert_eq!(p.status, Status::Refused);
+    assert!(!p.developer_may);
+    assert_eq!(p.reasons.len(), 1, "{:?}", p.reasons);
+    let r = &p.reasons[0];
+    assert!(
+        r.contains("disk 0 partition 3") && r.contains("hibernated") && r.contains("hold Shift") && r.contains("can lose data"),
+        "{r}"
+    );
+    assert!(r.ends_with(glassine_installer::plan::WINDOWS_SHUT_DOWN), "{r}");
+    // Replaced: said, not refused; the backup keeps it whole.
+    let p = run(
+        "pc-windows-hibernated-replace",
+        "pc-windows-hibernated",
+        input(&[("systems.1", "replace")], &[], true),
+    );
+    assert_eq!(p.status, Status::Ready, "{:?}", p.reasons);
+    assert!(
+        p.notes
+            .iter()
+            .any(|n| n.contains("The plan replaces it") && n.contains("the backup holds the volume whole")),
+        "{:?}",
+        p.notes
+    );
+    // Dirty or a log not replayed: the same.
+    for (state, says) in [("dirty", "marked dirty"), ("log-not-clean", "its log holds changes")] {
+        let mut f = facts("pc-windows-hibernated");
+        f.storage.as_mut().unwrap().disks[0].partitions[2].fs.as_mut().unwrap().unclean = Some(state.into());
+        let ds = [valid(&pc())];
+        let refs: Vec<&Description> = ds.iter().collect();
+        let p = plan(&refs, &f, &recognize(&refs, &f), &input(&[], &[], true));
+        assert_eq!(p.status, Status::Refused);
+        assert!(p.reasons[0].contains(says), "{:?}", p.reasons);
+    }
+    // On a disk the plan doesn't write (GlassineOS goes on the second disk): said only.
+    let mut f = facts("pc-two-disks");
+    f.storage.as_mut().unwrap().disks[0].partitions[2].fs.as_mut().unwrap().unclean = Some("hibernated".into());
+    let ds = [valid(&pc())];
+    let refs: Vec<&Description> = ds.iter().collect();
+    let p = plan(&refs, &f, &recognize(&refs, &f), &input(&[("target-disk", "disk1")], &[], true));
+    assert!(p.reasons.iter().all(|r| !r.contains("hibernated")), "{:?}", p.reasons);
+    assert!(p.notes.iter().any(|n| n.contains("The plan doesn't write to disk 0")), "{:?}", p.notes);
+}

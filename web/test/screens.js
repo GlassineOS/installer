@@ -314,6 +314,19 @@ async function main() {
     assert.match(await page.$eval('#check-notes', (x) => x.textContent), /Secure Boot's state is unknown here/);
   });
 
+  await test('a hibernated Windows: refused next to it with how to shut it down fully; replacing it is said', async () => {
+    await go(page, '#/plan?plan=pc-windows-hibernated-keep');
+    const t = await page.$eval('#refused', (x) => x.textContent);
+    assert.match(t, /Windows volume on disk 0 partition 3, 300\.0 GiB: Windows is hibernated on it/);
+    assert.match(t, /hold Shift while you choose Shut down/);
+    assert.match(t, /can lose data/);
+    await go(page, '#/plan?plan=pc-windows-hibernated-replace');
+    assert.strictEqual(await page.$('#refused'), null, 'replacing a hibernated Windows refuses');
+    assert.match(await page.$eval('#notes', (x) => x.textContent), /The plan replaces it, so what Windows saved there/);
+    await go(page, '#/check?machine=pc-windows-hibernated');
+    assert.match(await page.$eval('#check-refused', (x) => x.textContent), /Windows is hibernated on it/);
+  });
+
   await test('the disk GlassineOS goes on: each fixed disk, and the plan of the one chosen', async () => {
     await go(page, '#/plan?plan=pc-two-disks-first');
     const disks = () => page.$$eval('input[name="choice-target-disk"]', (xs) => xs.map((x) => x.value + (x.checked ? '*' : '')));
