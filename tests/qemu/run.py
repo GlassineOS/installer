@@ -26,18 +26,24 @@ plan with --pc and prints their records. The host asserts:
 - the same firmware refuses to start an unsigned program from the stick and
   starts the signed one (SC-016: Secure Boot on starts no unsigned medium).
 
+The install cases (install-*) write instead: they install GlassineOS on the
+case's disk and check the disk, the firmware's variables and that the
+machine then starts the new boot entry (see the install section below).
+
 Needs: qemu-system-x86_64, OVMF (with its Secure Boot build for those cases),
 sgdisk, mkfs.ext4, mkfs.fat, mcopy, mmd, unsquashfs, openssl, sbsign,
-virt-fw-vars. Downloads (pinned, hash-checked) go to --cache. The keys are
+virt-fw-vars; for the install cases mkfs.btrfs and fsck.fat. Downloads (pinned, hash-checked) go to --cache. The keys are
 made in --work for each run and never kept. Runs without KVM if there is none
 (slower)."""
 
 import argparse
+import gzip
 import hashlib
 import json
 import os
 import queue
 import shutil
+import struct
 import subprocess
 import sys
 import threading
@@ -47,6 +53,9 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(HERE))
+import placeholder  # noqa: E402
 # The release manifest the plans read (spec 002 FR-019a): its base's least
 # system partition decides what the small disk lacks.
 RELEASE = HERE.parent.parent / "core" / "tests" / "fixtures" / "releases" / "base-8gib.json"
@@ -287,7 +296,11 @@ KIND = {"nvme": "nvme", "virtio": "virtio", "sata": "sata"}
 
 
 def build_disk(what: str, p: Path, work: Path):
-    if what == "blank32":
+    if what == "data1g":
+        # 1 GiB with 8 MiB of data at 64 MiB: what the backup must keep
+        sparse(p, 1 * GIB)
+        put(p, 64 * MIB, os.urandom(8 * MIB))
+    elif what == "blank32":
         make_blank(p, 32 * GIB)
     elif what == "small":
         make_blank(p, 4 * GIB)
@@ -392,6 +405,9 @@ def records(lines):
         elif name and line.startswith("@@EXIT "):
             code = int(line.split()[1])
             text = "\n".join(buf)
+            if name.startswith("log-"):
+                out[name] = (code, text)
+                continue
             try:
                 out[name] = (code, json.loads(text))
             except json.JSONDecodeError:
@@ -428,10 +444,13 @@ def qemu_cmd(args, kernel, initrd, vars_fd, disks, stick, mode, secure=False):
         cmd += ["-net", "none"]
     cmd += [
         "-device", "qemu-xhci,id=xhci",
-        "-drive", f"if=none,id=stick,format=raw,file={stick}",
-        "-device", "usb-storage,bus=xhci.0,drive=stick,removable=on",
-        "-device", "ahci,id=ahci",
     ]
+    if stick:
+        cmd += [
+            "-drive", f"if=none,id=stick,format=raw,file={stick}",
+            "-device", "usb-storage,bus=xhci.0,drive=stick,removable=on",
+        ]
+    cmd += ["-device", "ahci,id=ahci"]
     for i, (bus, p) in enumerate(disks):
         cmd += ["-drive", f"if=none,id=d{i},format=raw,file={p}"]
         if bus == "nvme":
@@ -639,6 +658,371 @@ def case(name, args, boot, work: Path, sb=None):
             check(bool(win) and win[0]["partitions"] == [2, 3, 4], f"Windows is found: {win}")
 
 
+# ---- installs (the PC's write steps) ----------------------------------------------
+#
+# Each install case installs GlassineOS on the case's disk from a release
+# folder on the stick: a btrfs pool image made here with mkfs.btrfs and a
+# marker file (the base), Alpine's kernel as the kernel, a small initramfs
+# fixture, and the placeholder loader (placeholder.py) as the boot loader. The
+# backup is switched off (a whole-disk image of these 32-40 GiB disks is too
+# slow for the job; the backup's failure cases are tested on the host, in
+# core/tests/pc_execute.rs and pcwrite/tests). The host then checks the disk
+# and the firmware's variables, and starts the machine from its disk alone:
+# the firmware must start our entry, which starts the placeholder loader.
+
+GLOBAL = "8be4df61-93ca-11d2-aa0d-00e098032b8c"
+ROOT_X86 = "4f68bce3-e8cd-4db1-96e7-fbcaf984b709"
+LINUX_DATA = "0fc63daf-8483-4772-8e79-3d69d8477de4"
+ESP_TYPE = "c12a7328-f81f-11d2-ba4b-00a0c93ec93b"
+POOL_MARKER = b"GlassineOS test pool image made by tests/qemu/run.py"
+
+# name: (the disk, the choices, cut it while the base is written and resume,
+# back it up). The backup case runs the PC description with its sizes scaled
+# down (SMALL) on a 1 GiB disk, so that a whole-disk image stays quick.
+INSTALL_CASES = {
+    "install-blank": (("nvme", "blank32"), [], False, False),
+    "install-windows-kept": (("sata", "windows"), [], False, False),
+    "install-resume": (("virtio", "blank32"), [], True, False),
+    "install-backup": (("virtio", "data1g"), [], False, True),
+}
+# The description's sizes (boot, system, userdata's least) and the scaled-down ones.
+FULL = (2 * GIB, 16 * GIB, 8 * GIB)
+SMALL = (300 * MIB, 256 * MIB, 64 * MIB)
+
+
+def small_description(out: Path):
+    t = (HERE.parent.parent / "devices" / "uefi-pc.toml").read_text()
+    for old, new in (('size = "2GiB"', 'size = "300MiB"'), ('size = "16GiB"', 'size = "256MiB"'), ('at_least = "8GiB"', 'at_least = "64MiB"')):
+        assert old in t, old
+        t = t.replace(old, new)
+    out.write_text(t)
+
+
+def guid_text(b: bytes) -> str:
+    return (
+        b[0:4][::-1].hex() + "-" + b[4:6][::-1].hex() + "-" + b[6:8][::-1].hex() + "-" + b[8:10].hex() + "-" + b[10:16].hex()
+    )
+
+
+def guid_bytes(g: str) -> bytes:
+    h = bytes.fromhex(g.replace("-", ""))
+    return h[0:4][::-1] + h[4:6][::-1] + h[6:8][::-1] + h[8:16]
+
+
+def gpt(p: Path) -> list:
+    """The primary table's used entries: (slot, raw 128 bytes, type, unique GUID, first, last, name)."""
+    with open(p, "rb") as f:
+        f.seek(512)
+        h = f.read(92)
+        assert h[0:8] == b"EFI PART", "no GPT"
+        lba, n, size = struct.unpack_from("<QII", h, 72)
+        f.seek(lba * 512)
+        arr = f.read(n * size)
+    out = []
+    for i in range(n):
+        e = arr[i * size : (i + 1) * size]
+        if e[0:16] == b"\0" * 16:
+            continue
+        first, last = struct.unpack_from("<QQ", e, 32)
+        name = e[56:128].decode("utf-16-le").rstrip("\0")
+        out.append((i + 1, e, guid_text(e[0:16]), guid_text(e[16:32]), first, last, name))
+    return out
+
+
+def range_digest(p: Path, off: int, length: int) -> str:
+    """The sha256 of a byte range of a sparse file, reading only its data."""
+    h = hashlib.sha256()
+    end = off + length
+    with open(p, "rb") as f:
+        pos = off
+        while pos < end:
+            try:
+                start = os.lseek(f.fileno(), pos, os.SEEK_DATA)
+            except OSError:
+                start = end
+            start = min(start, end)
+            if start > pos:
+                zero = start - pos
+                while zero:
+                    n = min(zero, 8 * MIB)
+                    h.update(b"\0" * n)
+                    zero -= n
+            if start >= end:
+                break
+            stop = min(os.lseek(f.fileno(), start, os.SEEK_HOLE), end)
+            f.seek(start)
+            left = stop - start
+            while left:
+                b = f.read(min(left, 8 * MIB))
+                h.update(b)
+                left -= len(b)
+            pos = stop
+    return h.hexdigest()
+
+
+def load_option(label: str, hd: tuple, path: str) -> bytes:
+    """An efivarfs Boot#### file: attributes, then EFI_LOAD_OPTION with an
+    HD() node (partition number, start, sectors, GPT unique GUID) and a file path."""
+    num, start, sectors, guid = hd
+    hdnode = struct.pack("<BBHIQQ16sBB", 4, 1, 42, num, start, sectors, guid_bytes(guid), 2, 2)
+    fp = path.encode("utf-16-le") + b"\0\0"
+    fnode = struct.pack("<BBH", 4, 4, 4 + len(fp)) + fp
+    end = b"\x7f\xff\x04\x00"
+    dp = hdnode + fnode + end
+    body = struct.pack("<IH", 1, len(dp)) + (label.encode("utf-16-le") + b"\0\0") + dp
+    return struct.pack("<I", 7) + body
+
+
+def make_release(d: Path, files: dict, small: bool) -> dict:
+    """The release folder on the stick, and its artifacts' bytes by role."""
+    d.mkdir(parents=True)
+    tree = d.parent / "pool-tree"
+    (tree / "glassine").mkdir(parents=True, exist_ok=True)
+    (tree / "glassine" / "marker").write_bytes(POOL_MARKER)
+    pool = d / "base.img"
+    sparse(pool, 160 * MIB)
+    run("mkfs.btrfs", "-q", "-L", "glassine", "-r", tree, pool)
+    shutil.copyfile(files["vmlinuz-virt"], d / "vmlinuz")
+    (d / "initramfs").write_bytes(b"test initramfs\n" * 4096)
+    (d / "loader.efi").write_bytes(placeholder.efi_app())
+    arts = {
+        "base": ("base.img", "btrfs-pool-image", 200 * MIB if small else 2 * GIB),
+        "kernel": ("vmlinuz", "efi-kernel", 256 * MIB),
+        "initramfs": ("initramfs", "initramfs", None),
+        "boot-loader": ("loader.efi", "efi-application", None),
+    }
+    m, out = {}, {}
+    for role, (file, kind, least) in arts.items():
+        b = (d / file).read_bytes()
+        out[role] = b
+        e = {"file": file, "sha256": hashlib.sha256(b).hexdigest(), "size": len(b), "kind": kind}
+        if least:
+            e["min_partition_bytes"] = least
+        if role == "kernel":
+            e["cmdline"] = "console=ttyS0"
+        m[role] = e
+    (d / "release.json").write_text(json.dumps({"release_format": 1, "artifacts": m}, indent=1) + "\n")
+    return out
+
+
+def make_install_stick(p: Path, binary: Path, cw: Path, files: dict, choices: list, seed: bytes = None, backup: bool = False) -> dict:
+    sparse(p, 512 * MIB)
+    run("sgdisk", "-n1:1MiB:0", "-t1:0700", "-c1:GLINSTALL", p)
+    off, size = part_start(p, 1)
+    run("mkfs.fat", "-F", "32", "-n", "GLINSTALL", "--offset", off // 512, p, size // 1024)
+    rel = cw / "release"
+    arts = make_release(rel, files, backup)
+    img = f"{p}@@{off}"
+    run("mcopy", "-i", img, binary, "::/glassine-install")
+    desc = cw / "uefi-pc.toml"
+    if backup:
+        small_description(desc)
+    else:
+        shutil.copyfile(HERE.parent.parent / "devices" / "uefi-pc.toml", desc)
+    run("mcopy", "-i", img, desc, "::/uefi-pc.toml")
+    run("mcopy", "-s", "-i", img, rel, "::/release")
+    args = cw / "install-args"
+    extra = ["--backup", "/media/stick/backup"] if backup else ["--choice", "backup=off"]
+    args.write_text("".join(f"{a}\n" for a in extra) + "".join(f"--choice\n{c}\n" for c in choices))
+    run("mcopy", "-i", img, args, "::/install-args")
+    if seed:
+        # Another system's entry, first in the boot order (as Windows leaves it).
+        (cw / "seed-Boot0007").write_bytes(seed)
+        (cw / "seed.sh").write_text(
+            f"V=/sys/firmware/efi/efivars\nG={GLOBAL}\n"
+            'cat /media/stick/seed-Boot0007 > "$V/Boot0007-$G"\n'
+            '{ printf \'\\007\\000\\000\\000\\007\\000\'; tail -c +5 "$V/BootOrder-$G"; } > /tmp/bo\n'
+            'chattr -i "$V/BootOrder-$G" 2>/dev/null\n'
+            'cat /tmp/bo > "$V/BootOrder-$G"\n'
+        )
+        run("mcopy", "-i", img, cw / "seed-Boot0007", "::/seed-Boot0007")
+        run("mcopy", "-i", img, cw / "seed.sh", "::/seed.sh")
+    return arts
+
+
+def boot_vars(lines, when):
+    """The guest's Boot#### and BootOrder files (hex) as it printed them."""
+    out = {}
+    for line in lines:
+        i = line.find("@@VAR ")
+        if i < 0:
+            continue
+        f = line[i:].split()
+        if len(f) >= 3 and f[1] == when:
+            out[f[2]] = f[3] if len(f) > 3 else ""
+    return out
+
+
+def run_guest(args, boot, vars_fd, disks, stick, mode, log, kill_at=None):
+    g = Guest(qemu_cmd(args, boot["kernel"], boot["initrd"], vars_fd, disks, stick, mode), log)
+    try:
+        g.until("@@READY", args.boot_timeout)
+        g.send("go\n")
+        if kill_at:
+            lines = g.until(kill_at, args.run_timeout)
+            g.p.kill()
+            g.p.wait()
+            return lines
+        lines = g.until("@@DONE", args.run_timeout)
+        g.send("off\n")
+        g.stop(120)
+        return lines
+    except Exception:
+        g.p.kill()
+        raise
+
+
+def install_case(name, args, boot, files, work: Path):
+    print(f"case {name}:", flush=True)
+    (bus, what), choices, cut, backup = INSTALL_CASES[name]
+    sizes = SMALL if backup else FULL
+    cw = work / name
+    if cw.exists():
+        shutil.rmtree(cw)
+    cw.mkdir(parents=True)
+    disk = cw / f"disk0-{what}.img"
+    build_disk(what, disk, cw)
+    before = gpt(disk) if what == "windows" else []
+    kept = {e[0]: (e[1], range_digest(disk, e[4] * 512, (e[5] - e[4] + 1) * 512)) for e in before}
+    seed = None
+    if what == "windows":
+        esp = before[0]
+        seed = load_option("Windows Boot Manager", (1, esp[4], esp[5] - esp[4] + 1, esp[3]), "\\EFI\\Microsoft\\Boot\\bootmgfw.efi")
+    disk_sha = range_digest(disk, 0, disk.stat().st_size) if backup else None
+    stick = cw / "stick.img"
+    arts = make_install_stick(stick, args.binary, cw, files, choices, seed, backup)
+    vars_fd = cw / "OVMF_VARS.fd"
+    shutil.copyfile(args.ovmf_vars, vars_fd)
+    disks = [(bus, disk)]
+
+    if cut:
+        # Cut while the base is written: QEMU is killed, as a power cut would.
+        lines = run_guest(args, boot, vars_fd, disks, stick, "install", cw / "serial-install.log", kill_at="write-base: 30%")
+        first = boot_vars(lines, "before")
+        check(not any("@@END log-install" in x for x in lines), "the install was cut while it wrote the base")
+        lines = run_guest(args, boot, vars_fd, disks, stick, "resume", cw / "serial-resume.log")
+        rec = records(lines)
+        code, text = rec.get("log-resume", (None, ""))
+        check(code == 0, f"resume finished the install: exit {code}\n{(text or '')[-3000:]}")
+    else:
+        lines = run_guest(args, boot, vars_fd, disks, stick, "install", cw / "serial-install.log")
+        first = boot_vars(lines, "before")
+        rec = records(lines)
+        code, text = rec.get("log-install", (None, ""))
+        check(code == 0, f"install finished: exit {code}\n{(text or '')[-3000:]}")
+    after = boot_vars(lines, "after")
+    for k in ("facts-before", "facts-after"):
+        if k in rec:
+            (cw / f"{k}.json").write_text(json.dumps(rec[k][1], indent=1) + "\n")
+    # the stick: the record, its journal
+    rec_file = cw / "record.json"
+    subprocess.run(["mcopy", "-n", "-i", f"{stick}@@{1 * MIB}", "::/rec/record.json", rec_file], check=False)
+    record = json.loads(rec_file.read_text()) if rec_file.exists() else {}
+    if backup:
+        # The backup: the whole disk as it was, its manifest, both before the table changed.
+        bdir = cw / "backup"
+        bdir.mkdir()
+        subprocess.run(["mcopy", "-n", "-s", "-i", f"{stick}@@{1 * MIB}", "::/backup", str(cw)], check=False)
+        man = json.loads((bdir / "manifest.json").read_text()) if (bdir / "manifest.json").exists() else {"disks": [{}]}
+        gz = bdir / (str(man["disks"][0].get("file", "disk?.img")) + ".gz")
+        if check(len(man["disks"]) == 1 and gz.exists(), f"the backup holds the disk's image and its manifest: {sorted(p.name for p in bdir.iterdir())}"):
+            h = hashlib.sha256()
+            with gzip.open(gz, "rb") as f:
+                while b := f.read(8 * MIB):
+                    h.update(b)
+            check(h.hexdigest() == disk_sha, "the image is the disk as it was, byte for byte")
+            m = (bdir / "manifest.json").read_bytes()
+            check((record.get("backup") or {}).get("manifest_sha256") == hashlib.sha256(m).hexdigest(), "the record rests on that backup")
+            check(json.loads(m)["disks"][0]["sha256"] == disk_sha, "its manifest names the disk's sha256")
+        steps = [e["step"] for e in record.get("journal", []) if (e.get("outcome") or {}).get("result") == "done"]
+        check(steps[:2] == ["back-up", "create-partitions"], f"the backup was done before the table was written: {steps}")
+    if cut:
+        interrupted = [e for e in record.get("journal", []) if (e.get("outcome") or {}).get("result") == "interrupted"]
+        check(any(e["step"] == "write-base" for e in interrupted), f"the record holds write-base as cut, run again: {[e['step'] for e in interrupted]}")
+
+    # the disk: GlassineOS's three partitions
+    t = gpt(disk)
+    by = {e[6]: e for e in t}
+    ok = check(all(n in by for n in ("glassine-boot", "glassine-system", "glassine-userdata")), f"the three partitions are there: {[e[6] for e in t]}")
+    if not ok:
+        return
+    bootp, sysp, datap = by["glassine-boot"], by["glassine-system"], by["glassine-userdata"]
+    check(bootp[2] == ESP_TYPE and sysp[2] == ROOT_X86 and datap[2] == LINUX_DATA, "their types: ESP, x86-64 root, Linux data")
+    check((bootp[5] - bootp[4] + 1) * 512 == sizes[0] and (sysp[5] - sysp[4] + 1) * 512 == sizes[1], f"the boot and system partitions have the description's sizes {sizes[:2]}")
+    check((datap[5] - datap[4] + 1) * 512 >= sizes[2], "userdata has at least its least size")
+    with open(disk, "rb") as f:
+        f.seek(sysp[4] * 512)
+        got = f.read(len(arts["base"]))
+    check(got == arts["base"], "the system partition holds the release's pool image byte for byte")
+    check(POOL_MARKER in got, "and in it the pool's marker file")
+    check(range_digest(disk, datap[4] * 512, MIB) == hashlib.sha256(b"\0" * MIB).hexdigest(), "userdata is left unformatted for the first start")
+
+    # the boot partition: a sound FAT, the loader at both paths, the records
+    bootimg = cw / "boot.img"
+    run("dd", f"if={disk}", f"of={bootimg}", "bs=4M", f"skip={bootp[4] * 512}", f"count={(bootp[5] - bootp[4] + 1) * 512}",
+        "iflag=skip_bytes,count_bytes", "conv=sparse", stderr=subprocess.DEVNULL)
+    fsck = subprocess.run(["fsck.fat", "-n", "-v", str(bootimg)], capture_output=True, text=True)
+    check(fsck.returncode == 0, f"fsck.fat finds the boot partition sound: {fsck.returncode} {fsck.stdout[-800:]} {fsck.stderr[-400:]}")
+
+    def fat_file(path):
+        out = cw / ("fat-" + path.replace("/", "_"))
+        r = subprocess.run(["mcopy", "-n", "-i", str(bootimg), "::/" + path, str(out)], capture_output=True)
+        return out.read_bytes() if r.returncode == 0 and out.exists() else None
+
+    check(fat_file("EFI/glassine/loader.efi") == arts["boot-loader"], "the loader at \\EFI\\glassine\\loader.efi")
+    check(fat_file("EFI/BOOT/BOOTX64.EFI") == arts["boot-loader"], "and at the removable-media path")
+    lr = (fat_file("glassine/loader.rec") or b"").decode()
+    ident = f"glassine.system=PARTUUID={sysp[3]} glassine.userdata=PARTUUID={datap[3]}"
+    check(ident in lr, f"the kernel set's command line names the system and userdata by PARTUUID: {lr}")
+    kid = next((x[8:] for x in lr.splitlines() if x.startswith("default=")), "")
+    check(fat_file(f"glassine/{kid}/vmlinuz") == arts["kernel"], "the first kernel set's kernel")
+    check(fat_file(f"glassine/{kid}/initrd") == arts["initramfs"], "and its initramfs")
+    bootimg.unlink()
+
+    # Windows kept: its entries and partitions byte for byte
+    if what == "windows":
+        for slot, (raw, h) in kept.items():
+            e = next((x for x in t if x[0] == slot), None)
+            check(e is not None and e[1] == raw, f"partition {slot}'s table entry unchanged")
+            check(e is not None and range_digest(disk, e[4] * 512, (e[5] - e[4] + 1) * 512) == h, f"partition {slot}'s bytes unchanged")
+        check(bootp[4] * 512 >= max(e[5] for e in before) * 512, "GlassineOS is in the free space after Windows")
+
+    # the firmware: one new entry, first; every other entry and its place kept
+    bo = f"BootOrder-{GLOBAL}"
+    order = lambda vs: [int.from_bytes(bytes.fromhex(vs.get(bo, ""))[4:][i : i + 2], "little") for i in range(0, max(0, len(bytes.fromhex(vs.get(bo, ""))) - 4), 2)]
+    o1, o2 = order(first), order(after)
+    new = [k for k in after if k not in first]
+    check(len(new) == 1 and new[0].startswith("Boot"), f"one new boot entry: {new}")
+    if seed:
+        check(first.get(f"Boot0007-{GLOBAL}") == seed.hex(), "the seeded Windows entry was there before")
+        check(o1[:1] == [7], f"and first in the order before: {o1}")
+    for k, v in first.items():
+        if k != bo:
+            check(after.get(k) == v, f"{k} unchanged")
+    ours = int(new[0][4:8], 16) if new else None
+    check(o2 == [ours] + [n for n in o1 if n != ours], f"ours first, the others in their order: {o1} -> {o2}")
+    if new:
+        ob = bytes.fromhex(after[new[0]])
+        check("GlassineOS".encode("utf-16-le") in ob and "\\EFI\\glassine\\loader.efi".encode("utf-16-le") in ob, "our entry: GlassineOS, \\EFI\\glassine\\loader.efi")
+        check(guid_bytes(bootp[3]) in ob, "on the boot partition (by its unique GUID)")
+
+    # the machine starts from its disk alone (the stick taken out)
+    g = Guest(qemu_cmd(args, None, None, vars_fd, disks, None, None), cw / "serial-boot.log")
+    try:
+        lines = g.until((placeholder.MARKER, "Access Denied", "No bootable"), args.boot_timeout)
+        try:
+            g.stop(60)
+        except RuntimeError:
+            pass
+    finally:
+        g.p.kill()
+        g.p.wait()
+    said = [x for x in lines if "BdsDxe" in x]
+    want = f'starting Boot{ours:04X} "GlassineOS"' if ours is not None else "?"
+    check(any(want in x for x in said), f"the firmware starts our entry first: {said}")
+    check(any(placeholder.MARKER in x for x in lines), "and it starts the placeholder loader (its serial marker)")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--binary", type=Path, required=True, help="the static glassine-install")
@@ -650,7 +1034,7 @@ def main():
     ap.add_argument("--ovmf-secboot-vars", type=Path, help="an empty variable store for it")
     ap.add_argument("--boot-timeout", type=int, default=600)
     ap.add_argument("--run-timeout", type=int, default=600)
-    ap.add_argument("cases", nargs="*", default=list(CASES))
+    ap.add_argument("cases", nargs="*", default=list(CASES) + list(INSTALL_CASES))
     args = ap.parse_args()
     if not args.ovmf_code:
         for c, v in OVMF_CANDIDATES:
@@ -668,6 +1052,8 @@ def main():
         else:
             sys.exit("no OVMF Secure Boot build found: pass --ovmf-secboot-code and --ovmf-secboot-vars")
     tools = ["qemu-system-x86_64", "sgdisk", "mkfs.ext4", "mkfs.fat", "mcopy", "unsquashfs"]
+    if INSTALL_CASES.keys() & set(args.cases):
+        tools += ["mkfs.btrfs", "fsck.fat"]
     if secure:
         tools += ["mmd", "openssl", "sbsign", "virt-fw-vars"]
     for tool in tools:
@@ -682,6 +1068,8 @@ def main():
         try:
             if name == "secure-boot-medium":
                 medium(args, sb, args.work)
+            elif name in INSTALL_CASES:
+                install_case(name, args, boot, files, args.work)
             else:
                 case(name, args, boot, args.work, sb)
         except Exception as e:
