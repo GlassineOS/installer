@@ -108,6 +108,8 @@ export const GOLDEN_PLANS = {
   'pc-release-too-big': { machine: 'pc-windows', input: { developer: true, release: 'pc-too-big' } },
   'pc-secure-boot-on': { machine: 'pc-secure-boot-on', input: { developer: true } },
   'pc-secure-boot-unknown': { machine: 'pc-secure-boot-unknown', input: { developer: true } },
+  'pc-windows-hibernated-keep': { machine: 'pc-windows-hibernated', input: { developer: true } },
+  'pc-windows-hibernated-replace': { machine: 'pc-windows-hibernated', input: { choices: { 'systems.1': 'replace' }, developer: true } },
   'noteair-release-too-big': { machine: 'noteair-stock-fastboot', input: { hardware: { 'emergency-cable': true }, developer: true, release: 'base-8gib' } },
   'noteair-developer': { machine: 'noteair-stock-fastboot', input: { developer: true } },
   'noteair-developer-cable-yes': { machine: 'noteair-stock-fastboot', input: { hardware: { 'emergency-cable': true }, developer: true } },
@@ -117,7 +119,7 @@ export const GOLDEN_PLANS = {
 export const REPORTS = [
   'noteair-stock-fastboot', 'noteair-stock-adb', 'noteair-prepared-fastboot', 'noteair-conflict-fastboot',
   'unknown-fastboot', 'pc-windows', 'pc-windows-other-model', 'pc-two-disks', 'noteair-recorded-glassine-fastboot',
-  'pc-small-disk', 'pc-secure-boot-on', 'pc-secure-boot-unknown',
+  'pc-small-disk', 'pc-secure-boot-on', 'pc-secure-boot-unknown', 'pc-windows-hibernated',
 ];
 
 const cache = new Map();

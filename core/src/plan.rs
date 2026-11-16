@@ -102,6 +102,15 @@ pub const SECURE_BOOT_ON: &str = "Secure Boot is on: the firmware would refuse t
      key at hand: Windows may ask for it after the change";
 
 /// Said when the firmware's variables can't tell Secure Boot's state.
+/// How to leave Windows shut down fully, and why it matters: said with a
+/// Windows volume that was hibernated or left by Fast Startup (001 FR-016c).
+pub const WINDOWS_SHUT_DOWN: &str = "Start Windows and shut it down fully: hold Shift while you \
+     choose Shut down, or turn off Fast Startup (Control Panel, Power Options, Choose what the \
+     power buttons do, Change settings that are currently unavailable, untick Turn on fast \
+     startup) and then shut down. A hibernated Windows comes back to the state it saved, not to \
+     what is on the disk: writing next to it, or backing it up and restoring it, can lose data \
+     on that volume.";
+
 pub const SECURE_BOOT_UNKNOWN: &str = "Secure Boot's state is unknown here (the firmware's \
      variables can't be read). GlassineOS starts only with Secure Boot off: check it in the \
      firmware's set-up. With it on, the firmware won't start GlassineOS, and the other systems \
@@ -1000,6 +1009,34 @@ pub fn plan(ds: &[&Description], facts: &Snapshot, rec: &Recognition, input: &In
             .is_some_and(|x| x.table.as_deref() == Some("unreadable"))
         {
             reasons.push(format!("disk {n}'s partition table can't be read, so nothing on it is written"));
+        }
+    }
+    // A Windows volume not shut down fully (001 FR-016c): nothing is written
+    // to its disk while it is so, for a developer too; the plan that replaces
+    // it, or writes to other disks only, says so.
+    for disk in facts.storage.iter().flat_map(|s| &s.disks) {
+        for p in &disk.partitions {
+            let Some(state) = p.fs.as_ref().and_then(|f| f.unclean.as_deref()) else {
+                continue;
+            };
+            let label = p.fs.as_ref().and_then(|f| f.label.as_deref()).map(|l| format!(" ({l})")).unwrap_or_default();
+            let vol = format!("the Windows volume on disk {} partition {}{label}, {}", disk.index, p.index, human(p.size));
+            let said = crate::used::ntfs_state_said(state);
+            let removed = pplans
+                .values()
+                .any(|x| x.at.as_ref().is_some_and(|a| a.disk == disk.index && a.index == p.index) && x.actions.iter().any(|a| a == "removes"));
+            if !touched_disks.contains(&disk.index) {
+                notes.push(format!("{vol}: {said}. The plan doesn't write to disk {}. {WINDOWS_SHUT_DOWN}", disk.index));
+            } else if removed {
+                notes.push(format!(
+                    "{vol}: {said}. The plan replaces it, so what Windows saved there (its open programs and files) is lost; the backup holds the volume whole. {WINDOWS_SHUT_DOWN}"
+                ));
+            } else {
+                reasons.push(format!(
+                    "{vol}: {said}. Nothing is written to disk {} while it is so. {WINDOWS_SHUT_DOWN}",
+                    disk.index
+                ));
+            }
         }
     }
     if let Some(i) = installer_disk

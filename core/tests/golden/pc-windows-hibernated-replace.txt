@@ -1,0 +1,79 @@
+Plan (dry run) for PC
+State: stock. Job: install.
+Status: ready
+
+Notes:
+  - the Windows volume on disk 0 partition 3, 300.0 GiB: Windows is hibernated on it, or was shut down with Fast Startup. The plan replaces it, so what Windows saved there (its open programs and files) is lost; the backup holds the volume whole. Start Windows and shut it down fully: hold Shift while you choose Shut down, or turn off Fast Startup (Control Panel, Power Options, Choose what the power buttons do, Change settings that are currently unavailable, untick Turn on fast startup) and then shut down. A hibernated Windows comes back to the state it saved, not to what is on the disk: writing next to it, or backing it up and restoring it, can lose data on that volume.
+
+Choices:
+  target-disk = first (default)
+  systems.1 = replace
+  backup = full (default)
+  backup-to = installer-media (default)
+
+Systems:
+  system 1 (windows): replaced
+
+Partitions:
+  partition table (replace): writes
+  disk 0 partition 2 (remove, 16.0 MiB): removes
+    Everything on it is deleted: files on it are lost.
+  disk 0 partition 3 (remove, 300.0 GiB): removes
+    Everything on it is deleted: files on it are lost.
+  disk 0 partition 4 (remove, 700.0 MiB): removes
+    Everything on it is deleted: files on it are lost.
+  disk 0 free space (create, 200.0 GiB): creates
+  glassine-boot (create): creates, writes
+  glassine-system (create): creates, writes
+  glassine-userdata (create): creates
+  1 other partitions are only read, into the backup; 1 are not touched.
+
+Backup (default), to the installer's USB stick, checked by reading it back before the first write:
+  disk 0 (nvme, 512.0 GiB), whole: the partition table and every partition; at most 512.0 GiB, stored compressed; only the used blocks where the file system tells them, every block elsewhere
+  You can switch it off (choice backup = off). Without the backup there is no way back to the maker's system and no repair from the backup. The values unique to the device are still kept.
+
+How the machine starts:
+  boot-entries (firmware-boot-entry): back-up, change
+  boot-order (firmware-boot-order): back-up, change
+
+Space on the computer:
+  backup 68.0 KiB plus images of at most 512.0 GiB
+  artifacts 0 B plus base, kernel of unknown size
+  at least 68.0 KiB
+
+Space on disk 0: GlassineOS needs 26.0 GiB, it has 500.7 GiB free
+
+Least sizes from the release:
+  glassine-boot (for the kernel): 2.0 GiB; what the release asks is not known yet
+  glassine-system (for the base): 16.0 GiB; what the release asks is not known yet
+
+Afterwards the device:
+  have start-kernel [untried]
+  lack recovery [untried]
+  have choose-at-start [untried]
+
+Steps:
+  1. back-up (back-up, in local) [safe stop]
+     Back up every disk GlassineOS changes, whole, and the firmware's boot entries, then check the backup by reading it back.
+     if it fails: previous-system-starts via step back-up
+     if cut off after it: previous-system-starts via step back-up
+  2. remove-system.1 (remove-partitions, in local) [untried, point of no return]
+     Delete the operating system you chose to replace.
+     if it fails: installer-can-undo via step back-up
+     if cut off after it: installer-can-finish via step create-partitions
+  3. create-partitions (create-partitions, in local) [untried, safe stop]
+     Make GlassineOS's partitions in the free space: its boot partition, its system and the partition for your files.
+     if it fails: previous-system-starts via step back-up
+     if cut off after it: installer-can-finish via step write-base
+  4. write-base (write-base, in local) [untried, safe stop]
+     Put GlassineOS on its new partition.
+     if it fails: previous-system-starts via step write-base
+     if cut off after it: previous-system-starts via step write-boot
+  5. write-boot (write-boot-files, in local) [untried, safe stop]
+     Put the GlassineOS kernel and boot loader on its boot partition.
+     if it fails: previous-system-starts via step write-boot
+     if cut off after it: previous-system-starts via step add-boot-entry
+  6. add-boot-entry (add-boot-entry, in local) [untried, safe stop]
+     Add GlassineOS to the firmware's boot menu and start it first.
+     if it fails: previous-system-starts via step add-boot-entry
+     if cut off after it: glassine-starts via step add-boot-entry

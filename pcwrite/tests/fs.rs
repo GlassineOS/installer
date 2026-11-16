@@ -554,3 +554,107 @@ fn ext4_with_4k_blocks_comes_back_from_its_used_blocks_alone() {
         assert_eq!(sha_file(&tree.join(n)), hex(&Sha256::digest(b)), "{n} differs");
     }
 }
+
+/// Sets the dirty flag of an NTFS volume in `$Volume` (record 3) and in its
+/// mirror, as Windows leaves it when it didn't shut down fully.
+fn mark_ntfs_dirty(img: &Path) {
+    let f = File::options().read(true).write(true).open(img).unwrap();
+    let mut b = [0u8; 512];
+    f.read_exact_at(&mut b, 0).unwrap();
+    let bps = u16::from_le_bytes([b[11], b[12]]) as u64;
+    let cluster = bps * b[13] as u64;
+    let record = match b[0x40] as i8 {
+        x if x > 0 => x as u64 * cluster,
+        x => 1u64 << (-(x as i32)),
+    };
+    let lcn = |o: usize| u64::from_le_bytes(b[o..o + 8].try_into().unwrap());
+    for base in [lcn(0x30), lcn(0x38)] {
+        let at = base * cluster + 3 * record;
+        let mut r = vec![0u8; record as usize];
+        f.read_exact_at(&mut r, at).unwrap();
+        assert_eq!(&r[0..4], b"FILE");
+        let mut a = u16::from_le_bytes([r[0x14], r[0x15]]) as usize;
+        loop {
+            let ty = u32::from_le_bytes(r[a..a + 4].try_into().unwrap());
+            let len = u32::from_le_bytes(r[a + 4..a + 8].try_into().unwrap()) as usize;
+            assert!(ty != 0xffff_ffff, "$Volume has no volume information");
+            if ty == 0x70 {
+                let vo = a + u16::from_le_bytes([r[a + 0x14], r[a + 0x15]]) as usize;
+                r[vo + 10] |= 1;
+                break;
+            }
+            a += len;
+        }
+        f.write_all_at(&r, at).unwrap();
+    }
+}
+
+/// 001 FR-016c: an NTFS volume left by hibernation or Fast Startup (a
+/// `hiberfil.sys` holding a hibernation image), or marked dirty, is told by
+/// inspecting and kept whole by the backup; one shut down fully, or whose
+/// `hiberfil.sys` Windows cleared, isn't.
+#[test]
+fn a_hibernated_or_dirty_windows_volume_is_told() {
+    if !have_tools() {
+        return;
+    }
+    let w = Work::new("ntfs-state");
+    let size = 64 * MIB;
+    let state = |img: &Path| used::ntfs_state(&mut FileAt(File::open(img).unwrap()), 0, size);
+    let probe = |img: &Path| glassine_installer::fsprobe::probe(&mut FileAt(File::open(img).unwrap()), 0, size).unwrap();
+    let make = |name: &str, hiber: Option<&[u8]>| -> PathBuf {
+        let img = w.0.join(format!("{name}.img"));
+        File::create(&img).unwrap().set_len(size).unwrap();
+        let p = img.to_str().unwrap();
+        run("mkntfs", &["-q", "-F", "-Q", p]);
+        let notes = w.0.join("notes.txt");
+        fs::write(&notes, b"a file of the person's\n").unwrap();
+        run("ntfscp", &["-f", p, notes.to_str().unwrap(), "notes.txt"]);
+        if let Some(head) = hiber {
+            let mut h = head.to_vec();
+            h.resize(256 * 1024, 0);
+            let hf = w.0.join("hiberfil.sys");
+            fs::write(&hf, &h).unwrap();
+            run("ntfscp", &["-f", p, hf.to_str().unwrap(), "hiberfil.sys"]);
+        }
+        img
+    };
+    // shut down fully, and with a hiberfil.sys Windows cleared after a resume
+    for img in [make("clean", None), make("cleared", Some(b"\0\0\0\0")), make("woken", Some(b"wake"))] {
+        assert_eq!(state(&img), Ok(None), "{img:?}");
+        assert_eq!(probe(&img).unclean, None);
+        let a = used::partition(&mut FileAt(File::open(&img).unwrap()), 0, size);
+        assert!(a.used.is_ok(), "{:?}", a.used);
+    }
+    // hibernated (Windows 10 and 11 write HIBR; older ones hibr)
+    for sig in [&b"HIBR"[..], b"hibr"] {
+        let img = make("hibernated", Some(sig));
+        assert_eq!(state(&img), Ok(Some("hibernated")));
+        assert_eq!(probe(&img).unclean.as_deref(), Some("hibernated"));
+        let why = used::partition(&mut FileAt(File::open(&img).unwrap()), 0, size).used.unwrap_err();
+        assert!(why.contains("hibernated") && why.contains("kept whole"), "{why}");
+    }
+    // a root directory as Windows has it, too large for its index root:
+    // hiberfil.sys is found in the index blocks
+    let img = make("crowded", None);
+    let p = img.to_str().unwrap();
+    let one = w.0.join("one");
+    fs::write(&one, b"x").unwrap();
+    for i in 0..80 {
+        run("ntfscp", &["-f", p, one.to_str().unwrap(), &format!("Program Files {i:02}")]);
+    }
+    let mut h = b"HIBR".to_vec();
+    h.resize(256 * 1024, 0);
+    let hf = w.0.join("hiberfil.sys");
+    fs::write(&hf, &h).unwrap();
+    run("ntfscp", &["-f", p, hf.to_str().unwrap(), "hiberfil.sys"]);
+    let root = run("ntfsinfo", &["-F", "/", p]);
+    assert!(root.contains("$INDEX_ALLOCATION"), "the root needs index blocks for this case:\n{root}");
+    assert_eq!(state(&img), Ok(Some("hibernated")));
+    // marked dirty
+    let img = make("dirty", None);
+    mark_ntfs_dirty(&img);
+    run("ntfsfix", &["-n", img.to_str().unwrap()]);
+    assert_eq!(state(&img), Ok(Some("dirty")));
+    assert_eq!(probe(&img).unclean.as_deref(), Some("dirty"));
+}

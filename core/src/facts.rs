@@ -158,6 +158,10 @@ pub struct Filesystem {
     /// estimate: a mounted file system updates its counts late).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub used: Option<u64>,
+    /// An NTFS volume Windows didn't shut down fully: `hibernated`
+    /// (hibernation or Fast Startup), `dirty`, `log-not-clean`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unclean: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
