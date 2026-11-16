@@ -60,8 +60,10 @@ pub const ROLE_SPLASH: &str = "splash";
 pub const KIND_ASSEMBLED: &str = "kernel-set-initrd";
 /// The largest `board.conf` read.
 pub const BOARD_MAX: u64 = 1 << 20;
-/// The largest splash file (32 MiB of picture and its header).
+/// The largest splash file (32 MiB of payload and its header).
 pub const SPLASH_MAX: u64 = (32 << 20) + 64;
+/// The most pixels a splash has, in every layout (32 MiB at four bytes a pixel).
+pub const SPLASH_MAX_PIXELS: u64 = 8 << 20;
 
 /// The removable-media path a firmware falls back to (UEFI 2.x, 3.5.1.1),
 /// by the machine's architecture as descriptions name it.
@@ -454,8 +456,9 @@ pub fn initrd_parts(roles: &BootRoles, board: &[u8], size_of: &dyn Fn(&str) -> u
 // ---- the splash ---------------------------------------------------------------------
 
 /// Checks a default splash as the loader does (boot-partition.md, "The
-/// image format"), in its order; a splash the loader would skip, or one of
-/// kind 1 (valid only as the override), is refused.
+/// image format", format 2, and format 1, which the loader still reads), in
+/// its order, decoding the payload whole; a splash the loader would skip, or
+/// one of kind 1 (valid only as the override), is refused.
 pub fn check_splash(b: &[u8]) -> Result<(), String> {
     let le32 = |o: usize| u32::from_le_bytes(b[o..o + 4].try_into().unwrap());
     let le16 = |o: usize| u16::from_le_bytes(b[o..o + 2].try_into().unwrap());
@@ -468,8 +471,9 @@ pub fn check_splash(b: &[u8]) -> Result<(), String> {
     if crate::table::crc32(&b[0..52]) != le32(52) {
         return Err("the splash's header CRC doesn't match".into());
     }
-    if le16(8) != 1 {
-        return Err(format!("the splash is format {}, not 1", le16(8)));
+    let version = le16(8);
+    if version != 1 && version != 2 {
+        return Err(format!("the splash is format {version}, neither 1 nor 2"));
     }
     match le16(10) {
         0 => {}
@@ -484,40 +488,64 @@ pub fn check_splash(b: &[u8]) -> Result<(), String> {
         ));
     }
     let (w, h) = (le32(12) as u64, le32(16) as u64);
-    if !(1..=16384).contains(&w) || !(1..=16384).contains(&h) || w * h * 4 > 32 << 20 || b.len() as u64 > SPLASH_MAX {
+    if !(1..=16384).contains(&w) || !(1..=16384).contains(&h) || w * h > SPLASH_MAX_PIXELS || b.len() as u64 > SPLASH_MAX {
         return Err(format!("the splash ({w} × {h}, {} bytes) is past the format's limits", b.len()));
     }
-    if le32(28) != 1 {
-        return Err(format!("the splash's pixel layout is {}, not 1", le32(28)));
+    // Bytes a pixel: 1 BGRx (format 1's only layout), 2 RGB888, 3 grey8.
+    let bpp = match (version, le32(28)) {
+        (_, 1) => 4,
+        (2, 2) => 3,
+        (2, 3) => 1,
+        (v, l) => return Err(format!("the splash's pixel layout is {l}, which format {v} doesn't name")),
+    };
+    // Format 1 has one four-byte encoding here (0 raw, 1 run-length); read as
+    // format 2's compression and filter, that is the same compression and the
+    // filter 0.
+    let (comp, filter) = (le16(36), le16(38));
+    if version == 2 && (comp > 2 || filter > 1) {
+        return Err(format!("the splash's compression {comp} or filter {filter} is unknown"));
     }
     let p = &b[64..];
     if crate::table::crc32(p) != le32(48) {
         return Err("the splash's payload CRC doesn't match".into());
     }
-    let pixels = w * h;
-    let decoded = match le32(36) {
-        0 => (p.len() as u64).is_multiple_of(4).then_some(p.len() as u64 / 4),
-        1 => {
-            let (mut i, mut n) = (0usize, 0u64);
-            let mut ok = true;
-            while i < p.len() {
-                let c = p[i] as usize;
-                let (len, count) = if c < 128 { (1 + (c + 1) * 4, c as u64 + 1) } else { (1 + 4, c as u64 - 126) };
-                if i + len > p.len() {
-                    ok = false;
-                    break;
-                }
-                i += len;
-                n += count;
-            }
-            ok.then_some(n)
+    if version == 1 && (comp > 1 || filter != 0) {
+        return Err(format!("the splash's encoding is {}, neither raw nor run-length", le32(36)));
+    }
+    // The filter changes no length: the payload decodes to the picture or not.
+    let total = (w * h) as usize * bpp;
+    let ok = match comp {
+        0 => p.len() == total,
+        1 => run_length_bytes(p, bpp) == Some(total as u64),
+        _ => {
+            let mut out = vec![0u8; total];
+            lz4_flex::block::decompress_into(p, &mut out).is_ok_and(|n| n == total)
         }
-        e => return Err(format!("the splash's encoding is {e}, neither raw nor run-length")),
     };
-    if decoded != Some(pixels) {
+    if !ok {
         return Err(format!("the splash's payload doesn't decode to exactly {w} × {h} pixels"));
     }
     Ok(())
+}
+
+/// The bytes a run-length payload over pixels of `bpp` bytes gives, or
+/// `None` when a run is cut.
+fn run_length_bytes(p: &[u8], bpp: usize) -> Option<u64> {
+    let (mut i, mut n) = (0usize, 0u64);
+    while i < p.len() {
+        let c = p[i] as usize;
+        let (len, count) = if c < 128 {
+            (1 + (c + 1) * bpp, c as u64 + 1)
+        } else {
+            (1 + bpp, c as u64 - 126)
+        };
+        if i + len > p.len() {
+            return None;
+        }
+        i += len;
+        n += count * bpp as u64;
+    }
+    Some(n)
 }
 
 // ---- the files ----------------------------------------------------------------------
@@ -725,6 +753,65 @@ mod tests {
         b[52..56].copy_from_slice(&c.to_le_bytes());
         b.extend_from_slice(payload);
         b
+    }
+
+    fn splash2(w: u32, h: u32, layout: u32, comp: u16, filter: u16, payload: &[u8]) -> Vec<u8> {
+        let mut b = splash(w, h, 0, 0, payload);
+        b[8..10].copy_from_slice(&2u16.to_le_bytes());
+        b[28..32].copy_from_slice(&layout.to_le_bytes());
+        b[36..38].copy_from_slice(&comp.to_le_bytes());
+        b[38..40].copy_from_slice(&filter.to_le_bytes());
+        let c = crate::table::crc32(&b[0..52]);
+        b[52..56].copy_from_slice(&c.to_le_bytes());
+        b
+    }
+
+    #[test]
+    fn a_format_2_splash_is_checked_as_the_loader_checks_it() {
+        // Every layout (bytes a pixel), uncompressed, run-length and LZ4, with
+        // and without the filter: a 3 × 2 picture.
+        for (layout, bpp) in [(1u32, 4usize), (2, 3), (3, 1)] {
+            let raw: Vec<u8> = (0..6 * bpp as u8).collect();
+            let lz4 = lz4_flex::block::compress(&raw);
+            let mut rle = vec![2u8];
+            rle.extend_from_slice(&raw[..3 * bpp]);
+            rle.push(129);
+            rle.extend_from_slice(&raw[3 * bpp..4 * bpp]);
+            for filter in [0, 1] {
+                assert!(check_splash(&splash2(3, 2, layout, 0, filter, &raw)).is_ok(), "{layout} none");
+                assert!(check_splash(&splash2(3, 2, layout, 1, filter, &rle)).is_ok(), "{layout} rle");
+                assert!(check_splash(&splash2(3, 2, layout, 2, filter, &lz4)).is_ok(), "{layout} lz4");
+                // Cut at every length, and one byte too many: refused.
+                for cut in 0..lz4.len() {
+                    assert!(check_splash(&splash2(3, 2, layout, 2, filter, &lz4[..cut])).is_err(), "{layout} lz4 cut {cut}");
+                }
+                for cut in 0..rle.len() {
+                    assert!(check_splash(&splash2(3, 2, layout, 1, filter, &rle[..cut])).is_err(), "{layout} rle cut {cut}");
+                }
+                let mut long = lz4.clone();
+                long.push(0);
+                assert!(check_splash(&splash2(3, 2, layout, 2, filter, &long)).is_err(), "{layout} lz4 + 1");
+                assert!(check_splash(&splash2(3, 2, layout, 0, filter, &raw[1..])).is_err(), "{layout} raw - 1");
+            }
+        }
+        let raw = [7u8; 6];
+        assert!(check_splash(&splash2(3, 2, 4, 0, 0, &raw)).unwrap_err().contains("pixel layout"));
+        assert!(check_splash(&splash2(3, 2, 3, 3, 0, &raw)).unwrap_err().contains("compression"));
+        assert!(check_splash(&splash2(3, 2, 3, 0, 2, &raw)).unwrap_err().contains("filter"));
+        // The pixel limit holds for grey too (8 Mi pixels), before decoding.
+        assert!(check_splash(&splash2(8192, 1025, 3, 2, 0, &[0])).unwrap_err().contains("limits"));
+        let mut v3 = splash2(3, 2, 3, 0, 0, &raw);
+        v3[8] = 3;
+        let c = crate::table::crc32(&v3[0..52]);
+        v3[52..56].copy_from_slice(&c.to_le_bytes());
+        assert!(check_splash(&v3).unwrap_err().contains("format 3"));
+        // Format 1 knows only BGRx and the encodings 0 and 1.
+        let mut g1 = splash(6, 1, 0, 0, &[7; 24]);
+        g1[28] = 3;
+        let c = crate::table::crc32(&g1[0..52]);
+        g1[52..56].copy_from_slice(&c.to_le_bytes());
+        assert!(check_splash(&g1).is_err(), "grey8 in format 1");
+        assert!(check_splash(&splash(2, 2, 0, 0x0001_0000, &[7; 16])).is_err(), "a filter in format 1");
     }
 
     #[test]

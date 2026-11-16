@@ -15,6 +15,8 @@ toml = { version = "0.9", default-features = false, features = ["parse", "serde"
 sha2 = { version = "0.10", default-features = false }
 sha1 = { version = "0.10", default-features = false }
 regex-lite = "0.1"
+# Decodes an LZ4 splash whole, as the loader does (decoding only; MIT).
+lz4_flex = { version = "0.11", default-features = false, features = ["safe-decode"] }
 
 [dev-dependencies]
 # Only to check that the generated schema validates what the validator does.
