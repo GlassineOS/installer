@@ -50,8 +50,9 @@ another Linux; holding an existing EFI system partition and another system; too 
 found, proposes where GlassineOS goes (free space, a disk the person picks, or replacing a
 named system), lists a backup image for each disk it would write to and none for the
 others, and says what happens to the firmware's boot entries. A disk that is too
-small for the release manifest the check is given (002 FR-019a) is refused with the
-space it lacks. The disks and the firmware's stored settings are
+small for GlassineOS's partitions (the description's sizes, and the least sizes the release
+manifest the check is given states, 002 FR-019a) is refused with the space it lacks. With Secure Boot on, every plan is refused with the reason and how to
+switch it off (001 FR-016b). The disks and the firmware's stored settings are
 unchanged afterwards.
 
 ### Scenario 3 – A machine nothing describes (P1)
@@ -102,6 +103,8 @@ it without any change to the installer itself.
   path on the EFI system partition.
 - A virtual PC with no firmware variable store: treated like a PC whose entries don't
   stick.
+- A PC whose firmware variables can't be read where the check runs: Secure Boot's state
+  is reported unknown, and the plan says so without refusing for it (001 FR-016b).
 
 ## Requirements
 
@@ -119,6 +122,10 @@ it without any change to the installer itself.
 
 ### The check
 
+- **FR-003a**: On a PC the check reads the firmware's Secure Boot state from its variables
+  (Secure Boot and set-up mode), read-only: on, set-up mode, off (also on a firmware
+  without Secure Boot), or unknown when they can't be read. The report shows it, and the
+  plan follows 001 FR-016b.
 - **FR-004**: The check writes nothing: no partition, no partition table, no boot setting,
   no firmware variable, no file on the machine. It doesn't mount any file system writable.
 - **FR-005**: Its result is the plan of 001 FR-003, or the report of Scenario 3, both as
@@ -136,7 +143,10 @@ it without any change to the installer itself.
 ## Success criteria
 
 - **SC-001**: In CI, the check runs on virtual UEFI PCs with each disk of Scenario 2, and
-  every disk image and firmware variable store is byte-identical before and after.
+  every disk image and firmware variable store is byte-identical before and after. On a
+  virtual PC whose firmware enforces Secure Boot, the check reports it on and refuses every
+  plan with the reason and the way to switch it off, writing nothing; the same firmware
+  doesn't start an unsigned program from the install medium and starts a signed one.
 - **SC-002**: In CI, the check runs on recorded Note Air data (partition table, names,
   sizes, identity signals; no partition contents, no vendor file, no unit value) and gives
   the same plan as on the device.

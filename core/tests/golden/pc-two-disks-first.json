@@ -99,6 +99,18 @@
         "create-partitions",
         "write-base"
       ]
+    },
+    {
+      "partition": "glassine-userdata",
+      "class": "create",
+      "actions": [
+        "creates"
+      ],
+      "size": null,
+      "loses_files": false,
+      "steps": [
+        "create-partitions"
+      ]
     }
   ],
   "untouched_partitions": 2,
@@ -174,16 +186,23 @@
     "disk": {
       "disk": 0,
       "free": 214748364800,
-      "needs": 1073741824,
+      "needs": 27917287424,
       "lacks": 0,
-      "exact": false
+      "exact": true
     },
     "minimums": [
+      {
+        "partition": "glassine-boot",
+        "role": "kernel",
+        "at_least": null,
+        "size": 2147483648,
+        "lacks": 0
+      },
       {
         "partition": "glassine-system",
         "role": "base",
         "at_least": null,
-        "size": null,
+        "size": 17179869184,
         "lacks": 0
       }
     ]
@@ -316,5 +335,6 @@
     "write-boot",
     "add-boot-entry"
   ],
-  "left_out": []
+  "left_out": [],
+  "notes": []
 }

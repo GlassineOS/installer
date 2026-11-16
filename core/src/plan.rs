@@ -85,7 +85,32 @@ pub struct Plan {
     pub untried_steps: Vec<String>,
     /// Steps a developer's plan leaves out (001 FR-016a, 002 FR-022).
     pub left_out: Vec<LeftOut>,
+    /// What the person should know that doesn't refuse the plan (an unknown
+    /// Secure Boot state, for example).
+    pub notes: Vec<String>,
 }
+
+/// Why a plan that makes the firmware start GlassineOS is refused while
+/// Secure Boot is on, and the way out (boot 010 FR-036).
+pub const SECURE_BOOT_ON: &str = "Secure Boot is on: the firmware would refuse to start GlassineOS, \
+     whose loader isn't signed for it. Switch it off in the firmware's set-up: restart the PC and \
+     open the set-up with the key it names while it starts (often F2, F10, Del or Esc; from \
+     Windows: Settings, System, Recovery, Advanced startup, Restart now, then Troubleshoot, \
+     Advanced options, UEFI Firmware Settings), set Secure Boot to Disabled (often under Boot \
+     or Security), save, and run the check again. Nothing else in the set-up needs changing. If \
+     Windows on this PC encrypts its disk (BitLocker or device encryption), have its recovery \
+     key at hand: Windows may ask for it after the change";
+
+/// Said when the firmware's variables can't tell Secure Boot's state.
+pub const SECURE_BOOT_UNKNOWN: &str = "Secure Boot's state is unknown here (the firmware's \
+     variables can't be read). GlassineOS starts only with Secure Boot off: check it in the \
+     firmware's set-up. With it on, the firmware won't start GlassineOS, and the other systems \
+     still start.";
+
+/// Said when the firmware has no platform key yet (set-up mode).
+pub const SECURE_BOOT_SETUP: &str = "Secure Boot is in set-up mode (no keys enrolled): the \
+     firmware starts GlassineOS. If keys are enrolled later, Secure Boot comes on and the \
+     firmware no longer starts GlassineOS until it is switched off.";
 
 /// A step a developer's plan leaves out: it writes an artifact the release
 /// doesn't have yet, one a capability `needs` (001 FR-016a, 002 FR-022).
@@ -348,6 +373,7 @@ fn refused(d: Option<&Description>, facts: &Snapshot, state: Option<String>, rea
         steps: vec![],
         untried_steps: vec![],
         left_out: vec![],
+        notes: vec![],
     }
 }
 
@@ -829,7 +855,23 @@ pub fn plan(ds: &[&Description], facts: &Snapshot, rec: &Recognition, input: &In
         });
     }
 
-    // The least sizes the release states (002 FR-019a), for every partition a
+    // Secure Boot (boot 010 FR-036): a job that makes the firmware start
+    // GlassineOS through a boot entry is refused while the firmware enforces
+    // Secure Boot, since it would refuse GlassineOS's loader. Unknown is said,
+    // and never refuses by itself.
+    let mut notes = Vec::new();
+    let enters_firmware = bplans
+        .values()
+        .any(|b| b.kind == "firmware-boot-entry" && b.actions.iter().any(|a| a == "change"));
+    if let Some(fw) = facts.firmware.as_ref().filter(|f| f.kind == "uefi" && enters_firmware) {
+        match fw.secure_boot.as_deref() {
+            Some("on") => reasons.push(SECURE_BOOT_ON.into()),
+            Some("setup") => notes.push(SECURE_BOOT_SETUP.into()),
+            Some(_) => {}
+            None => notes.push(SECURE_BOOT_UNKNOWN.into()),
+        }
+    }
+
     // step makes with `at_least = "release:<role>"`.
     let release_least = |v: Option<&toml::Value>| -> Option<(String, Option<u64>)> {
         let role = v?.as_str()?.strip_prefix("release:")?;
@@ -1216,6 +1258,7 @@ pub fn plan(ds: &[&Description], facts: &Snapshot, rec: &Recognition, input: &In
         steps,
         untried_steps: untried,
         left_out,
+        notes,
     }
 }
 
@@ -1402,6 +1445,12 @@ pub fn render(p: &Plan, d: Option<&Description>) -> String {
     );
     for r in &p.reasons {
         line(&mut o, format!("  - {r}"));
+    }
+    if !p.notes.is_empty() {
+        line(&mut o, "\nNotes:".into());
+        for n in &p.notes {
+            line(&mut o, format!("  - {n}"));
+        }
     }
     if !p.questions.is_empty() {
         line(&mut o, "\nQuestions:".into());

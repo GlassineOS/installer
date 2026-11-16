@@ -25,6 +25,8 @@ pub struct Report {
     pub recognition: RecognitionReport,
     pub supported: bool,
     pub reasons: Vec<String>,
+    /// What the person should know that doesn't refuse (the plan's notes).
+    pub notes: Vec<String>,
     pub capabilities: Vec<Capability>,
     pub plan: Option<PlanSummary>,
 }
@@ -390,6 +392,10 @@ pub fn report(ds: &[&Description], facts: &Snapshot, rec: &Recognition, plan: Op
         },
         supported,
         reasons,
+        notes: plan
+            .filter(|_| matches!(rec.outcome, Outcome::Match { .. }))
+            .map(|p| p.notes.clone())
+            .unwrap_or_default(),
         capabilities,
         plan: plan_summary,
     }
@@ -414,6 +420,9 @@ pub fn render(r: &Report) -> String {
     line(format!("Supported: {}", if r.supported { "yes" } else { "no" }));
     for x in &r.reasons {
         line(format!("  - {x}"));
+    }
+    for x in &r.notes {
+        line(format!("Note: {x}"));
     }
     if !rec.candidates.is_empty() {
         line(format!("Descriptions involved: {}", rec.candidates.join(", ")));
