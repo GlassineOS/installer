@@ -3,6 +3,9 @@
 //! a temporary name, synced, then renamed), what is kept before the first
 //! write in `RECORD.kept/`, and the backup in a folder, each disk's image
 //! gzip-compressed (`disk<N>.img.gz`), every file synced before it counts.
+//! An image larger than a FAT32 file may be (4 GiB) goes on in
+//! `disk<N>.img.gz.1`, `.2`, ...: the parts, read in order, are the one
+//! compressed stream.
 
 use flate2::Compression;
 use flate2::read::GzDecoder;
@@ -19,8 +22,104 @@ pub struct DirEdge {
     pub backup: Option<PathBuf>,
     /// a file whose presence asks to stop after the next safe step
     pub cancel_file: Option<PathBuf>,
-    open: Option<(PathBuf, GzEncoder<BufWriter<File>>)>,
+    /// The most bytes one stored file holds before the next part begins.
+    pub segment: u64,
+    open: Option<(PathBuf, GzEncoder<Parts>)>,
     last: (String, u64),
+}
+
+/// The default part size: below FAT32's 4 GiB file limit.
+pub const SEGMENT: u64 = 2 << 30;
+
+/// A compressed image's parts: `NAME`, `NAME.1`, `NAME.2`, ...
+fn part_path(first: &Path, i: usize) -> PathBuf {
+    if i == 0 {
+        return first.to_path_buf();
+    }
+    let mut s = first.as_os_str().to_owned();
+    s.push(format!(".{i}"));
+    PathBuf::from(s)
+}
+
+/// Writes across parts of at most `segment` bytes each.
+struct Parts {
+    first: PathBuf,
+    segment: u64,
+    files: Vec<File>,
+    cur: BufWriter<File>,
+    in_cur: u64,
+}
+
+impl Parts {
+    fn create(first: &Path, segment: u64) -> std::io::Result<Parts> {
+        // parts left by an earlier, cut attempt
+        let mut i = 1;
+        while std::fs::remove_file(part_path(first, i)).is_ok() {
+            i += 1;
+        }
+        Ok(Parts {
+            first: first.to_path_buf(),
+            segment: segment.max(1),
+            files: vec![],
+            cur: BufWriter::with_capacity(1 << 20, File::create(first)?),
+            in_cur: 0,
+        })
+    }
+
+    fn finish(mut self) -> std::io::Result<()> {
+        self.cur.flush()?;
+        let last = self.cur.into_inner().map_err(|e| e.into_error())?;
+        self.files.push(last);
+        for f in &self.files {
+            f.sync_all()?;
+        }
+        Ok(())
+    }
+}
+
+impl Write for Parts {
+    fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+        if self.in_cur == self.segment {
+            self.cur.flush()?;
+            let next = File::create(part_path(&self.first, self.files.len() + 1))?;
+            let done = std::mem::replace(&mut self.cur, BufWriter::with_capacity(1 << 20, next));
+            self.files.push(done.into_inner().map_err(|e| e.into_error())?);
+            self.in_cur = 0;
+        }
+        let n = (b.len() as u64).min(self.segment - self.in_cur) as usize;
+        let n = self.cur.write(&b[..n])?;
+        self.in_cur += n as u64;
+        Ok(n)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.cur.flush()
+    }
+}
+
+/// Reads the parts in order as one stream.
+struct ReadParts {
+    first: PathBuf,
+    next: usize,
+    cur: File,
+}
+
+impl Read for ReadParts {
+    fn read(&mut self, b: &mut [u8]) -> std::io::Result<usize> {
+        loop {
+            let n = self.cur.read(b)?;
+            if n > 0 || b.is_empty() {
+                return Ok(n);
+            }
+            match File::open(part_path(&self.first, self.next)) {
+                Ok(f) => {
+                    self.cur = f;
+                    self.next += 1;
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+                Err(e) => return Err(e),
+            }
+        }
+    }
 }
 
 fn plain(name: &str) -> Result<(), String> {
@@ -70,6 +169,7 @@ impl DirEdge {
             kept: PathBuf::from(k),
             backup,
             cancel_file,
+            segment: SEGMENT,
             open: None,
             last: (String::new(), 0),
         }
@@ -110,8 +210,8 @@ impl PcEdge for DirEdge {
     fn backup_begin(&mut self, name: &str) -> Result<(), String> {
         let p = self.stored(name)?;
         std::fs::create_dir_all(self.backup_dir()?).map_err(|e| e.to_string())?;
-        let f = File::create(&p).map_err(|e| format!("{}: {e}", p.display()))?;
-        self.open = Some((p, GzEncoder::new(BufWriter::with_capacity(1 << 20, f), Compression::fast())));
+        let f = Parts::create(&p, self.segment).map_err(|e| format!("{}: {e}", p.display()))?;
+        self.open = Some((p, GzEncoder::new(f, Compression::fast())));
         Ok(())
     }
 
@@ -123,8 +223,7 @@ impl PcEdge for DirEdge {
     fn backup_end(&mut self) -> Result<(), String> {
         let (p, z) = self.open.take().ok_or("no stored file is open")?;
         let w = z.finish().map_err(|e| format!("{}: {e}", p.display()))?;
-        let f = w.into_inner().map_err(|e| format!("{}: {e}", p.display()))?;
-        f.sync_all().map_err(|e| format!("{}: {e}", p.display()))?;
+        w.finish().map_err(|e| format!("{}: {e}", p.display()))?;
         if let Some(d) = p.parent() {
             sync_dir(d);
         }
@@ -134,7 +233,15 @@ impl PcEdge for DirEdge {
     fn backup_read(&mut self, name: &str, each: &mut dyn FnMut(&[u8]) -> Result<(), String>) -> Result<(), String> {
         let p = self.stored(name)?;
         let f = File::open(&p).map_err(|e| format!("{}: {e}", p.display()))?;
-        let mut r: Box<dyn Read> = if name.ends_with(".img") { Box::new(GzDecoder::new(f)) } else { Box::new(f) };
+        let mut r: Box<dyn Read> = if name.ends_with(".img") {
+            Box::new(GzDecoder::new(ReadParts {
+                first: p.clone(),
+                next: 1,
+                cur: f,
+            }))
+        } else {
+            Box::new(f)
+        };
         let mut buf = vec![0u8; 4 << 20];
         loop {
             let n = r.read(&mut buf).map_err(|e| format!("{}: {e}", p.display()))?;

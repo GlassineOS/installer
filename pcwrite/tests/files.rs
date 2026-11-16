@@ -251,6 +251,26 @@ fn a_backup_store_reads_back_what_it_stored() {
     .unwrap();
     assert_eq!(back, data);
     assert!(root.join("b/disk0.img.gz").is_file());
+    // an image larger than a part goes on in more files, read back as one
+    e.segment = 100_000;
+    let noise: Vec<u8> = (0..2 * MIB as u32).map(|i| (i.wrapping_mul(2654435761) >> 13) as u8).collect();
+    e.backup_begin("disk1.img").unwrap();
+    e.backup_append(&noise).unwrap();
+    e.backup_end().unwrap();
+    assert!(root.join("b/disk1.img.gz.1").is_file() && fs::metadata(root.join("b/disk1.img.gz")).unwrap().len() == 100_000);
+    let mut back = vec![];
+    e.backup_read("disk1.img", &mut |b| {
+        back.extend_from_slice(b);
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(back, noise);
+    // a shorter image written again leaves no stale parts behind
+    e.backup_begin("disk1.img").unwrap();
+    e.backup_append(b"short").unwrap();
+    e.backup_end().unwrap();
+    assert!(!root.join("b/disk1.img.gz.1").exists());
+    e.segment = glassine_installer_pcwrite::SEGMENT;
     e.backup_put("manifest.json", b"{}").unwrap();
     assert_eq!(e.backup_get("manifest.json").unwrap().unwrap(), b"{}");
     assert!(e.backup_put("../x", b"").is_err());
