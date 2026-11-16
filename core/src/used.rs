@@ -57,36 +57,48 @@ pub fn partition(disk: &mut dyn ReadAt, start: u64, size: u64) -> Alloc {
     Alloc { kind, used }
 }
 
+/// The one file system whose signature the partition carries. Two
+/// signatures (a file system made over another one that left its own in
+/// place) are a doubt: the partition is kept whole.
 fn identify(w: &mut Window) -> Result<Option<&'static str>, String> {
     if w.size < 4096 {
         return Ok(None);
     }
     let head = read_vec(w, 0, 4096)?;
+    let mut found = vec![];
+    if &head[0..6] == b"LUKS\xba\xbe" {
+        found.push("crypto_LUKS");
+    }
+    if &head[4086..4096] == b"SWAPSPACE2" || &head[4086..4096] == b"SWAP-SPACE" {
+        found.push("swap");
+    }
     if &head[3..11] == b"NTFS    " {
-        return Ok(Some("ntfs"));
+        found.push("ntfs");
     }
     if &head[3..11] == b"EXFAT   " {
-        return Ok(Some("exfat"));
+        found.push("exfat");
     }
     if le16(&head, 1024 + 0x38) == 0xef53 {
-        return Ok(Some("ext4"));
+        found.push("ext4");
     }
     if &head[0..4] == b"XFSB" {
-        return Ok(Some("xfs"));
-    }
-    if &head[0..6] == b"LUKS\xba\xbe" {
-        return Ok(Some("crypto_LUKS"));
+        found.push("xfs");
     }
     if w.size >= 0x10000 + 4096 {
         let sb = read_vec(w, 0x10000, 4096)?;
         if &sb[0x40..0x48] == b"_BHRfS_M" {
-            return Ok(Some("btrfs"));
+            found.push("btrfs");
         }
     }
-    if fat_bpb(&head, w.size).is_some() {
-        return Ok(Some("vfat"));
+    // a FAT boot sector only counts where nothing else claims the partition
+    if found.is_empty() && fat_bpb(&head, w.size).is_some() {
+        found.push("vfat");
     }
-    Ok(None)
+    match found.as_slice() {
+        [] => Ok(None),
+        [one] => Ok(Some(one)),
+        more => Err(format!("the signatures of {} at once", more.join(" and "))),
+    }
 }
 
 /// Sorts and merges ranges, dropping empty ones.
@@ -914,6 +926,16 @@ fn fat(w: &mut Window) -> Result<Vec<(u64, u64)>, String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn two_signatures_keep_the_partition_whole() {
+        let mut d = vec![0u8; 1 << 20];
+        d[1024 + 0x38..1024 + 0x3a].copy_from_slice(&0xef53u16.to_le_bytes());
+        d[0..6].copy_from_slice(b"LUKS\xba\xbe");
+        let a = partition(&mut d.as_slice(), 0, 1 << 20);
+        let why = a.used.unwrap_err();
+        assert!(why.contains("crypto_LUKS and ext4"), "{why}");
+    }
+
     use super::*;
 
     #[test]

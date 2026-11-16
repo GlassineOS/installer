@@ -958,17 +958,25 @@ fn a_restore_cut_at_any_write_is_run_again_and_ends_the_same() {
 #[test]
 fn a_restore_write_that_reads_back_otherwise_stops_and_a_rerun_finishes() {
     let (m0, e0) = installed_with_backup(windows_machine, &[]);
-    let mut m = m0.clone();
-    m.faults.corrupt_write = Some(2);
-    let mut e = Edge {
+    let want = windows_machine().disks[0].sha(0, DISK);
+    let edge = || Edge {
         backup: e0.backup.clone(),
         ..Default::default()
     };
-    let s = restore(&mut m, &mut e).unwrap_err();
-    assert!(s.contains("read back otherwise"), "{s}");
-    m.faults = Faults::default();
-    restore(&mut m, &mut e).unwrap();
-    assert_eq!(disk_sha(&m), windows_machine().disks[0].sha(0, DISK));
+    let mut m = m0.clone();
+    restore(&mut m, &mut edge()).unwrap();
+    let (base, n) = (m0.writes, m.writes - m0.writes);
+    assert!(n > 3, "{n} restore writes");
+    for k in 1..=n {
+        let mut m = m0.clone();
+        m.faults.corrupt_write = Some(base + k);
+        let mut e = edge();
+        let s = restore(&mut m, &mut e).unwrap_err();
+        assert!(s.contains("read back otherwise"), "write {k}: {s}");
+        m.faults = Faults::default();
+        restore(&mut m, &mut e).unwrap_or_else(|s| panic!("write {k}, then: {s}"));
+        assert_eq!(disk_sha(&m), want, "corrupt write {k}");
+    }
 }
 
 #[test]

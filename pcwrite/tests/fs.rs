@@ -498,3 +498,59 @@ fn a_partition_kept_whole_is_restored_whole() {
     copy_out(&dev, lba * 512, size, &one);
     assert_eq!(sha_file(&one), before, "the ext4 partition byte for byte");
 }
+
+struct FileAt(File);
+impl glassine_installer::table::ReadAt for FileAt {
+    fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> Result<(), String> {
+        self.0.read_exact_at(buf, offset).map_err(|e| e.to_string())
+    }
+}
+
+/// ext4 as it is made for real disks (4 KiB blocks, several block groups,
+/// flex_bg, uninitialized groups): only the ranges its bitmaps mark used,
+/// copied onto zeros, are a file system that checks clean and holds the files.
+#[test]
+fn ext4_with_4k_blocks_comes_back_from_its_used_blocks_alone() {
+    if !have_tools() {
+        return;
+    }
+    let w = Work::new("ext4-4k");
+    let size = 1024 * MIB;
+    let src = w.0.join("src");
+    let files = files();
+    write_tree(&src, &files);
+    let img = w.0.join("ext4.img");
+    File::create(&img).unwrap().set_len(size).unwrap();
+    run(
+        "mkfs.ext4",
+        &["-q", "-F", "-b", "4096", "-E", "nodiscard", "-d", src.to_str().unwrap(), img.to_str().unwrap()],
+    );
+    let a = used::partition(&mut FileAt(File::open(&img).unwrap()), 0, size);
+    assert_eq!(a.kind.as_deref(), Some("ext4"));
+    let ranges = a.used.unwrap_or_else(|e| panic!("kept whole: {e}"));
+    let kept: u64 = ranges.iter().map(|(s, e)| e - s).sum();
+    assert!(kept < size / 4, "{kept} of {size} bytes kept");
+    // only those ranges onto a blank (zero) file
+    let out = w.0.join("restored.img");
+    let (from, to) = (File::open(&img).unwrap(), File::create(&out).unwrap());
+    to.set_len(size).unwrap();
+    for (s, e) in &ranges {
+        let mut at = *s;
+        while at < *e {
+            let n = (*e - at).min(4 * MIB) as usize;
+            let mut b = vec![0u8; n];
+            from.read_exact_at(&mut b, at).unwrap();
+            to.write_all_at(&b, at).unwrap();
+            at += n as u64;
+        }
+    }
+    drop((from, to));
+    let p = out.to_str().unwrap();
+    run("e2fsck", &["-fn", p]);
+    let tree = w.0.join("tree");
+    fs::create_dir_all(&tree).unwrap();
+    run("debugfs", &["-R", &format!("rdump / {}", tree.display()), p]);
+    for (n, b) in &files {
+        assert_eq!(sha_file(&tree.join(n)), hex(&Sha256::digest(b)), "{n} differs");
+    }
+}
