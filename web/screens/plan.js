@@ -108,6 +108,14 @@ function Status({ s }) {
   return null;
 }
 
+// What the plan says that doesn't refuse it (an unknown Secure Boot state, for one), in the
+// core's words (plan notes).
+function Notes({ s }) {
+  const n = s.plan.notes || [];
+  if (!n.length) return null;
+  return html`<${Admonition} label="Good to know" id="notes">${n.map((x) => html`<p>${x}</p>`)}</${Admonition}>`;
+}
+
 // A developer's plan leaves out the steps that write what the release doesn't have yet
 // (spec 001 FR-016a): which, what is missing, and what the device ends with instead.
 function LeftOut({ s }) {
@@ -222,6 +230,7 @@ export function Plan({ s }) {
       </ul>
     </section>
     <${Status} s=${s} />
+    <${Notes} s=${s} />
     <${LeftOut} s=${s} />
     ${refused ? null : html`<section class="ins-stack" id="what-happens">
       <h2 class="ins-h2">What happens</h2>
