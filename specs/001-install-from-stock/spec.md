@@ -197,11 +197,33 @@ texts the description provides.
   takes the rest of the free space and has a least size below which the plan is refused.
   It gives each the standard partition type for its role (userdata, which has none: the
   Linux file-system type), records each one's unique partition ID in the installation
-  record, and writes the system partition's and userdata's IDs into the boot entry's
-  command line as the identity keys of [boot 001](https://github.com/GlassineOS/boot/blob/main/specs/001-deployments/spec.md)
+  record, and writes the system partition's and userdata's IDs into the first kernel
+  set's command line ([boot 010](https://github.com/GlassineOS/boot/blob/main/specs/010-x86-boot/spec.md)
+  FR-005) as the identity keys of [boot 001](https://github.com/GlassineOS/boot/blob/main/specs/001-deployments/spec.md)
   (FR-020). No disk goes into a base's or a deployment's file system table. Where a
   device's partitions have fixed names, its description names them instead and no keys
   are written. The recovery rebuilds a lost boot entry from the installation record.
+  The installer leaves every partition the plan doesn't remove where it was, with its
+  entry in the partition table and its bytes unchanged; a kept system's partitions and
+  its EFI system partition stay byte for byte as they were.
+- **FR-012c**: On a PC the installer writes in this order, each write read back from the
+  disk (not from a cache) and compared before the next begins: the backup (FR-009) or,
+  with it switched off, the firmware's boot entries and boot order kept beside the
+  record; the partition table, its backup copy before its primary; the system
+  partition, as the release's prepared image; the boot partition, a new file system
+  holding the boot loader at its own path and at the firmware's removable-media path,
+  the first kernel set and the loader's record naming it, its boot sector written last;
+  then the firmware boot entry. Userdata is left for the first start (FR-012b).
+  - Before the first write the installer keeps, beside the record, the disk's partition
+    table as it was and the unique IDs it gives the new partitions, so a resumed step
+    writes the same bytes, and it refuses a disk whose table is neither that one nor
+    one this installation wrote.
+  - It writes only the disk the plan names, only the table's two copies and the
+    partitions it made, never the disk it runs from or holds the backup on.
+  - The firmware boot entry is one entry, made only at installation and recognised as
+    the installation's by the boot partition's unique ID: a resumed or repeated step
+    reuses it. It goes first in the boot order; every other entry and its place in the
+    order stay as they were. Nothing else in the firmware's settings is written.
 - **FR-013**: The installation is complete only when the device has booted the first
   deployment and it has been accepted (boot 001). Until then, the installer shows the
   installation as unfinished.

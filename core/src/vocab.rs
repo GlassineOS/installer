@@ -886,6 +886,7 @@ pub const BOOT_SETTING_KINDS: &[Kind] = &[
 pub const ARTIFACT_ROLES: &[Entry] = &[
     e("base", "the GlassineOS base"),
     e("kernel", "the kernel (with its boot image where the device needs one)"),
+    e("initramfs", "the initramfs a kernel set starts with, its boot modules after it (a PC)"),
     e("boot-loader", "a boot loader"),
     e("recovery", "the GlassineOS recovery"),
     e("partition-layout", "the partition layout the installation makes"),
@@ -974,11 +975,13 @@ pub const STEP_KINDS: &[Kind] = &[
     },
     Kind {
         id: "write-boot-files",
-        doc: "puts the kernel and the boot loader into a boot partition",
+        doc: "makes the boot partition's file system and puts the loader (at its own path and the removable-media path), the first kernel set and the loader record on it",
         backends: &["uefi-pc"],
         modes: &["local"],
         params: &[
             p("artifact", T::Artifact, true, "the kernel"),
+            p("initramfs", T::Artifact, false, "the kernel set's initramfs (needed on a PC)"),
+            p("loader", T::Artifact, false, "the loader the firmware starts (needed on a PC)"),
             p("partition", T::Partition, true, "the boot partition"),
         ],
     },
