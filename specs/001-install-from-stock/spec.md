@@ -195,7 +195,7 @@ texts the description provides.
   - The firmware's boot entries and boot order the backup holds are put back. Boot
     entries added since stay, outside the boot order.
   - A restore that is cut off is run again and goes on where the disk still differs.
-  - Backups of the earlier format (the disk's every byte) are restored as well.
+  - A restore reads backups of format 1 (the disk's every byte) and of format 2.
 - **FR-009a**: The backup can be switched off, on a PC and on a device, so that an
   installation also works with little free space. Switching it off is a choice of its own
   with its consequence stated (no way back to the maker's system, no repair from the
@@ -336,9 +336,9 @@ The image's stream (integers little-endian):
   the number of records before it.
 
 A range no record names was free space of a file system. A restore writes every `D` and
-`Z` range and leaves the rest of the disk as it finds it. Format 1 (an earlier version of
-this installer) stored the disk's every byte as the stream, with no header, and the
-manifest's SHA-256 was the disk's; it has no `image` field. A change an older reader would
+`Z` range and leaves the rest of the disk as it finds it. In a backup of format 1 the
+stream is the disk's every byte, with no header, the manifest's SHA-256 is the disk's and
+there is no `image` field; a restore reads it as one range of data. A change an older reader would
 misread raises `backup_format`.
 
 ## Success criteria

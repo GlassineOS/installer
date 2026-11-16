@@ -7,11 +7,8 @@
 //! again with the same command and goes on where the disk still differs.
 
 use super::{Opts, USAGE, opts};
-use std::io::BufRead;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-
-const CONFIRM: &str = "restore";
 
 pub fn restore_cmd(args: &[String]) -> Result<ExitCode, String> {
     let o: Opts = opts(args, &["--pc"], &["--backup", "--disk", "--root"])?;
@@ -35,6 +32,8 @@ fn run(root: &Path, backup: &Path, disk: Option<u32>) -> Result<ExitCode, String
     use glassine_installer::pc_execute::Machine;
     use glassine_installer::pc_image;
     use glassine_installer_pcwrite::{DirEdge, LinuxMachine};
+    use std::io::BufRead;
+    const CONFIRM: &str = "restore";
     let mut edge = DirEdge::new(&backup.join(".restore-record.json"), Some(backup.to_path_buf()), None);
     let (man, sha) = pc_image::manifest(&mut edge)?;
     if man.disks.len() != 1 {
