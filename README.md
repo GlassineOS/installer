@@ -68,10 +68,12 @@ a simulated machine (`core/tests/pc_execute.rs`: a power cut after every write, 
 reads back otherwise, a cut at every save of the record, each resumed), on a tree of files
 (`pcwrite/tests`) and on virtual UEFI PCs in QEMU with OVMF (`tests/qemu`, the pc-check job:
 a blank disk, a kept Windows, a run cut while it writes and resumed, a backup on a small
-disk; each then starts its new boot entry, which starts a placeholder loader). Never on a
-real PC. Not built yet: the backup images every block of a disk (it doesn't skip the unused
-blocks of the file systems it could read), and the boot loader is a release's
-`boot-loader` artifact, which no release has yet.
+disk; each backed up, then started from its new boot entry, which starts a placeholder
+loader; the kept Windows is then restored from its backup). Never on a real PC. The backup
+image holds only the blocks in use of the ext4, btrfs, NTFS and FAT file systems it reads
+(`core/src/used.rs`; tested on file systems their own tools made, `pcwrite/tests/fs.rs`) and
+every other byte of the disk, zeros as zeros; `restore --pc` puts it back. Not built yet: the
+boot loader is a release's `boot-loader` artifact, which no release has yet.
 
 ### Setting up the computer once
 
@@ -132,6 +134,9 @@ device connected in fastboot mode with `getvar`, or with `--pc` read the PC they
 - `install`, `resume`: carry out the plan, after the person types "install"; `resume` goes on
   from the record. These write to the device, or with `--pc` to the PC they run on (its
   target disk and its firmware's boot entries; never run on a real PC yet).
+- `restore --pc --backup DIR`: puts a PC's backup back onto its disk and the firmware's boot
+  entries and order, after the person types "restore"; run again after a cut (never run on a
+  real PC yet).
 - `host-setup` (without `--print`, as root on Linux) writes a udev rules file to this computer.
 
 `emergency-try-program` is a development command, not part of the flow, and is not in the usage.

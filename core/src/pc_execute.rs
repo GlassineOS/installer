@@ -120,8 +120,10 @@ pub trait PcEdge {
 
 /// The backup's manifest name.
 pub const MANIFEST: &str = "manifest.json";
-/// The backup format this executor writes.
-pub const BACKUP_FORMAT: i64 = 1;
+/// The backup format this executor writes: 2, each disk's image holding only
+/// what is in use ([`crate::pc_image`]). A restore also reads format 1 (each
+/// disk's bytes whole).
+pub const BACKUP_FORMAT: i64 = 2;
 
 /// The PC backup's manifest.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -137,8 +139,12 @@ pub struct BackupManifest {
 pub struct BackupDisk {
     pub disk: DiskId,
     pub file: String,
-    /// Of the disk's bytes, as read and as read back from the stored copy.
+    /// Of the stored stream (format 1: the disk's bytes), as written and as
+    /// read back.
     pub sha256: String,
+    /// What the image holds (format 2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<crate::pc_image::ImageSummary>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -773,38 +779,26 @@ impl<M: Machine, E: PcEdge, S: ArtifactSource> Exec<'_, M, E, S> {
                 .cloned()
                 .ok_or_else(|| OpError::before(format!("disk {i} of the backup isn't there")))?;
             let file = format!("disk{i}.img");
-            self.edge.backup_begin(&file).map_err(OpError::before)?;
-            let mut h = Sha256::new();
-            let mut buf = vec![0u8; CHUNK];
-            let mut at = 0u64;
-            while at < disk.size {
-                let n = (disk.size - at).min(CHUNK as u64) as usize;
-                self.m.read(i, at, &mut buf[..n]).map_err(OpError::before)?;
-                h.update(&buf[..n]);
-                self.edge.backup_append(&buf[..n]).map_err(OpError::before)?;
-                at += n as u64;
-                self.edge.progress(id, at, disk.size);
+            let bd = crate::pc_image::back_up_disk(&mut *self.m, &mut *self.edge, id, &disk, &file).map_err(OpError::before)?;
+            if let Some(im) = &bd.image {
+                ev.insert(
+                    format!("disk{i}-image"),
+                    format!(
+                        "{} bytes stored, {} as zeros, {} free space left out",
+                        im.data_bytes, im.zero_bytes, im.free_bytes
+                    ),
+                );
+                for p in &im.partitions {
+                    self.edge.note(&format!(
+                        "  disk {i} partition {}{}: {}",
+                        p.partition,
+                        p.fs.as_deref().map(|f| format!(" ({f})")).unwrap_or_default(),
+                        p.kept
+                    ));
+                }
             }
-            self.edge.backup_end().map_err(OpError::before)?;
-            let read = hex(&h.finalize());
-            let mut h2 = Sha256::new();
-            let mut got = 0u64;
-            self.edge
-                .backup_read(&file, &mut |b| {
-                    h2.update(b);
-                    got += b.len() as u64;
-                    Ok(())
-                })
-                .map_err(|e| OpError::before(format!("reading the backup of disk {i} back: {e}")))?;
-            let back = hex(&h2.finalize());
-            if back != read || got != disk.size {
-                return Err(OpError::before(format!(
-                    "the backup of disk {i} read back as {got} bytes, sha256 {back}; the disk read {} bytes, {read}: not verified",
-                    disk.size
-                )));
-            }
-            ev.insert(format!("disk{i}-sha256"), read.clone());
-            out.push(BackupDisk { disk, file, sha256: read });
+            ev.insert(format!("disk{i}-sha256"), bd.sha256.clone());
+            out.push(bd);
         }
         let vfile = "efivars.json";
         self.edge.backup_put(vfile, &vars).map_err(OpError::before)?;
