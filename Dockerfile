@@ -9,3 +9,6 @@ RUN apk add --no-cache musl-dev make mingw-w64-gcc \
  && rustup component add clippy rustfmt \
  && cargo install --locked wasm-bindgen-cli --version "$WASM_BINDGEN" \
  && rm -rf /usr/local/cargo/registry /usr/local/cargo/git
+# The backup's file-system fixtures (pcwrite/tests/fs.rs): made with each file system's own
+# tools, checked with its fsck, read back without mounting.
+RUN apk add --no-cache e2fsprogs e2fsprogs-extra btrfs-progs dosfstools mtools ntfs-3g-progs

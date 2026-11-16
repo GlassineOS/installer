@@ -253,7 +253,8 @@ impl PcEdge for Edge {
     fn backup_read(&mut self, name: &str, each: &mut dyn FnMut(&[u8]) -> Result<(), String>) -> Result<(), String> {
         let mut b = self.backup.as_ref().and_then(|m| m.get(name)).cloned().ok_or("not stored")?;
         if self.spoil_backup.as_deref() == Some(name) {
-            b[1000] ^= 1;
+            let k = b.len() / 2;
+            b[k] ^= 1;
         }
         each(&b)
     }
@@ -721,13 +722,16 @@ fn a_blank_disk_is_installed_with_a_verified_backup() {
     assert!(matches!(r, Ok(Outcome::WaitingForAcceptance { .. })), "{r:?}\n{:#?}", e.notes);
     installed(&m, &c);
     let b = e.backup.as_ref().unwrap();
-    assert_eq!(b["disk0.img"].len() as u64, DISK);
+    // a blank disk reads as zeros: its image records it so, storing no data
+    let man: glassine_installer::pc_execute::BackupManifest = serde_json::from_slice(&b["manifest.json"]).unwrap();
+    let im = man.disks[0].image.clone().unwrap();
+    assert_eq!((im.data_bytes, im.zero_bytes), (0, DISK), "{im:?}");
+    assert!(b["disk0.img"].len() < 4096);
     assert_eq!(
         rec.backup.as_ref().unwrap().manifest_sha256.as_deref(),
         Some(sha256_hex(&b["manifest.json"]).as_str())
     );
-    // the backup holds the disk as it was (blank) and the firmware's entries
-    assert!(b["disk0.img"].iter().all(|x| *x == 0));
+    // and the firmware's entries
     let vars: BTreeMap<String, String> = serde_json::from_slice(&b["efivars.json"]).unwrap();
     assert_eq!(vars.len(), 3);
     for s in rec.plan_steps().unwrap() {
@@ -1009,4 +1013,211 @@ fn a_resume_with_another_backup_is_refused() {
     let s = go(&c, &mut rec, &mut m, &mut e).unwrap_err();
     assert!(s.why.contains("not the backup this installation rests on"), "{s}");
     assert_eq!(m.log.len(), n);
+}
+
+// ---- the backup image and its restore ----------------------------------------------
+
+use glassine_installer::pc_execute::{BackupManifest, MANIFEST};
+use glassine_installer::pc_image::{self, Restored};
+
+/// The disk's bytes, hashed whole.
+fn disk_sha(m: &Sim) -> String {
+    m.disks[0].sha(0, DISK)
+}
+
+fn manifest_of(e: &mut Edge) -> BackupManifest {
+    pc_image::manifest(e).unwrap().0
+}
+
+/// Restores the backup the edge holds onto disk 0: the disk, then the boot settings.
+fn restore(m: &mut Sim, e: &mut Edge) -> Result<Restored, String> {
+    let man = manifest_of(e);
+    let mut out = pc_image::restore_disk(m, e, &man.disks[0], man.backup_format, 0)?;
+    pc_image::restore_variables(m, e, &man, &mut out)?;
+    Ok(out)
+}
+
+/// An install with the backup on, from `machine`; the machine afterwards.
+fn installed_with_backup(machine: fn() -> Sim, choices: &[(&str, &str)]) -> (Sim, Edge) {
+    let mut m = machine();
+    let c = case(&mut m, choices);
+    let mut rec = record(&c);
+    let mut e = with_backup();
+    go(&c, &mut rec, &mut m, &mut e).unwrap();
+    m.log.clear();
+    m.writes = 0;
+    (m, e)
+}
+
+#[test]
+fn the_image_keeps_only_what_is_in_use_and_a_restore_brings_the_machine_back() {
+    for (machine, choices) in [
+        (blank_machine as fn() -> Sim, vec![]),
+        (windows_machine as fn() -> Sim, vec![]),
+        (windows_machine as fn() -> Sim, vec![("systems.1", "replace")]),
+    ] {
+        let before = machine();
+        let (mut m, mut e) = installed_with_backup(machine, &choices);
+        let man = manifest_of(&mut e);
+        assert_eq!(man.backup_format, 2);
+        let im = man.disks[0].image.clone().unwrap();
+        // a blank disk is all zeros: nothing stored as data
+        if before.disks[0].pages.is_empty() {
+            assert_eq!(im.data_bytes, 0, "{im:?}");
+            assert_eq!(im.zero_bytes, DISK);
+        }
+        assert!(im.data_bytes + im.zero_bytes + im.free_bytes == DISK, "{im:?}");
+        assert!(disk_sha(&m) != disk_sha(&before));
+        let r = restore(&mut m, &mut e).unwrap();
+        assert!(r.written_bytes > 0);
+        // A kept or replaced Windows: the install wrote only outside the old
+        // file systems' used blocks or over partitions the image keeps whole.
+        assert_eq!(disk_sha(&m), disk_sha(&before), "{choices:?}: the disk as it was");
+        assert_eq!(
+            m.vars.get(&efivar::global_name("BootOrder")),
+            before.vars.get(&efivar::global_name("BootOrder"))
+        );
+        for (k, v) in &before.vars {
+            assert_eq!(m.vars.get(k), Some(v), "{k}");
+        }
+        assert!(m.log.iter().all(|(d, _, _)| *d == 0), "only the target disk was written");
+        // a second restore finds everything in place and writes nothing
+        let n = m.log.len();
+        let r = restore(&mut m, &mut e).unwrap();
+        assert_eq!((r.written_bytes, m.log.len()), (0, n), "{r:?}");
+    }
+}
+
+#[test]
+fn a_restore_cut_at_any_write_is_run_again_and_ends_the_same() {
+    let (m0, e0) = installed_with_backup(windows_machine, &[]);
+    let mut m = m0.clone();
+    let mut e = Edge {
+        backup: e0.backup.clone(),
+        ..Default::default()
+    };
+    restore(&mut m, &mut e).unwrap();
+    let (want, writes) = (state(&m), m.writes);
+    assert!(writes > 3, "{writes} writes");
+    for k in 1..=writes {
+        let mut m = m0.clone();
+        m.faults.cut_at_write = Some(k);
+        let mut e = Edge {
+            backup: e0.backup.clone(),
+            ..Default::default()
+        };
+        restore(&mut m, &mut e).expect_err("the cut stops the restore");
+        let mut m = m.restarted();
+        restore(&mut m, &mut e).unwrap_or_else(|s| panic!("cut at write {k}, then: {s}"));
+        assert!(
+            disk_sha(&m) == windows_machine().disks[0].sha(0, DISK) && m.vars == want.1,
+            "cut at write {k}: another machine than an uncut restore's"
+        );
+    }
+}
+
+#[test]
+fn a_restore_write_that_reads_back_otherwise_stops_and_a_rerun_finishes() {
+    let (m0, e0) = installed_with_backup(windows_machine, &[]);
+    let want = windows_machine().disks[0].sha(0, DISK);
+    let edge = || Edge {
+        backup: e0.backup.clone(),
+        ..Default::default()
+    };
+    let mut m = m0.clone();
+    restore(&mut m, &mut edge()).unwrap();
+    // the disk writes only (a variable write isn't corrupted by the fault)
+    let (base, n) = (m0.writes, m.log.len() - m0.log.len());
+    assert!(n > 3, "{n} restore writes");
+    for k in 1..=n {
+        let mut m = m0.clone();
+        m.faults.corrupt_write = Some(base + k);
+        let mut e = edge();
+        let s = restore(&mut m, &mut e).unwrap_err();
+        assert!(s.contains("read back otherwise"), "write {k}: {s}");
+        m.faults = Faults::default();
+        restore(&mut m, &mut e).unwrap_or_else(|s| panic!("write {k}, then: {s}"));
+        assert_eq!(disk_sha(&m), want, "corrupt write {k}");
+    }
+}
+
+#[test]
+fn a_spoiled_backup_is_refused_before_any_write() {
+    for spoil in ["image", "manifest"] {
+        let (mut m, e0) = installed_with_backup(windows_machine, &[]);
+        let mut e = Edge {
+            backup: e0.backup.clone(),
+            ..Default::default()
+        };
+        let b = e.backup.as_mut().unwrap();
+        if spoil == "image" {
+            let img = b.get_mut("disk0.img").unwrap();
+            let k = img.len() / 2;
+            img[k] ^= 1;
+        } else {
+            let mut man: BackupManifest = serde_json::from_slice(&b[MANIFEST]).unwrap();
+            man.disks[0].sha256 = "00".repeat(32);
+            b.insert(MANIFEST.into(), serde_json::to_vec(&man).unwrap());
+        }
+        let s = restore(&mut m, &mut e).unwrap_err();
+        assert!(s.contains("nothing is written"), "{spoil}: {s}");
+        assert!(m.log.is_empty(), "{spoil}: nothing written");
+    }
+}
+
+#[test]
+fn a_disk_of_another_size_is_refused() {
+    let (mut m, mut e) = installed_with_backup(windows_machine, &[]);
+    let mut man = manifest_of(&mut e);
+    man.disks[0].disk.size += 512;
+    let s = pc_image::restore_disk(&mut m, &mut e, &man.disks[0], 2, 0).unwrap_err();
+    assert!(s.contains("nothing is written"), "{s}");
+    assert!(m.log.is_empty());
+}
+
+#[test]
+fn a_format_1_backup_is_restored_too() {
+    let before = windows_machine();
+    let (mut m, mut e) = installed_with_backup(windows_machine, &[]);
+    // the backup as format 1 wrote it: the whole disk's bytes
+    let raw = before.disks[0].bytes(0, DISK);
+    let mut man = manifest_of(&mut e);
+    man.backup_format = 1;
+    man.disks[0].sha256 = sha256_hex(&raw);
+    man.disks[0].image = None;
+    let b = e.backup.as_mut().unwrap();
+    b.insert("disk0.img".into(), raw);
+    b.insert(MANIFEST.into(), serde_json::to_vec(&man).unwrap());
+    let r = restore(&mut m, &mut e).unwrap();
+    assert!(r.written_bytes > 0);
+    assert_eq!(disk_sha(&m), disk_sha(&before));
+}
+
+#[test]
+fn an_mbr_disk_keeps_its_boot_records_and_the_used_blocks_of_its_logical_partitions() {
+    // a primary FAT16 at 1 MiB, an extended partition at 64 MiB with one
+    // logical FAT16 (its boot record at the extended's start)
+    let mut d = Disk::new(0, DISK, "sata");
+    let (p1, ext, lrel) = (2048u32, 64 * 2048u32, 2048u32);
+    let len = 32 * 2048u32;
+    d.put(0, &img::mbr(&[(0x06, p1, len), (0x05, ext, 2 * len)]));
+    d.put(ext as u64 * 512, &img::ebr(0x06, lrel, len, 0, 0));
+    for base in [p1 as u64 * 512, (ext + lrel) as u64 * 512] {
+        let (w, _) = img::fat16(len, 10);
+        for (o, b) in w {
+            d.put(base + o, &b);
+        }
+        // the boot sector's media byte, as the FAT's first entry has it
+        d.put(base + 21, &[0xf8]);
+    }
+    let k = pc_image::keep(&mut d, DISK, 512);
+    assert_eq!(k.whole, None);
+    let parts: Vec<(u32, String)> = k.partitions.iter().map(|p| (p.partition, p.kept.clone())).collect();
+    assert_eq!(parts, [(1, "used blocks".to_string()), (5, "used blocks".to_string())], "{:?}", k.partitions);
+    let inside = |o: u64| k.ranges.iter().any(|(a, b)| o >= *a && o < *b);
+    assert!(inside(0) && inside(ext as u64 * 512), "the MBR and the extended boot record are kept");
+    // the free space of each FAT16 is left out
+    for base in [p1 as u64 * 512, (ext + lrel) as u64 * 512] {
+        assert!(!inside(base + 16 * MIB), "{:?}", k.ranges);
+    }
 }

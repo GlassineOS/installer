@@ -31,8 +31,8 @@ case's disk and check the disk, the firmware's variables and that the
 machine then starts the new boot entry (see the install section below).
 
 Needs: qemu-system-x86_64, OVMF (with its Secure Boot build for those cases),
-sgdisk, mkfs.ext4, mkfs.fat, mcopy, mmd, unsquashfs, openssl, sbsign,
-virt-fw-vars; for the install cases mkfs.btrfs and fsck.fat. Downloads (pinned, hash-checked) go to --cache. The keys are
+sgdisk, mkfs.ext4, mkfs.fat, mkntfs, ntfscp, mcopy, mmd, unsquashfs, openssl,
+sbsign, virt-fw-vars; for the install cases mkfs.btrfs and fsck.fat. Downloads (pinned, hash-checked) go to --cache. The keys are
 made in --work for each run and never kept. Runs without KVM if there is none
 (slower)."""
 
@@ -192,20 +192,6 @@ def sparse(p: Path, size: int):
         f.truncate(size)
 
 
-def ntfs_boot_sector(sectors: int) -> bytes:
-    """An NTFS boot sector: the signature only (no MFT behind it)."""
-    b = bytearray(512)
-    b[0:3] = b"\xeb\x52\x90"
-    b[3:11] = b"NTFS    "
-    b[11:13] = (512).to_bytes(2, "little")
-    b[13] = 8
-    b[0x28:0x30] = sectors.to_bytes(8, "little")
-    b[0x30:0x38] = (4).to_bytes(8, "little")
-    b[0x40] = 0xF6  # -10: 1024-byte MFT records
-    b[510:512] = b"\x55\xaa"
-    return bytes(b)
-
-
 def put(p: Path, offset: int, data: bytes):
     with open(p, "r+b") as f:
         f.seek(offset)
@@ -253,7 +239,33 @@ def make_linux(p: Path, work: Path):
     run("mkfs.ext4", "-q", "-F", "-E", f"offset={off}", "-d", root, p, f"{size // 1024}k")
 
 
-def make_windows(p: Path):
+def copy_in(src: Path, dst: Path, at: int):
+    """Copies src into dst at offset at, skipping blocks of zeros (dst stays sparse)."""
+    with open(src, "rb") as s, open(dst, "r+b") as d:
+        pos = 0
+        while b := s.read(MIB):
+            if b.count(0) != len(b):
+                d.seek(at + pos)
+                d.write(b)
+            pos += len(b)
+
+
+def make_ntfs(p: Path, n: int, work: Path, files: dict):
+    """A real NTFS (mkntfs) on partition n, holding files (name: bytes)."""
+    off, size = part_start(p, n)
+    vol = work / f"ntfs{n}.img"
+    sparse(vol, size)
+    run("mkntfs", "-q", "-F", "-Q", vol)
+    for name, data in files.items():
+        f = work / f"ntfs-file-{name}"
+        f.write_bytes(data)
+        run("ntfscp", "-f", vol, f, name)
+        f.unlink()
+    copy_in(vol, p, off)
+    vol.unlink()
+
+
+def make_windows(p: Path, work: Path):
     sparse(p, 40 * GIB)
     run(
         "sgdisk",
@@ -265,9 +277,13 @@ def make_windows(p: Path):
     )
     off, size = part_start(p, 1)
     run("mkfs.fat", "-F", "32", "--offset", off // 512, p, size // 1024)
-    for n in (3, 4):
-        off, size = part_start(p, n)
-        put(p, off, ntfs_boot_sector(size // 512))
+    boot = work / "efi-win"
+    (boot / "EFI" / "Microsoft" / "Boot").mkdir(parents=True, exist_ok=True)
+    (boot / "EFI" / "Microsoft" / "Boot" / "bootmgfw.efi").write_bytes(os.urandom(300000))
+    run("mcopy", "-s", "-i", f"{p}@@{off}", boot / "EFI", "::/")
+    # Windows' volume with about 64 MiB of files, and its recovery volume
+    make_ntfs(p, 3, work, {"pagefile.sys": os.urandom(48 * MIB), "notes.txt": b"the person's files\n" * 1000})
+    make_ntfs(p, 4, work, {"winre.wim": os.urandom(16 * MIB)})
 
 
 def make_stick(p: Path, binary: Path):
@@ -307,7 +323,7 @@ def build_disk(what: str, p: Path, work: Path):
     elif what == "linux":
         make_linux(p, work)
     elif what == "windows":
-        make_windows(p)
+        make_windows(p, work)
 
 
 def digest(p: Path) -> str:
@@ -663,12 +679,16 @@ def case(name, args, boot, work: Path, sb=None):
 # Each install case installs GlassineOS on the case's disk from a release
 # folder on the stick: a btrfs pool image made here with mkfs.btrfs and a
 # marker file (the base), Alpine's kernel as the kernel, a small initramfs
-# fixture, and the placeholder loader (placeholder.py) as the boot loader. The
-# backup is switched off (a whole-disk image of these 32-40 GiB disks is too
-# slow for the job; the backup's failure cases are tested on the host, in
-# core/tests/pc_execute.rs and pcwrite/tests). The host then checks the disk
-# and the firmware's variables, and starts the machine from its disk alone:
-# the firmware must start our entry, which starts the placeholder loader.
+# fixture, and the placeholder loader (placeholder.py) as the boot loader. Its
+# first step backs the disk up onto the stick; the host reads that image
+# (backup format 2, read_image below) and checks every range it holds against
+# the disk as it was, and that it stores about the disk's used bytes. The
+# host then checks the disk and the firmware's variables, and starts the
+# machine from its disk alone: the firmware must start our entry, which
+# starts the placeholder loader. The restore case then puts the backup back
+# (restore --pc) and the disk must be the disk as it was, byte for byte, and
+# the boot order the one it had. The backup's and the restore's failure
+# cases are tested on the host (core/tests/pc_execute.rs, pcwrite/tests).
 
 GLOBAL = "8be4df61-93ca-11d2-aa0d-00e098032b8c"
 ROOT_X86 = "4f68bce3-e8cd-4db1-96e7-fbcaf984b709"
@@ -677,13 +697,15 @@ ESP_TYPE = "c12a7328-f81f-11d2-ba4b-00a0c93ec93b"
 POOL_MARKER = b"GlassineOS test pool image made by tests/qemu/run.py"
 
 # name: (the disk, the choices, cut it while the base is written and resume,
-# back it up). The backup case runs the PC description with its sizes scaled
-# down (SMALL) on a 1 GiB disk, so that a whole-disk image stays quick.
+# the description's sizes scaled down (SMALL, for the 1 GiB disk), restore
+# the backup afterwards). Every case backs its disk up first, as the
+# installer does by default: the image holds only what is in use, so the
+# 32-40 GiB disks store about their used bytes.
 INSTALL_CASES = {
-    "install-blank": (("nvme", "blank32"), [], False, False),
-    "install-windows-kept": (("sata", "windows"), [], False, False),
-    "install-resume": (("virtio", "blank32"), [], True, False),
-    "install-backup": (("virtio", "data1g"), [], False, True),
+    "install-blank": (("nvme", "blank32"), [], False, False, False),
+    "install-windows-kept": (("sata", "windows"), [], False, False, True),
+    "install-resume": (("virtio", "blank32"), [], True, False, False),
+    "install-backup": (("virtio", "data1g"), [], False, True, False),
 }
 # The description's sizes (boot, system, userdata's least) and the scaled-down ones.
 FULL = (2 * GIB, 16 * GIB, 8 * GIB)
@@ -864,24 +886,95 @@ def make_release(d: Path, files: dict, small: bool) -> dict:
     return out
 
 
-def make_install_stick(p: Path, binary: Path, cw: Path, files: dict, choices: list, seed: bytes = None, backup: bool = False) -> dict:
-    sparse(p, 512 * MIB)
+def read_image(bdir: Path, file: str, disk: Path) -> dict:
+    """Reads a backup image (format 2: header, then D/Z records, then E)
+    from its parts, checking each data range's checksum and that it, and
+    each zero range, is what the disk held. Returns its counts."""
+    parts = [bdir / (file + ".gz")]
+    while (bdir / f"{file}.gz.{len(parts)}").exists():
+        parts.append(bdir / f"{file}.gz.{len(parts)}")
+    raw = b"".join(p.read_bytes() for p in parts)
+    data = gzip.decompress(raw)
+    assert data[:6] == b"GLIMG\0" and struct.unpack_from("<H", data, 6)[0] == 2, "not a format-2 image"
+    size = struct.unpack_from("<Q", data, 8)[0]
+    out = {"disk": size, "data": 0, "zero": 0, "records": 0, "stored": len(raw), "mismatch": [], "sha256": hashlib.sha256(data).hexdigest()}
+    at, nxt = 20, 0
+    with open(disk, "rb") as d:
+        while True:
+            tag, off, length = struct.unpack_from("<cQQ", data, at)
+            at += 17
+            if tag == b"E":
+                out["end"] = (off, length)
+                break
+            assert off >= nxt, f"a record out of order at {off}"
+            nxt = off + length
+            out["records"] += 1
+            if tag == b"D":
+                b = data[at : at + length]
+                assert hashlib.sha256(b).digest() == data[at + length : at + length + 32], f"the range at {off}"
+                at += length + 32
+                out["data"] += length
+                d.seek(off)
+                if d.read(length) != b:
+                    out["mismatch"].append(off)
+            else:
+                out["zero"] += length
+                if not zero_range(disk, off, length):
+                    out["mismatch"].append(off)
+    assert at == len(data), "bytes after the end record"
+    return out
+
+
+def zero_range(p: Path, off: int, length: int) -> bool:
+    """Whether a range of a sparse file reads as zeros: only its data regions are read."""
+    end = off + length
+    with open(p, "rb") as f:
+        pos = off
+        while pos < end:
+            try:
+                start = os.lseek(f.fileno(), pos, os.SEEK_DATA)
+            except OSError:
+                return True
+            if start >= end:
+                return True
+            stop = min(os.lseek(f.fileno(), start, os.SEEK_HOLE), end)
+            f.seek(start)
+            left = stop - start
+            while left:
+                b = f.read(min(left, 8 * MIB))
+                if b.count(0) != len(b):
+                    return False
+                left -= len(b)
+            pos = stop
+    return True
+
+
+def used_bytes(facts: dict, size: int) -> int:
+    """The bytes the file systems of the disk of this size say they use (inspect's facts)."""
+    for d in (facts.get("storage") or {}).get("disks", []):
+        if d.get("size") == size and not d.get("removable"):
+            return sum(((p.get("fs") or {}).get("used") or 0) for p in d.get("partitions", []))
+    return 0
+
+
+def make_install_stick(p: Path, binary: Path, cw: Path, files: dict, choices: list, seed: bytes = None, small: bool = False) -> dict:
+    sparse(p, 1 * GIB)
     run("sgdisk", "-n1:1MiB:0", "-t1:0700", "-c1:GLINSTALL", p)
     off, size = part_start(p, 1)
     run("mkfs.fat", "-F", "32", "-n", "GLINSTALL", "--offset", off // 512, p, size // 1024)
     rel = cw / "release"
-    arts = make_release(rel, files, backup)
+    arts = make_release(rel, files, small)
     img = f"{p}@@{off}"
     run("mcopy", "-i", img, binary, "::/glassine-install")
     desc = cw / "uefi-pc.toml"
-    if backup:
+    if small:
         small_description(desc)
     else:
         shutil.copyfile(HERE.parent.parent / "devices" / "uefi-pc.toml", desc)
     run("mcopy", "-i", img, desc, "::/uefi-pc.toml")
     run("mcopy", "-s", "-i", img, rel, "::/release")
     args = cw / "install-args"
-    extra = ["--backup", "/media/stick/backup"] if backup else ["--choice", "backup=off"]
+    extra = ["--backup", "/media/stick/backup"]
     args.write_text("".join(f"{a}\n" for a in extra) + "".join(f"--choice\n{c}\n" for c in choices))
     run("mcopy", "-i", img, args, "::/install-args")
     if seed:
@@ -933,8 +1026,8 @@ def run_guest(args, boot, vars_fd, disks, stick, mode, log, kill_at=None):
 
 def install_case(name, args, boot, files, work: Path):
     print(f"case {name}:", flush=True)
-    (bus, what), choices, cut, backup = INSTALL_CASES[name]
-    sizes = SMALL if backup else FULL
+    (bus, what), choices, cut, small, restore = INSTALL_CASES[name]
+    sizes = SMALL if small else FULL
     cw = work / name
     if cw.exists():
         shutil.rmtree(cw)
@@ -947,9 +1040,12 @@ def install_case(name, args, boot, files, work: Path):
     if what == "windows":
         esp = before[0]
         seed = load_option("Windows Boot Manager", (1, esp[4], esp[5] - esp[4] + 1, esp[3]), "\\EFI\\Microsoft\\Boot\\bootmgfw.efi")
-    disk_sha = range_digest(disk, 0, disk.stat().st_size) if backup else None
+    disk_sha = range_digest(disk, 0, disk.stat().st_size)
+    original = cw / "disk-before.img"
+    if restore:
+        subprocess.run(["cp", "--sparse=always", str(disk), str(original)], check=True)
     stick = cw / "stick.img"
-    arts = make_install_stick(stick, args.binary, cw, files, choices, seed, backup)
+    arts = make_install_stick(stick, args.binary, cw, files, choices, seed, small)
     vars_fd = cw / "OVMF_VARS.fd"
     shutil.copyfile(args.ovmf_vars, vars_fd)
     disks = [(bus, disk)]
@@ -977,24 +1073,40 @@ def install_case(name, args, boot, files, work: Path):
     rec_file = cw / "record.json"
     subprocess.run(["mcopy", "-n", "-i", f"{stick}@@{1 * MIB}", "::/rec/record.json", rec_file], check=False)
     record = json.loads(rec_file.read_text()) if rec_file.exists() else {}
-    if backup:
-        # The backup: the whole disk as it was, its manifest, both before the table changed.
-        bdir = cw / "backup"
-        bdir.mkdir()
-        subprocess.run(["mcopy", "-n", "-s", "-i", f"{stick}@@{1 * MIB}", "::/backup", str(cw)], check=False)
-        man = json.loads((bdir / "manifest.json").read_text()) if (bdir / "manifest.json").exists() else {"disks": [{}]}
-        gz = bdir / (str(man["disks"][0].get("file", "disk?.img")) + ".gz")
-        if check(len(man["disks"]) == 1 and gz.exists(), f"the backup holds the disk's image and its manifest: {sorted(p.name for p in bdir.iterdir())}"):
-            h = hashlib.sha256()
-            with gzip.open(gz, "rb") as f:
-                while b := f.read(8 * MIB):
-                    h.update(b)
-            check(h.hexdigest() == disk_sha, "the image is the disk as it was, byte for byte")
-            m = (bdir / "manifest.json").read_bytes()
-            check((record.get("backup") or {}).get("manifest_sha256") == hashlib.sha256(m).hexdigest(), "the record rests on that backup")
-            check(json.loads(m)["disks"][0]["sha256"] == disk_sha, "its manifest names the disk's sha256")
-        steps = [e["step"] for e in record.get("journal", []) if (e.get("outcome") or {}).get("result") == "done"]
-        check(steps[:2] == ["back-up", "create-partitions"], f"the backup was done before the table was written: {steps}")
+    # The backup: the disk as it was, only what is in use, its manifest last.
+    bdir = cw / "backup"
+    bdir.mkdir()
+    subprocess.run(["mcopy", "-n", "-s", "-i", f"{stick}@@{1 * MIB}", "::/backup", str(cw)], check=False)
+    man = json.loads((bdir / "manifest.json").read_text()) if (bdir / "manifest.json").exists() else {"disks": [{}]}
+    file = str(man["disks"][0].get("file", "disk?.img"))
+    if check(len(man["disks"]) == 1 and (bdir / (file + ".gz")).exists(), f"the backup holds the disk's image and its manifest: {sorted(p.name for p in bdir.iterdir())}"):
+        m = (bdir / "manifest.json").read_bytes()
+        check(json.loads(m).get("backup_format") == 2, "backup format 2")
+        check((record.get("backup") or {}).get("manifest_sha256") == hashlib.sha256(m).hexdigest(), "the record rests on that backup")
+        ref = original if restore else None
+        if ref is None:
+            # the disk as it was is gone (installed over); its bytes outside
+            # GlassineOS's partitions are unchanged, checked below by the image
+            ref = disk
+        im = read_image(bdir, file, ref)
+        check(json.loads(m)["disks"][0]["sha256"] == im["sha256"], "its manifest names the stored stream's sha256")
+        check(im["end"] == (im["data"], im["records"]), f"the image's end record matches what it holds: {im['end']}")
+        used = used_bytes(rec["facts-before"][1], im["disk"]) if "facts-before" in rec and rec["facts-before"][1] else 0
+        print(f"  @@SIZES {name}: disk {im['disk']} bytes, file systems use {used}, image holds {im['data']} bytes of data "
+              f"+ {im['zero']} of zeros in {im['records']} records, stored {im['stored']} bytes compressed", flush=True)
+        check(im["data"] <= used + 64 * MIB, f"the image stores about the used bytes ({im['data']} for {used} used)")
+        if restore:
+            check(not im["mismatch"], f"every range of the image is the disk as it was: {im['mismatch'][:5]}")
+        else:
+            # installed over: only GlassineOS's partitions changed since
+            t = gpt(disk)
+            ours = [(e[4] * 512, (e[5] + 1) * 512) for e in t if e[6].startswith("glassine-")]
+            outside = [o for o in im["mismatch"] if not any(a - 64 * MIB <= o < b for a, b in ours) and o >= 1 * MIB and o < im["disk"] - 1 * MIB]
+            check(not outside, f"the image's ranges outside GlassineOS's partitions and tables are the disk's: {outside[:5]}")
+        if what == "data1g":
+            check(im["data"] >= 8 * MIB, "the 8 MiB of data outside any partition are in the image")
+    steps = [e["step"] for e in record.get("journal", []) if (e.get("outcome") or {}).get("result") == "done"]
+    check(steps[:2] == ["back-up", "create-partitions"], f"the backup was done before the table was written: {steps}")
     if cut:
         interrupted = [e for e in record.get("journal", []) if (e.get("outcome") or {}).get("result") == "interrupted"]
         check(any(e["step"] == "write-base" for e in interrupted), f"the record holds write-base as cut, run again: {[e['step'] for e in interrupted]}")
@@ -1094,6 +1206,20 @@ def install_case(name, args, boot, files, work: Path):
     check(any(want in x for x in said), f"the firmware starts our entry first: {said}")
     check(any(placeholder.MARKER in x for x in lines), "and it starts the placeholder loader (its serial marker)")
 
+    if restore:
+        # Back to how it was: restore --pc from the stick's backup.
+        lines = run_guest(args, boot, vars_fd, disks, stick, "restore", cw / "serial-restore.log")
+        rr = records(lines)
+        code, text = rr.get("log-restore", (None, ""))
+        check(code == 0, f"restore finished: exit {code}\n{(text or '')[-3000:]}")
+        print("  " + "\n  ".join(x for x in (text or "").splitlines() if x.startswith(("restored", "backup", "  holds"))), flush=True)
+        check(range_digest(disk, 0, disk.stat().st_size) == disk_sha, "the restored disk is the disk as it was, byte for byte")
+        check(gpt(disk) == before, "with its partition table")
+        restored = boot_vars(lines, "after")
+        check(order(restored) == o1, f"the boot order is the one it had: {o1} -> {order(restored)}")
+        for k, v in first.items():
+            check(restored.get(k) == v, f"{k} as it was")
+
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -1123,7 +1249,7 @@ def main():
                 break
         else:
             sys.exit("no OVMF Secure Boot build found: pass --ovmf-secboot-code and --ovmf-secboot-vars")
-    tools = ["qemu-system-x86_64", "sgdisk", "mkfs.ext4", "mkfs.fat", "mcopy", "unsquashfs"]
+    tools = ["qemu-system-x86_64", "sgdisk", "mkfs.ext4", "mkfs.fat", "mcopy", "unsquashfs", "mkntfs", "ntfscp"]
     if INSTALL_CASES.keys() & set(args.cases):
         tools += ["mkfs.btrfs", "fsck.fat"]
     if secure:

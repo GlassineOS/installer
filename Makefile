@@ -98,4 +98,4 @@ docker-web-check: web-image docker-web-pkg
 		-e WEB_NO_SANDBOX=1 -v "$$PWD":/w -w /w $(WEB_IMAGE) make web-check
 
 docker-%: docker-image
-	docker run --rm -u "$$(id -u):$$(id -g)" -e CARGO_HOME=/w/.cargo-home -v "$$PWD":/w -w /w $(IMAGE) make $*
+	docker run --rm -u "$$(id -u):$$(id -g)" -e CARGO_HOME=/w/.cargo-home -e GLASSINE_FS_FIXTURES=require -v "$$PWD":/w -w /w $(IMAGE) make $*

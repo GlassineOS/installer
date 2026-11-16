@@ -20,6 +20,7 @@ mod emergency_read;
 mod emergency_try;
 mod host_setup;
 mod install;
+mod restore;
 mod supplied_check;
 
 include!(concat!(env!("OUT_DIR"), "/embedded.rs"));
@@ -42,6 +43,7 @@ pub(crate) const USAGE: &str = "usage:
   glassine-install install --description FILE --release-dir DIR [--backup DIR] [--developer] [--record PATH]
                            [--facts FACTS.json | --pc [--root DIR]] [--choice K=V]... [--hardware H=yes|no]... [--job JOB]
   glassine-install resume --record PATH [--backup DIR]
+  glassine-install restore --pc --backup DIR [--disk N] [--root DIR]
   glassine-install schema
   glassine-install lock-unpinned LOCKFILE
 
@@ -126,10 +128,23 @@ install --pc installs on the PC it runs on (Linux only), from a live read of it 
 tree standing for one): it writes only the plan's target disk, opened exclusively and refused
 while a file system on it is mounted or swap is on it, and the firmware's boot entries. Its first
 step backs up every disk of the plan into --backup DIR (each disk as disk<N>.img.gz, read back
-and compared, then manifest.json), which with the record must be on another disk; with
+and compared with the disk read again, then manifest.json), which with the record must be on
+another disk. The image holds the partition table, the space outside the partitions, every
+partition it can't read whole, and of ext4, btrfs, NTFS and FAT only the blocks in use (by each
+file system's own metadata; one that fails a check, or wasn't shut down cleanly, is kept whole);
+blocks of zeros are recorded as zeros. Past 2 GiB, an image goes on in disk<N>.img.gz.1, .2, ...
+(FAT32 holds no file of 4 GiB). With
 --choice backup=off it keeps only the firmware's boot entries beside the record. Then it writes
 the partition table, the system partition, the boot partition and one boot entry, first in the
 boot order, each read back past the cache. resume goes on from the record after a cut.
+
+restore --pc puts such a backup back (Linux only): onto the disk it was made of, or --disk N of
+the same size and sector size, refused while that disk is in use or holds the backup. After
+\"restore\" is typed it checks the whole stored copy against the manifest, then writes each
+range only where the disk differs (the first MiB, the primary partition table, last), reads it
+back, and puts back the firmware's boot entries and boot order the backup holds (entries added
+since stay, outside the boot order). The file systems come back as they were; their free space
+is not kept and holds whatever the disk held. A cut restore is run again with the same command.
 
 host-setup sets this computer up once to reach the devices' USB modes, from the descriptions'
 modes. On Linux, as root (sudo glassine-install host-setup), it writes the udev rules file
@@ -156,6 +171,7 @@ fn main() -> ExitCode {
         Some("host-setup") => host_setup_cmd(&args[1..]),
         Some("install") => install::install_cmd(&args[1..]),
         Some("resume") => install::resume_cmd(&args[1..]),
+        Some("restore") => restore::restore_cmd(&args[1..]),
         Some("schema") => {
             println!("{}", serde_json::to_string_pretty(&format1::json_schema()).unwrap());
             Ok(ExitCode::SUCCESS)

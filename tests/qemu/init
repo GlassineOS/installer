@@ -12,6 +12,8 @@
 # glassine.mode=install (and resume) mounts the stick read-write and installs
 # on the PC from the release folder the stick holds (the record goes on the
 # stick too), printing the boot variables before and after.
+# glassine.mode=restore puts the stick's backup back (restore --pc) and
+# prints the boot variables after.
 
 /bin/busybox mkdir -p /usr/bin /usr/sbin /proc /sys /dev /tmp /media/stick
 /bin/busybox --install -s
@@ -48,7 +50,7 @@ for d in $(disks); do
 	case "$(readlink "/sys/block/$d")" in *"/usb"*) stick=$d ;; esac
 done
 part=$(ls -d /sys/block/"$stick"/"$stick"* 2>/dev/null | head -n 1)
-case "$mode" in install | resume) how=rw ;; *) how=ro ;; esac
+case "$mode" in install | resume | restore) how=rw ;; *) how=ro ;; esac
 mount -t vfat -o "$how" "/dev/${part##*/}" /media/stick || echo "@@FAIL the stick didn't mount"
 B=/media/stick/glassine-install
 R=/media/stick/release.json
@@ -100,6 +102,10 @@ if [ "$mode" = install ] || [ "$mode" = resume ]; then
 	vars after
 	emit facts-after "$B" inspect --pc --json
 	sync
+elif [ "$mode" = restore ]; then
+	log restore sh -c "echo restore | $B restore --pc --backup $S/backup 2>&1"
+	sync
+	vars after
 elif [ "$mode" = control ]; then
 	target=
 	for d in $(disks); do [ "$d" != "$stick" ] && target=$d && break; done
