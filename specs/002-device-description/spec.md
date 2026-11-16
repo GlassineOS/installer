@@ -327,9 +327,8 @@ pinned to,
   kernel sets (kernel, initramfs and command line each), two recovery images, and the boot
   splash and its one-time override at their largest (32 MiB each, boot 011 FR-004), all
   twice over, plus the file system's own room (its tables, and the loader at its two
-  paths), rounded up to a whole MiB. A `kernel` that starts as a kernel set may also state `cmdline`, the
-  command line it starts with before the installation adds its identities, and
-  `release`, the kernel's release; a PC's `base` is of kind `btrfs-pool-image`, the
+  paths), rounded up to a whole MiB. A `kernel` that starts as a kernel set may also state `cmdline`
+  (which must then be its board's `CMDLINE`, below) and `release`, the kernel's release; a PC's `base` is of kind `btrfs-pool-image`, the
   system partition's whole file system as one image. For a PC's boot partition
   (boot's [boot-partition.md](https://github.com/GlassineOS/boot/blob/main/docs/boot-partition.md))
   the manifest also names, by role, the parts of the kernel set's initramfs: the CPU
@@ -338,8 +337,12 @@ pinned to,
   the board archive) and `boot-modules` (the kernel's boot-modules archive), after the
   step's `initramfs` (which may state `identity`, recorded in the set's record). An
   `initramfs` of kind `kernel-set-initrd` is the whole initramfs as the release
-  assembled it, and the release then names none of the parts; otherwise `board` is
-  required. `recovery` (with `cmdline` and `release`, and `recovery-initrd` where its
+  assembled it, and the release then names no microcode and no boot modules. `board` is
+  required either way: the kernel set's base command line is its `CMDLINE` (one line,
+  `CMDLINE="<text>"` or `CMDLINE=<word>`, no backslash, `$`, backtick or further quote),
+  and nothing else; a kernel `cmdline` that differs from it, or a `CMDLINE` in another
+  form, refuses the release before anything is written. `recovery` (with `cmdline`, its
+  own base command line, and `release`, and `recovery-initrd`, written whole, where its
   initramfs isn't built in) is the recovery image and `splash` the default splash; both
   are written when the release has them, a splash only when it checks as the loader
   checks it. The installer lists every role it will write for the person to confirm.
