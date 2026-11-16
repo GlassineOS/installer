@@ -3,7 +3,8 @@
 # installer started from removable media on it. A particular PC's own
 # description refines this one. Owned by GlassineOS/installer.
 #
-# Nothing here has been tried on real hardware yet.
+# Nothing here has been run on a real PC yet; the install is proven on
+# QEMU with OVMF only (tests/qemu).
 
 format = 4
 id = "uefi-pc"
@@ -15,13 +16,13 @@ generic = true
 key = "firmware.kind"
 equals = "uefi"
 required = true
-untried = "the PC backend isn't built yet"
+untried = "not run on a real PC yet"
 
 [[identity]]
 key = "cpu.arch"
 equals = "x86-64"
 required = true
-untried = "the PC backend isn't built yet"
+untried = "not run on a real PC yet"
 
 # ---- install states --------------------------------------------------------
 
@@ -56,7 +57,7 @@ mode = "local"
 id = "local"
 kind = "local"
 can = ["identify", "read", "write"]
-untried = "the PC backend isn't built yet"
+untried = "not run on a real PC yet"
 
 # ---- what it may write ------------------------------------------------------
 
@@ -123,13 +124,21 @@ role = "kernel"
 size = "unknown"
 
 [[artifacts]]
+role = "initramfs"
+size = "unknown"
+
+[[artifacts]]
+role = "boot-loader"
+size = "unknown"
+
+[[artifacts]]
 role = "partition-layout"
 size = "unknown"
 
 [[capabilities]]
 id = "start-kernel"
 status = "have"
-untried = "the PC backend isn't built yet"
+untried = "not run on a real PC yet"
 
 [[capabilities]]
 id = "recovery"
@@ -139,7 +148,7 @@ untried = "the GlassineOS recovery isn't built yet"
 [[capabilities]]
 id = "choose-at-start"
 status = "have"
-untried = "the PC backend isn't built yet"
+untried = "not run on a real PC yet"
 
 [[choices]]
 id = "target-disk"
@@ -169,7 +178,7 @@ escape.failure = { leaves = "previous-system-starts", way_out = { step = "back-u
 escape.interruption = { leaves = "previous-system-starts", way_out = { step = "back-up" } }
 point_of_no_return = false
 safe_stop = true
-untried = "the PC backend isn't built yet"
+untried = "not run on a real PC yet"
 
 [[steps]]
 id = "remove-system"
@@ -186,7 +195,7 @@ escape.failure = { leaves = "installer-can-undo", way_out = { step = "back-up" }
 escape.interruption = { leaves = "installer-can-finish", way_out = { step = "create-partitions" } }
 point_of_no_return = true
 safe_stop = false
-untried = "the PC backend isn't built yet"
+untried = "not run on a real PC yet"
 
 [[steps]]
 id = "create-partitions"
@@ -223,7 +232,7 @@ escape.failure = { leaves = "previous-system-starts", way_out = { step = "back-u
 escape.interruption = { leaves = "installer-can-finish", way_out = { step = "write-base" } }
 point_of_no_return = false
 safe_stop = true
-untried = "the PC backend isn't built yet"
+untried = "not run on a real PC yet"
 
 [[steps]]
 id = "write-base"
@@ -238,7 +247,7 @@ escape.failure = { leaves = "previous-system-starts", way_out = { step = "write-
 escape.interruption = { leaves = "previous-system-starts", way_out = { step = "write-boot" } }
 point_of_no_return = false
 safe_stop = true
-untried = "the PC backend isn't built yet"
+untried = "not run on a real PC yet"
 
 [[steps]]
 id = "write-boot"
@@ -246,14 +255,14 @@ job = "install"
 kind = "write-boot-files"
 mode = "local"
 after = ["write-base"]
-params = { artifact = "kernel", partition = "glassine-boot" }
+params = { artifact = "kernel", initramfs = "initramfs", loader = "boot-loader", partition = "glassine-boot" }
 writes = ["glassine-boot"]
 done = [{ key = "installer.step.write-boot", present = true, mode = "installer" }]
 escape.failure = { leaves = "previous-system-starts", way_out = { step = "write-boot" } }
 escape.interruption = { leaves = "previous-system-starts", way_out = { step = "add-boot-entry" } }
 point_of_no_return = false
 safe_stop = true
-untried = "the PC backend isn't built yet"
+untried = "not run on a real PC yet"
 
 [[steps]]
 id = "add-boot-entry"
@@ -269,7 +278,7 @@ escape.failure = { leaves = "previous-system-starts", way_out = { step = "add-bo
 escape.interruption = { leaves = "glassine-starts", way_out = { step = "add-boot-entry" } }
 point_of_no_return = false
 safe_stop = true
-untried = "the PC backend isn't built yet"
+untried = "not run on a real PC yet"
 
 [texts]
 name = "PC"

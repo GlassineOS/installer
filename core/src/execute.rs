@@ -1471,7 +1471,7 @@ impl<E: InstallEdge, S: ArtifactSource> Exec<'_, E, S> {
     }
 }
 
-fn escape_in(d: &Description, case: &EscapeCase) -> Escape {
+pub(crate) fn escape_in(d: &Description, case: &EscapeCase) -> Escape {
     let (way_out, text) = match (&case.way_out.step, &case.way_out.transition) {
         (Some(s), _) => (format!("step {s}"), d.texts.steps.get(s).cloned()),
         (_, Some(t)) => (
@@ -1491,7 +1491,7 @@ fn escape_in(d: &Description, case: &EscapeCase) -> Escape {
     }
 }
 
-fn fail_in(d: &Description, st: &Step, why: impl Into<String>, may_have_changed: bool, interrupted: bool) -> Stopped {
+pub(crate) fn fail_in(d: &Description, st: &Step, why: impl Into<String>, may_have_changed: bool, interrupted: bool) -> Stopped {
     let case = if interrupted { &st.escape.interruption } else { &st.escape.failure };
     Stopped {
         step: Some(st.id.clone()),
