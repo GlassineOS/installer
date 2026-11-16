@@ -890,10 +890,10 @@ def zero_range(p: Path, off: int, length: int) -> bool:
     return True
 
 
-def used_bytes(facts: dict, index: int = 0) -> int:
-    """The bytes the file systems of a disk say they use (inspect's facts)."""
+def used_bytes(facts: dict, size: int) -> int:
+    """The bytes the file systems of the disk of this size say they use (inspect's facts)."""
     for d in (facts.get("storage") or {}).get("disks", []):
-        if d.get("index") == index:
+        if d.get("size") == size and not d.get("removable"):
             return sum(((p.get("fs") or {}).get("used") or 0) for p in d.get("partitions", []))
     return 0
 
@@ -1032,7 +1032,7 @@ def install_case(name, args, boot, files, work: Path):
         im = read_image(bdir, file, ref)
         check(json.loads(m)["disks"][0]["sha256"] == im["sha256"], "its manifest names the stored stream's sha256")
         check(im["end"] == (im["data"], im["records"]), f"the image's end record matches what it holds: {im['end']}")
-        used = used_bytes(rec["facts-before"][1]) if "facts-before" in rec and rec["facts-before"][1] else 0
+        used = used_bytes(rec["facts-before"][1], im["disk"]) if "facts-before" in rec and rec["facts-before"][1] else 0
         print(f"  @@SIZES {name}: disk {im['disk']} bytes, file systems use {used}, image holds {im['data']} bytes of data "
               f"+ {im['zero']} of zeros in {im['records']} records, stored {im['stored']} bytes compressed", flush=True)
         check(im["data"] <= used + 64 * MIB, f"the image stores about the used bytes ({im['data']} for {used} used)")
