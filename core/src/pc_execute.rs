@@ -1180,13 +1180,20 @@ impl<M: Machine, E: PcEdge, S: ArtifactSource> Exec<'_, M, E, S> {
         let man = self.artifacts.manifest.clone();
         let entry = |r: &str| man.artifacts.get(r).cloned().unwrap_or_default();
         let (krel, irel) = (entry(&kernel), entry(&initramfs));
+        // The base command line: board.conf's CMDLINE, and only that.
+        let board_role = roles.board.clone().unwrap_or_default();
+        let board = read_small(self.artifacts, &board_role, pc_boot::BOARD_MAX).await?;
+        let base = pc_boot::board_cmdline(&board).map_err(|e| OpError::before(format!("the release's {board_role}: {e}")))?;
+        if let Some(c) = krel.cmdline.as_deref().filter(|c| *c != base) {
+            return Err(OpError::before(format!(
+                "the release's {kernel} gives the command line {c:?}, its {board_role}'s CMDLINE is {base:?}: a release names one command line, not written"
+            )));
+        }
         // The kernel set's initrd: as the release hands it over, or assembled.
         let (initrd, content) = if roles.assembled {
             let i = art(self.artifacts, &initramfs)?;
             ((i.sha256, i.size), Content::Artifact(initramfs.clone()))
         } else {
-            let board_role = roles.board.clone().unwrap_or_default();
-            let board = read_small(self.artifacts, &board_role, pc_boot::BOARD_MAX).await?;
             let mut sizes = BTreeMap::new();
             for r in roles.all() {
                 sizes.insert(r.clone(), art(self.artifacts, &r)?.size);
@@ -1208,11 +1215,12 @@ impl<M: Machine, E: PcEdge, S: ArtifactSource> Exec<'_, M, E, S> {
         let set = KernelSet::new(
             (&k.sha256, k.size),
             Some((&initrd.0, initrd.1)),
-            krel.cmdline.as_deref().unwrap_or(""),
+            &base,
             system,
             userdata,
             krel.release.as_deref().unwrap_or(""),
-            irel.identity.as_deref().unwrap_or(""),
+            // the initramfs's identity is known only when the installer assembles
+            if roles.assembled { "" } else { irel.identity.as_deref().unwrap_or("") },
         )
         .map_err(OpError::before)?;
         let recovery = match &roles.recovery {
@@ -1231,7 +1239,7 @@ impl<M: Machine, E: PcEdge, S: ArtifactSource> Exec<'_, M, E, S> {
                     system,
                     userdata,
                     rrel.release.as_deref().unwrap_or(""),
-                    roles.recovery_initrd.as_deref().map(entry).and_then(|e| e.identity).as_deref().unwrap_or(""),
+                    "",
                 )
                 .map_err(|e| OpError::before(format!("the recovery image: {e}")))?;
                 Some((rset, r.clone(), roles.recovery_initrd.clone()))

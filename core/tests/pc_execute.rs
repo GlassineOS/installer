@@ -459,6 +459,7 @@ fn release() -> MemorySource {
         ("board", "board.conf", BOARD_CONF.to_vec(), "board-conf"),
         ("boot-modules", "boot-modules.cpio.gz", image(7777, 15), "cpio-gz"),
         ("recovery", "recovery.efi", image(300_001, 17), "efi-kernel"),
+        ("recovery-initrd", "recovery-initrd.img", image(4097, 19), "initramfs"),
         ("splash", "default.gspl", splash_file(), "glassine-splash"),
     ];
     let mut m = serde_json::Map::new();
@@ -476,7 +477,7 @@ fn release() -> MemorySource {
             e["release"] = serde_json::json!("6.18.63-0-lts");
             e["min_partition_bytes"] = serde_json::json!(20 * MIB);
         }
-        if role == "initramfs" {
+        if role == "initramfs" || role == "recovery-initrd" {
             e["identity"] = serde_json::json!("0123456789ab@00000000deadbeef");
         }
         if role == "recovery" {
@@ -673,15 +674,22 @@ fn installed(m: &Sim, c: &Case) -> Installed {
             system.2, userdata.2
         )
     );
-    // the recovery image, in the form of a kernel set without an initrd
+    // the recovery image, in the form of a kernel set: its initrd whole,
+    // nothing assembled, no initramfs identity
     let rid = lr["recovery"].clone();
     let rdir = format!("glassine/recovery/{rid}");
     assert_eq!(fat::read::file(&vol, &format!("{rdir}/vmlinuz")).as_ref(), Some(&c.src.files["recovery.efi"]));
-    assert!(fat::read::file(&vol, &format!("{rdir}/initrd")).is_none());
+    let ri = &c.src.files["recovery-initrd.img"];
+    assert_eq!(fat::read::file(&vol, &format!("{rdir}/initrd")).as_ref(), Some(ri));
+    assert_eq!(
+        rid,
+        sha256_hex(format!("{}\n{}\nconsole=ttyS0 quiet\n", sha256_hex(&c.src.files["recovery.efi"]), sha256_hex(ri)).as_bytes())[..16]
+    );
     let rr = fat::read::file(&vol, &format!("{rdir}/set.rec")).unwrap();
     assert_eq!(lr["recovery_rec"], sha256_hex(&rr));
     let r = pc_boot::parse_record(&rr).unwrap();
-    assert_eq!((r["initrd_sha256"].as_str(), r["initrd_size"].as_str()), ("", ""));
+    assert_eq!(r["initrd_sha256"], sha256_hex(ri));
+    assert_eq!(r["initramfs"], "");
     assert!(r["cmdline"].starts_with("console=ttyS0 quiet glassine.system=PARTUUID=") && r["cmdline"].ends_with(&format!("glassine.img={rid}")));
     // the splash
     assert_eq!(fat::read::file(&vol, "glassine/splash/default.gspl"), Some(splash_file()));
@@ -870,16 +878,96 @@ fn a_cut_in_the_loader_records_second_slot_leaves_the_first_valid() {
     assert!(state(&m) == want);
 }
 
+/// An initrd the release hands over assembled is written byte for byte; the
+/// base command line still comes from the board's CMDLINE alone, and the
+/// set's record names no initramfs identity.
+#[test]
+fn an_assembled_initrd_is_written_whole_with_the_boards_command_line() {
+    let mut m = blank_machine();
+    let mut c = case(&mut m.clone(), &[]);
+    let mut j: serde_json::Value = serde_json::from_slice(&c.src.files["release.json"]).unwrap();
+    let a = j["artifacts"].as_object_mut().unwrap();
+    a["initramfs"]["kind"] = "kernel-set-initrd".into();
+    for r in ["microcode-amd", "microcode-intel", "boot-modules"] {
+        a.remove(r);
+    }
+    // the kernel's cmdline isn't needed: the board's CMDLINE is the base
+    a["kernel"].as_object_mut().unwrap().remove("cmdline");
+    let conf = b"CMDLINE=\"console=ttyS0 quiet\"\n";
+    a["board"]["sha256"] = sha256_hex(conf).into();
+    a["board"]["size"] = conf.len().into();
+    c.src.files.insert("board.conf".into(), conf.to_vec());
+    c.src.files.insert("release.json".into(), serde_json::to_vec(&j).unwrap());
+    let mut rec = record(&c);
+    let mut e = with_backup();
+    assert!(matches!(go(&c, &mut rec, &mut m, &mut e), Ok(Outcome::WaitingForAcceptance { .. })));
+    let mut d = m.disks[0].clone();
+    let t = table::read(&mut d, DISK, 512).unwrap();
+    let b = t.entries.iter().find(|e| e.name.as_deref() == Some("glassine-boot")).unwrap();
+    let vol = d.bytes(b.start, b.size);
+    let lr = pc_boot::read_slot(&fat::read::file(&vol, "glassine/loader.a").unwrap()).unwrap().1;
+    let id = &lr["default"];
+    let initramfs = &c.src.files["initramfs.img"];
+    assert_eq!(fat::read::file(&vol, &format!("glassine/sets/{id}/initrd")).as_ref(), Some(initramfs));
+    assert_eq!(
+        *id,
+        sha256_hex(format!("{}\n{}\nconsole=ttyS0 quiet\n", sha256_hex(&c.src.files["kernel.img"]), sha256_hex(initramfs)).as_bytes())[..16]
+    );
+    let k = pc_boot::parse_record(&fat::read::file(&vol, &format!("glassine/sets/{id}/set.rec")).unwrap()).unwrap();
+    assert!(k["cmdline"].starts_with("console=ttyS0 quiet glassine.system=PARTUUID="));
+    assert_eq!(k["initramfs"], "");
+}
+
 /// A release without the board's configuration (and no assembled initrd),
 /// or with a splash the loader would skip, stops the run before any write.
 #[test]
 fn a_release_that_cant_make_the_boot_partition_stops_before_any_write() {
-    for spoil in ["board", "splash"] {
+    let board_conf = |c: &mut Case, j: &mut serde_json::Value, conf: &[u8]| {
+        j["artifacts"]["board"]["sha256"] = sha256_hex(conf).into();
+        j["artifacts"]["board"]["size"] = conf.len().into();
+        c.src.files.insert("board.conf".into(), conf.to_vec());
+    };
+    for (spoil, why) in [
+        ("board", "no board"),
+        ("splash", "payload CRC"),
+        ("cmdline", "names one command line"),
+        ("cmdline-form", "isn't CMDLINE="),
+        ("cmdline-spaces", "single spaces"),
+        ("assembled-without-board", "no board"),
+        ("assembled-with-microcode", "also names microcode"),
+        ("recovery-clash", "are the same set"),
+    ] {
         let mut m = blank_machine();
         let mut c = case(&mut m.clone(), &[]);
         let mut j: serde_json::Value = serde_json::from_slice(&c.src.files["release.json"]).unwrap();
         if spoil == "board" {
             j["artifacts"].as_object_mut().unwrap().remove("board");
+        } else if spoil == "cmdline" {
+            j["artifacts"]["kernel"]["cmdline"] = "console=ttyS0 quiet".into();
+        } else if spoil == "cmdline-form" {
+            board_conf(&mut c, &mut j, b"CMDLINE='console=ttyS0'\n");
+            j["artifacts"]["kernel"].as_object_mut().unwrap().remove("cmdline");
+        } else if spoil == "cmdline-spaces" {
+            board_conf(&mut c, &mut j, b"CMDLINE=\"console=ttyS0  quiet\"\n");
+            j["artifacts"]["kernel"].as_object_mut().unwrap().remove("cmdline");
+        } else if spoil == "recovery-clash" {
+            // a recovery image with the kernel set's kernel, initrd and base
+            let a = j["artifacts"].as_object_mut().unwrap();
+            a["initramfs"]["kind"] = "kernel-set-initrd".into();
+            for r in ["microcode-amd", "microcode-intel", "boot-modules"] {
+                a.remove(r);
+            }
+            a.insert("recovery".into(), a["kernel"].clone());
+            a.insert("recovery-initrd".into(), a["initramfs"].clone());
+        } else if spoil.starts_with("assembled") {
+            let a = j["artifacts"].as_object_mut().unwrap();
+            a["initramfs"]["kind"] = "kernel-set-initrd".into();
+            a.remove("boot-modules");
+            if spoil == "assembled-without-board" {
+                a.remove("microcode-amd");
+                a.remove("microcode-intel");
+                a.remove("board");
+            }
         } else {
             let mut b = splash_file();
             b[70] ^= 1;
@@ -890,7 +978,7 @@ fn a_release_that_cant_make_the_boot_partition_stops_before_any_write() {
         let mut rec = record(&c);
         let mut e = with_backup();
         let s = go(&c, &mut rec, &mut m, &mut e).unwrap_err();
-        assert!(s.why.contains(if spoil == "board" { "no board" } else { "payload CRC" }), "{s}");
+        assert!(s.why.contains(why), "{spoil}: {s}");
         assert!(m.log.is_empty(), "{spoil}: nothing is written");
     }
 }
