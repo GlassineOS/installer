@@ -47,6 +47,10 @@ pub struct Role {
     /// For a kernel: its release (boot 004's `release`).
     #[serde(default)]
     pub release: Option<String>,
+    /// For an initramfs: its identity (`<commit12>@<id>`), which a PC's
+    /// kernel set records (informative).
+    #[serde(default)]
+    pub identity: Option<String>,
 }
 
 impl Release {
