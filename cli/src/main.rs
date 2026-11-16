@@ -40,7 +40,7 @@ pub(crate) const USAGE: &str = "usage:
   glassine-install supplied-check [--device ID] [--file ID] [--reported KEY=VALUE]... [--json] [--devices DIR] FILE
   glassine-install host-setup [--print]
   glassine-install install --description FILE --release-dir DIR [--backup DIR] [--developer] [--record PATH]
-                           [--facts FACTS.json] [--choice K=V]... [--hardware H=yes|no]... [--job JOB]
+                           [--facts FACTS.json | --pc [--root DIR]] [--choice K=V]... [--hardware H=yes|no]... [--job JOB]
   glassine-install resume --record PATH [--backup DIR]
   glassine-install schema
   glassine-install lock-unpinned LOCKFILE
@@ -121,6 +121,15 @@ already answers as the new one. The installer restarts the device itself where i
 bootloader from stock Android when adb is on PATH) and otherwise says what to press; a running adb
 server can hold the boot loader's interface (adb kill-server frees it). After the last restart the
 installer can't see GlassineOS yet: it says what to check.
+
+install --pc installs on the PC it runs on (Linux only), from a live read of it (--root DIR: a
+tree standing for one): it writes only the plan's target disk, opened exclusively and refused
+while a file system on it is mounted or swap is on it, and the firmware's boot entries. Its first
+step backs up every disk of the plan into --backup DIR (each disk as disk<N>.img.gz, read back
+and compared, then manifest.json), which with the record must be on another disk; with
+--choice backup=off it keeps only the firmware's boot entries beside the record. Then it writes
+the partition table, the system partition, the boot partition and one boot entry, first in the
+boot order, each read back past the cache. resume goes on from the record after a cut.
 
 host-setup sets this computer up once to reach the devices' USB modes, from the descriptions'
 modes. On Linux, as root (sudo glassine-install host-setup), it writes the udev rules file

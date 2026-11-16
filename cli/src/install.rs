@@ -13,7 +13,7 @@
 //! plan, description, artifact or backup: `--backup` on a resume must name
 //! the backup the record holds).
 
-use super::{Opts, USAGE, opts, plan_input, read};
+use super::{Opts, USAGE, opts, pc, plan_input, read};
 use flate2::read::GzDecoder;
 use glassine_installer::artifacts::{ArtifactSource, Artifacts};
 use glassine_installer::emergency_read::USER_AREA_NAME;
@@ -88,6 +88,11 @@ impl RecordStore for FileStore {
     }
     fn commit(&mut self) -> Result<(), String> {
         std::fs::rename(self.temp(), &self.0).map_err(|e| format!("{}: {e}", self.0.display()))?;
+        // Synced again by its new name: on FAT (a stick) the rename leaves the
+        // directory entry to the file's next write-back.
+        File::open(&self.0)
+            .and_then(|f| f.sync_all())
+            .map_err(|e| format!("{}: {e}", self.0.display()))?;
         if let Some(dir) = self.0.parent().filter(|d| !d.as_os_str().is_empty())
             && let Ok(d) = File::open(dir)
         {
@@ -426,8 +431,9 @@ fn execute(
 pub fn install_cmd(args: &[String]) -> Result<ExitCode, String> {
     let o: Opts = opts(
         args,
-        &["--developer"],
+        &["--developer", "--pc"],
         &[
+            "--root",
             "--description",
             "--release-dir",
             "--backup",
@@ -460,10 +466,13 @@ pub fn install_cmd(args: &[String]) -> Result<ExitCode, String> {
     let artifacts = pollster::block_on(Artifacts::open(DirSource(rel.clone()))).map_err(|e| e.to_string())?;
     let mut input = plan_input(&o)?;
     input.release = Some(Release::parse(&read(&rel.join(glassine_installer::artifacts::MANIFEST))?)?);
-    let facts: Snapshot = match o.one("--facts") {
-        Some(f) => Snapshot::parse(&read(Path::new(f))?).map_err(|e| format!("{f}: {e}"))?,
+    let pc = super::pc_root(&o);
+    let facts: Snapshot = match (o.one("--facts"), &pc) {
+        (Some(_), Some(_)) => return Err("install --pc reads the PC it runs on; it takes no --facts".into()),
+        (Some(f), None) => Snapshot::parse(&read(Path::new(f))?).map_err(|e| format!("{f}: {e}"))?,
+        (None, Some(root)) => super::live_pc(root)?,
         // restarted afterwards: the executor needs a fresh start of the boot loader
-        None => super::live(&[&d], true)?.snapshot,
+        (None, None) => super::live(&[&d], true)?.snapshot,
     };
     let refs = [&d];
     let rec = recognize::recognize(&refs, &facts);
@@ -478,18 +487,21 @@ pub fn install_cmd(args: &[String]) -> Result<ExitCode, String> {
         }
     }
     let plan_json = serde_json::to_string_pretty(&p).map_err(|e| e.to_string())?;
+    let backup = o.one("--backup").map(PathBuf::from);
+    if let Some(root) = &pc {
+        pc_places(root, &plan_json, &record_path, backup.as_deref())?;
+    }
     // The artifacts the plan's steps use, as the release states them.
     let mut roles: Vec<String> = vec![];
     for s in &p.steps {
-        if let Some(r) = d
-            .steps
-            .iter()
-            .find(|x| x.id == s.id)
-            .and_then(|x| x.params.get("artifact"))
-            .and_then(|v| v.as_str())
-            && !roles.iter().any(|x| x == r)
-        {
-            roles.push(r.to_string());
+        let base = s.id.split('.').next().unwrap_or(&s.id);
+        let Some(st) = d.steps.iter().find(|x| x.id == base) else { continue };
+        for k in ["artifact", "initramfs", "loader"] {
+            if let Some(r) = st.params.get(k).and_then(|v| v.as_str())
+                && !roles.iter().any(|x| x == r)
+            {
+                roles.push(r.to_string());
+            }
         }
     }
     let arts = roles
@@ -506,8 +518,12 @@ pub fn install_cmd(args: &[String]) -> Result<ExitCode, String> {
         println!("not confirmed: nothing was done");
         return Ok(ExitCode::from(1));
     }
-    let backup = o.one("--backup").map(PathBuf::from);
-    let b = backup.as_deref().map(verified_backup).transpose()?;
+    // On a PC the backup is made by the run's first step, into --backup.
+    let b = if pc.is_some() {
+        None
+    } else {
+        backup.as_deref().map(verified_backup).transpose()?
+    };
     let rec = Record::new(
         env!("CARGO_PKG_VERSION"),
         &d.id,
@@ -526,9 +542,111 @@ pub fn install_cmd(args: &[String]) -> Result<ExitCode, String> {
         "release_dir": rel,
         "backup": backup,
         "developer": input.developer,
+        "pc_root": pc,
     });
-    std::fs::write(inputs_path(&record_path), serde_json::to_string_pretty(&inputs).unwrap() + "\n").map_err(|e| e.to_string())?;
-    execute(&d, sha, input.developer, rec, &rel, backup, &record_path)
+    // Written whole and synced, like the record: a resume after a power cut needs it.
+    let mut whole = FileStore(inputs_path(&record_path));
+    whole.write_temp((serde_json::to_string_pretty(&inputs).unwrap() + "\n").as_bytes())?;
+    whole.commit()?;
+    match pc {
+        Some(root) => execute_pc(&d, sha, input.developer, rec, &rel, backup, &record_path, &root),
+        None => execute(&d, sha, input.developer, rec, &rel, backup, &record_path),
+    }
+}
+
+/// The disk a PC plan writes.
+fn pc_target(plan_json: &str) -> Result<u32, String> {
+    serde_json::from_str::<serde_json::Value>(plan_json)
+        .ok()
+        .and_then(|v| v.pointer("/space/disk/disk").and_then(|d| d.as_u64()))
+        .map(|d| d as u32)
+        .ok_or_else(|| "the plan names no target disk".to_string())
+}
+
+/// The record and the backup go on a disk the plan doesn't write, and a
+/// plan that backs up has a place for its backup.
+fn pc_places(root: &Path, plan_json: &str, record: &Path, backup: Option<&Path>) -> Result<(), String> {
+    let target = pc_target(plan_json)?;
+    let backs_up = serde_json::from_str::<serde_json::Value>(plan_json)
+        .ok()
+        .and_then(|v| v.pointer("/backup/choice").and_then(|c| c.as_str()).map(|c| c != "off"))
+        .unwrap_or(true);
+    if backs_up && backup.is_none() {
+        return Err("the plan backs up every disk it writes: name the folder with --backup DIR (on another disk), or choose backup=off".into());
+    }
+    let places = [Some(("the record", record)), backup.map(|b| ("the backup", b))];
+    for (what, p) in places.into_iter().flatten() {
+        let dir = if p.is_dir() {
+            p.to_path_buf()
+        } else {
+            p.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new(".")).to_path_buf()
+        };
+        let abs = std::fs::canonicalize(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        if pc::disk_of(root, &abs) == Some(target) {
+            return Err(format!(
+                "{what} ({}) is on disk {target}, the disk the plan writes: put it on another disk",
+                p.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[allow(clippy::too_many_arguments)]
+fn execute_pc(
+    d: &Description,
+    sha: String,
+    developer: bool,
+    mut rec: Record,
+    release: &Path,
+    backup: Option<PathBuf>,
+    record_path: &Path,
+    root: &Path,
+) -> Result<ExitCode, String> {
+    use glassine_installer::pc_execute::{self, PcJob};
+    use glassine_installer_pcwrite::{DirEdge, LinuxMachine};
+    let mut artifacts = pollster::block_on(Artifacts::open(DirSource(release.to_path_buf()))).map_err(|e| e.to_string())?;
+    let mut cancel = record_path.as_os_str().to_owned();
+    cancel.push(".cancel");
+    let target = pc_target(&rec.plan)?;
+    let mut machine = LinuxMachine::new(root, target)?;
+    let mut edge = DirEdge::new(record_path, backup, Some(PathBuf::from(&cancel)));
+    eprintln!(
+        "to stop after the next step that is safe to stop after, create {}",
+        PathBuf::from(cancel).display()
+    );
+    let job = PcJob {
+        description: d,
+        description_sha256: sha,
+        developer,
+    };
+    let plan = rec.plan.clone();
+    match pollster::block_on(pc_execute::run(&job, &plan, &mut rec, &mut artifacts, &mut machine, &mut edge)) {
+        Ok(o) => {
+            let check = match o {
+                Outcome::WaitingForAcceptance { check, .. } => check,
+                Outcome::Complete => String::new(),
+            };
+            println!("every step is done. {check} GlassineOS sets itself up at its first start.");
+            Ok(ExitCode::SUCCESS)
+        }
+        Err(s) => {
+            eprintln!("{s}");
+            eprintln!(
+                "the record is {}; glassine-install resume --record {} goes on from it",
+                record_path.display(),
+                record_path.display()
+            );
+            Ok(ExitCode::from(1))
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+#[allow(clippy::too_many_arguments)]
+fn execute_pc(_: &Description, _: String, _: bool, _: Record, _: &Path, _: Option<PathBuf>, _: &Path, _: &Path) -> Result<ExitCode, String> {
+    Err("installing on the PC this runs on works on Linux only".into())
 }
 
 /// `resume --record PATH [--backup DIR]`
@@ -544,6 +662,10 @@ pub fn resume_cmd(args: &[String]) -> Result<ExitCode, String> {
     let developer = inputs.get("developer").and_then(|v| v.as_bool()).unwrap_or(false);
     let (d, sha) = load_description(Path::new(&desc))?;
     let mut rec = rec;
+    if let Some(root) = inputs.get("pc_root").and_then(|v| v.as_str()).map(PathBuf::from) {
+        pc_places(&root, &rec.plan, &record_path, backup.as_deref())?;
+        return execute_pc(&d, sha, developer, rec, &rel, backup, &record_path, &root);
+    }
     if rec.backup.is_none()
         && let Some(b) = &backup
     {
