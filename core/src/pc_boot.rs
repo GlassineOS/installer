@@ -19,7 +19,9 @@
 //! board's configuration (`board`: the `board.conf` the installer packs as
 //! `etc/glassine-boot/board.conf`) and the kernel's boot modules
 //! (`boot-modules`). A release that hands the `initrd` over assembled gives
-//! the step's `initramfs` the kind [`KIND_ASSEMBLED`] and none of the parts.
+//! the step's `initramfs` the kind [`KIND_ASSEMBLED`] and no microcode or
+//! boot modules. `board` is named either way: the base command line is its
+//! `CMDLINE` and nothing else ([`board_cmdline`]).
 
 use crate::fat::FileSpec;
 use crate::release::Release;
@@ -351,18 +353,49 @@ pub fn boot_roles(release: &Release, kernel: &str, initramfs: &str, loader: &str
     if out.recovery_initrd.is_some() && out.recovery.is_none() {
         return Err(format!("the release has a {ROLE_RECOVERY_INITRD} but no {ROLE_RECOVERY}"));
     }
-    if assembled {
-        if !out.microcode.is_empty() || out.board.is_some() || out.boot_modules.is_some() {
-            return Err(format!(
-                "the release's {initramfs} is an assembled initrd ({KIND_ASSEMBLED}) and the release also has its parts: which is meant isn't clear"
-            ));
-        }
-    } else if out.board.is_none() {
+    if assembled && (!out.microcode.is_empty() || out.boot_modules.is_some()) {
         return Err(format!(
-            "the release has no {ROLE_BOARD} (the board.conf a PC's kernel set carries) and its {initramfs} isn't an assembled initrd ({KIND_ASSEMBLED}): the kernel set can't be made"
+            "the release's {initramfs} is an assembled initrd ({KIND_ASSEMBLED}) and the release also names microcode or boot modules: which is meant isn't clear"
+        ));
+    }
+    if out.board.is_none() {
+        return Err(format!(
+            "the release has no {ROLE_BOARD} (the board.conf whose CMDLINE a PC's kernel set starts with): the kernel set can't be made"
         ));
     }
     Ok(out)
+}
+
+/// The base command line of a kernel set: `CMDLINE` of `board.conf`, one
+/// line of the form `CMDLINE="<text>"` or `CMDLINE=<word>`, with no
+/// backslash, `$`, backtick or further quote in it. Any other form, a
+/// second `CMDLINE` or none is refused. The text's spaces are checked
+/// where the set is made.
+pub fn board_cmdline(conf: &[u8]) -> Result<String, String> {
+    let text = std::str::from_utf8(conf).map_err(|_| "board.conf isn't UTF-8".to_string())?;
+    let mut found: Option<&str> = None;
+    for line in text.split('\n') {
+        let t = line.trim_start().trim_start_matches("export ").trim_start();
+        if !(t.starts_with("CMDLINE=") || t.starts_with("CMDLINE ")) {
+            continue;
+        }
+        if found.is_some() {
+            return Err("board.conf sets CMDLINE twice".into());
+        }
+        let Some(v) = line.strip_prefix("CMDLINE=") else {
+            return Err(format!("board.conf's {line:?} isn't CMDLINE=\"<text>\" or CMDLINE=<word>"));
+        };
+        found = Some(v);
+    }
+    let v = found.ok_or("board.conf sets no CMDLINE")?;
+    let bad = |c: char| matches!(c, '\\' | '$' | '`' | '"' | '\'');
+    let value = match v.strip_prefix('"') {
+        Some(rest) => rest.strip_suffix('"').filter(|t| !t.contains(bad)),
+        None => (!v.is_empty() && !v.contains(bad) && !v.contains(char::is_whitespace)).then_some(v),
+    };
+    value
+        .map(String::from)
+        .ok_or_else(|| format!("board.conf's CMDLINE={v} isn't CMDLINE=\"<text>\" or CMDLINE=<word> (no backslash, $, backtick or further quote)"))
 }
 
 /// The board archive: an uncompressed newc archive of `etc`,
@@ -641,6 +674,32 @@ mod tests {
         assert_eq!(record_in_use(&slot, &slot).unwrap().0, 0);
         // a record that doesn't fit its slot isn't written
         assert!(slot_bytes(&"x".repeat(SLOT_BYTES + 1)).is_err());
+    }
+
+    #[test]
+    fn cmdline_is_read_from_board_conf_in_its_two_forms_only() {
+        let c = |t: &str| board_cmdline(t.as_bytes());
+        assert_eq!(c("ROOT=x\nCMDLINE=\"console=ttyS0 quiet\"\n").unwrap(), "console=ttyS0 quiet");
+        assert_eq!(c("CMDLINE=quiet\n").unwrap(), "quiet");
+        assert_eq!(c("CMDLINE=\"\"\n").unwrap(), "");
+        assert_eq!(c("CMDLINE=\"quiet\"").unwrap(), "quiet");
+        for bad in [
+            "ROOT=x\n",
+            "CMDLINE=a\nCMDLINE=b\n",
+            "CMDLINE='quiet'\n",
+            "CMDLINE=\"a\\\"b\"\n",
+            "CMDLINE=\"$X\"\n",
+            "CMDLINE=\"`x`\"\n",
+            "CMDLINE=\"a\" # c\n",
+            "CMDLINE=a b\n",
+            "CMDLINE=\"a\n",
+            "export CMDLINE=a\n",
+            " CMDLINE=a\n",
+            "CMDLINE=\n",
+            "CMDLINE=\"a'b\"\n",
+        ] {
+            assert!(c(bad).is_err(), "{bad:?}");
+        }
     }
 
     #[test]
