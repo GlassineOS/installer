@@ -15,8 +15,9 @@ plan with --pc and prints their records. The host asserts:
   installer's run only);
 - the general PC description fits; every disk and system is listed; the
   installer's own disk is named and refused as a target; a disk too small for
-  the release's least system partition (the release manifest fixture on the
-  stick) is refused with the space it lacks;
+  GlassineOS's partitions (the description's sizes; the release manifest
+  fixture on the stick states a least that fits them) is refused with the
+  space it lacks;
 - a control run that writes one disk byte and one variable is caught;
 - with Secure Boot on (OVMF's Secure Boot build, a key made for the run
   enrolled, the guest's kernel signed with it) the check reads it as on and
