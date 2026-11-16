@@ -6,10 +6,13 @@
 //! file's data goes (one contiguous run of clusters); the caller writes them
 //! and streams the files' contents to their offsets.
 //!
-//! Names are 8.3, upper case on disk; a base or extension written in lower
-//! case is marked as such (the case bits Linux and Windows read), so
-//! `loader.efi` reads back as `loader.efi`. Firmware compares names without
-//! regard to case. No long names.
+//! A name that fits 8.3 is written as an 8.3 entry, upper case on disk; a
+//! base or extension written in lower case is marked as such (the case bits
+//! Linux and Windows read), so `loader.efi` reads back as `loader.efi`. A
+//! name that doesn't (a 16-digit set id, `default.gspl`) gets VFAT long-name
+//! entries before an 8.3 alias (`012345~1`, `DEFAUL~1.GSP`), numbered in the
+//! directory's name order, so the bytes stay the same for the same files.
+//! Firmware compares names without regard to case.
 
 use std::collections::BTreeMap;
 
@@ -66,6 +69,92 @@ fn short(name: &str) -> Result<([u8; 11], u8), String> {
         case |= 0x10;
     }
     Ok((out, case))
+}
+
+/// A name written as a long name: printable ASCII a FAT long name may hold
+/// (letters, digits, `_`, `-`, `.`), not `.` or `..`, at most 255 bytes.
+fn long_ok(name: &str) -> Result<(), String> {
+    let ok = !name.is_empty()
+        && name.len() <= 255
+        && !name.starts_with('.')
+        && !name.ends_with('.')
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.');
+    if ok {
+        Ok(())
+    } else {
+        Err(format!("{name:?} isn't a name this volume writes"))
+    }
+}
+
+/// A path component: an 8.3 name, or a long name.
+fn name_ok(name: &str) -> Result<(), String> {
+    short(name).map(|_| ()).or_else(|_| long_ok(name))
+}
+
+/// The long-name entries a name needs: none for an 8.3 name.
+fn long_count(name: &str) -> usize {
+    if short(name).is_ok() { 0 } else { name.len().div_ceil(13) }
+}
+
+/// The 8.3 alias of a long name: up to 6 characters of its base, `~n`, and
+/// up to 3 of its extension, upper case, the first `n` not in `taken`.
+fn alias(name: &str, taken: &std::collections::BTreeSet<[u8; 11]>) -> Result<[u8; 11], String> {
+    let (base, ext) = match name.rsplit_once('.') {
+        Some((b, e)) => (b, e),
+        None => (name, ""),
+    };
+    let keep = |s: &str| -> Vec<u8> {
+        s.bytes()
+            .filter(|b| b.is_ascii_alphanumeric() || *b == b'_' || *b == b'-')
+            .map(|b| b.to_ascii_uppercase())
+            .collect()
+    };
+    let (base, ext) = (keep(base), keep(ext));
+    for n in 1..1_000_000u32 {
+        let tail = format!("~{n}");
+        let mut out = [b' '; 11];
+        let b = &base[..base.len().min(8 - tail.len())];
+        out[..b.len()].copy_from_slice(b);
+        out[b.len()..b.len() + tail.len()].copy_from_slice(tail.as_bytes());
+        for (i, c) in ext.iter().take(3).enumerate() {
+            out[8 + i] = *c;
+        }
+        if !taken.contains(&out) {
+            return Ok(out);
+        }
+    }
+    Err(format!("no 8.3 alias is free for {name:?}"))
+}
+
+/// The checksum of an 8.3 name that its long-name entries carry.
+fn lfn_sum(short: &[u8; 11]) -> u8 {
+    short.iter().fold(0u8, |s, c| (s >> 1).wrapping_add(s << 7).wrapping_add(*c))
+}
+
+/// The long-name entries of `name`, in the order they are written (the last
+/// part first), for the 8.3 entry `short` that follows them.
+fn lfn_entries(name: &str, short: &[u8; 11]) -> Vec<[u8; 32]> {
+    let units: Vec<u16> = name.encode_utf16().collect();
+    let n = units.len().div_ceil(13);
+    let sum = lfn_sum(short);
+    let mut out = vec![];
+    for k in (0..n).rev() {
+        let mut e = [0u8; 32];
+        e[0] = (k as u8 + 1) | if k + 1 == n { 0x40 } else { 0 };
+        e[11] = 0x0f;
+        e[13] = sum;
+        for (i, at) in [1, 3, 5, 7, 9, 14, 16, 18, 20, 22, 24, 28, 30].iter().enumerate() {
+            let j = k * 13 + i;
+            let u = match j.cmp(&units.len()) {
+                std::cmp::Ordering::Less => units[j],
+                std::cmp::Ordering::Equal => 0,
+                std::cmp::Ordering::Greater => 0xffff,
+            };
+            e[*at..*at + 2].copy_from_slice(&u.to_le_bytes());
+        }
+        out.push(e);
+    }
+    out
 }
 
 /// 2026-01-01 00:00, the same on every build.
@@ -132,7 +221,7 @@ pub fn layout(volume_bytes: u64, sector: u64, hidden_sectors: u64, serial: u32, 
         }
         let mut d = 0usize;
         for (k, p) in parts.iter().enumerate() {
-            short(p)?;
+            name_ok(p)?;
             let key = p.to_ascii_uppercase();
             let last = k + 1 == parts.len();
             match dirs[d].children.get(&key).copied() {
@@ -170,7 +259,11 @@ pub fn layout(volume_bytes: u64, sector: u64, hidden_sectors: u64, serial: u32, 
     let per_cluster = (cluster / 32) as usize;
     let mut next = 2u32;
     for (i, d) in dirs.iter_mut().enumerate() {
-        let n = d.children.len() + if i == 0 { 1 } else { 2 } + 1; // label or . and .., an end mark
+        let mut long = 0;
+        for key in d.children.keys() {
+            long += long_count(given.get(&(i, key.clone())).map(String::as_str).unwrap_or(key));
+        }
+        let n = d.children.len() + long + if i == 0 { 1 } else { 2 } + 1; // label or . and .., an end mark
         d.clusters = n.div_ceil(per_cluster) as u32;
         d.cluster = next;
         next += d.clusters;
@@ -233,9 +326,21 @@ pub fn layout(volume_bytes: u64, sector: u64, hidden_sectors: u64, serial: u32, 
             put(entry(*b".          ", 0, true, d.cluster, 0));
             put(entry(*b"..         ", 0, true, parent_of(i), 0));
         }
+        let name_of = |key: &String| given.get(&(i, key.clone())).cloned().unwrap_or_else(|| key.clone());
+        let mut taken: std::collections::BTreeSet<[u8; 11]> = d.children.keys().filter_map(|k| short(&name_of(k)).ok().map(|s| s.0)).collect();
         for (key, (isdir, idx)) in &d.children {
-            let name = given.get(&(i, key.clone())).cloned().unwrap_or_else(|| key.clone());
-            let (n, case) = short(&name)?;
+            let name = name_of(key);
+            let (n, case) = match short(&name) {
+                Ok(s) => s,
+                Err(_) => {
+                    let a = alias(&name, &taken)?;
+                    taken.insert(a);
+                    for e in lfn_entries(&name, &a) {
+                        put(e);
+                    }
+                    (a, 0)
+                }
+            };
             let (c, size) = if *isdir {
                 (dirs[*idx].cluster, 0)
             } else {
@@ -298,6 +403,46 @@ pub mod read {
     //! laid out (the tests' check, and a read-back of a whole volume).
     use crate::table::{le16, le32};
 
+    /// The entry named `p` in the directory `dir`: by its long name where it
+    /// has one whose checksum matches, else by its 8.3 name; without regard
+    /// to case.
+    fn find<'a>(dir: &'a [u8], p: &str) -> Option<&'a [u8]> {
+        let want = super::short(p).ok().map(|s| s.0);
+        let mut long: Vec<(u8, u8, Vec<u16>)> = vec![];
+        for e in dir.chunks(32).take_while(|e| e[0] != 0) {
+            if e[0] == 0xe5 {
+                long.clear();
+                continue;
+            }
+            if e[11] == 0x0f {
+                let units = [1, 3, 5, 7, 9, 14, 16, 18, 20, 22, 24, 28, 30].map(|at| le16(e, at));
+                long.push((e[0] & 0x3f, e[13], units.to_vec()));
+                continue;
+            }
+            let parts = std::mem::take(&mut long);
+            if e[11] & 0x08 != 0 {
+                continue;
+            }
+            let name: [u8; 11] = e[0..11].try_into().ok()?;
+            let sum = super::lfn_sum(&name);
+            let mut lfn: Option<String> = None;
+            if !parts.is_empty() && parts.iter().all(|x| x.1 == sum) {
+                let mut sorted = parts;
+                sorted.sort_by_key(|x| x.0);
+                let units: Vec<u16> = sorted.into_iter().flat_map(|x| x.2).take_while(|u| *u != 0 && *u != 0xffff).collect();
+                lfn = String::from_utf16(&units).ok();
+            }
+            let hit = match &lfn {
+                Some(l) => l.eq_ignore_ascii_case(p),
+                None => want == Some(name),
+            };
+            if hit {
+                return Some(e);
+            }
+        }
+        None
+    }
+
     /// The file at `path` of the volume `vol`, if it is there.
     pub fn file(vol: &[u8], path: &str) -> Option<Vec<u8>> {
         let bps = le16(vol, 11) as usize;
@@ -321,8 +466,7 @@ pub mod read {
         let mut dir = read(root);
         let parts: Vec<&str> = path.split('/').collect();
         for (k, p) in parts.iter().enumerate() {
-            let (name, _) = super::short(p).ok()?;
-            let e = dir.chunks(32).take_while(|e| e[0] != 0).find(|e| e[0..11] == name && e[11] & 0x08 == 0)?;
+            let e = find(&dir, p)?;
             let c = ((le16(e, 20) as u32) << 16) | le16(e, 26) as u32;
             if k + 1 == parts.len() {
                 let size = le32(e, 28) as usize;
@@ -367,16 +511,19 @@ mod tests {
         let files = [
             ("EFI/BOOT/BOOTX64.EFI", b"loader".to_vec()),
             ("EFI/glassine/loader.efi", b"loader".to_vec()),
-            ("glassine/loader.rec", b"format=1\n".to_vec()),
-            ("glassine/0a1b2c3d/vmlinuz", big.clone()),
-            ("glassine/0a1b2c3d/empty", vec![]),
+            ("glassine/loader.a", b"format=1\n".to_vec()),
+            ("glassine/sets/0a1b2c3d4e5f6071/vmlinuz", big.clone()),
+            ("glassine/sets/0a1b2c3d4e5f6071/empty", vec![]),
+            ("glassine/sets/0a1b2c3d99999999/set.rec", b"x".to_vec()),
+            ("glassine/splash/default.gspl", b"GLSPLASH".to_vec()),
         ];
         for sector in [512, 4096] {
             let (v, l) = build(300 << 20, sector, &files);
             for (p, b) in &files {
                 assert_eq!(read::file(&v, p).as_deref(), Some(b.as_slice()), "{p} ({sector})");
             }
-            assert_eq!(read::file(&v, "glassine/LOADER.REC").as_deref(), Some(&b"format=1\n"[..]));
+            assert_eq!(read::file(&v, "glassine/LOADER.A").as_deref(), Some(&b"format=1\n"[..]));
+            assert_eq!(read::file(&v, "glassine/SETS/0A1B2C3D99999999/set.rec").as_deref(), Some(&b"x"[..]));
             assert!(l.free_bytes > 290 << 20);
             // the same input, the same bytes
             let (w, _) = build(300 << 20, sector, &files);
@@ -385,10 +532,36 @@ mod tests {
     }
 
     #[test]
+    fn long_names_get_long_entries_and_numbered_aliases() {
+        let files = [
+            ("glassine/sets/0123456789abcdef/vmlinuz", b"a".to_vec()),
+            ("glassine/sets/0123456700000000/vmlinuz", b"b".to_vec()),
+            ("glassine/splash/default.gspl", b"c".to_vec()),
+            ("glassine/Mixed.efi", b"d".to_vec()),
+        ];
+        let (v, _) = build(300 << 20, 512, &files);
+        for (p, b) in &files {
+            assert_eq!(read::file(&v, p).as_deref(), Some(b.as_slice()), "{p}");
+        }
+        // the aliases, numbered in the directory's name order
+        let mut taken = std::collections::BTreeSet::new();
+        let a1 = alias("0123456700000000", &taken).unwrap();
+        assert_eq!(&a1, b"012345~1   ");
+        taken.insert(a1);
+        assert_eq!(&alias("0123456789abcdef", &taken).unwrap(), b"012345~2   ");
+        assert_eq!(&alias("default.gspl", &Default::default()).unwrap(), b"DEFAUL~1GSP");
+        // a volume for the host's tools (FAT_DUMP=path): fsck.fat -n and mcopy read it
+        if let Some(path) = std::env::var_os("FAT_DUMP").filter(|p| !p.is_empty()) {
+            std::fs::write(path, &v).unwrap();
+        }
+    }
+
+    #[test]
     fn names_and_sizes_that_dont_fit_are_refused() {
         let f = |p: &str, size: u64| vec![FileSpec { path: p.into(), size }];
-        assert!(layout(300 << 20, 512, 0, 1, "X", &f("glassine/toolongname.efi", 1)).is_err());
-        assert!(layout(300 << 20, 512, 0, 1, "X", &f("glassine/Mixed.efi", 1)).is_err());
+        assert!(layout(300 << 20, 512, 0, 1, "X", &f("glassine/bad name.efi", 1)).is_err());
+        assert!(layout(300 << 20, 512, 0, 1, "X", &f("glassine/..", 1)).is_err());
+        assert!(layout(300 << 20, 512, 0, 1, "X", &f(&"a".repeat(256), 1)).is_err());
         assert!(layout(300 << 20, 512, 0, 1, "X", &f("/abs", 1)).is_err());
         assert!(layout(300 << 20, 512, 0, 1, "X", &f("a", 400 << 20)).unwrap_err().contains("the files need"));
         assert!(layout(16 << 20, 512, 0, 1, "X", &f("a", 1)).is_err());
