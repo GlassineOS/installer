@@ -980,8 +980,8 @@ pub const STEP_KINDS: &[Kind] = &[
         modes: &["local"],
         params: &[
             p("artifact", T::Artifact, true, "the kernel"),
-            p("initramfs", T::Artifact, true, "the initramfs of the kernel set"),
-            p("loader", T::Artifact, true, "the boot loader the firmware starts"),
+            p("initramfs", T::Artifact, false, "the kernel set's initramfs (needed on a PC)"),
+            p("loader", T::Artifact, false, "the loader the firmware starts (needed on a PC)"),
             p("partition", T::Partition, true, "the boot partition"),
         ],
     },

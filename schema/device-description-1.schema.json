@@ -1702,7 +1702,7 @@
                       "type": "string"
                     },
                     "initramfs": {
-                      "description": "the initramfs of the kernel set",
+                      "description": "the kernel set's initramfs (needed on a PC)",
                       "enum": [
                         "base",
                         "kernel",
@@ -1715,7 +1715,7 @@
                       "type": "string"
                     },
                     "loader": {
-                      "description": "the boot loader the firmware starts",
+                      "description": "the loader the firmware starts (needed on a PC)",
                       "enum": [
                         "base",
                         "kernel",
@@ -1735,8 +1735,6 @@
                   },
                   "required": [
                     "artifact",
-                    "initramfs",
-                    "loader",
                     "partition"
                   ],
                   "type": "object"
@@ -3389,15 +3387,15 @@
             "type": "Artifact"
           },
           {
-            "doc": "the initramfs of the kernel set",
+            "doc": "the kernel set's initramfs (needed on a PC)",
             "name": "initramfs",
-            "required": true,
+            "required": false,
             "type": "Artifact"
           },
           {
-            "doc": "the boot loader the firmware starts",
+            "doc": "the loader the firmware starts (needed on a PC)",
             "name": "loader",
-            "required": true,
+            "required": false,
             "type": "Artifact"
           },
           {
