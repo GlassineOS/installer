@@ -4219,7 +4219,7 @@
         "backends": [
           "uefi-pc"
         ],
-        "doc": "makes the boot partition's file system and puts the loader (at its own path and the removable-media path), the first kernel set and the loader record on it",
+        "doc": "makes the boot partition's file system and puts on it the loader (at its own path and the removable-media path), the first kernel set, the recovery image, the default splash and both slots of the loader record (GlassineOS/boot docs/boot-partition.md)",
         "id": "write-boot-files",
         "modes": [
           "local"

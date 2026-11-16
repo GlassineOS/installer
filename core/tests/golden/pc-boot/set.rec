@@ -1,0 +1,10 @@
+format=1
+id=1abb421e678cbd3b
+release=6.18.63-0-lts
+kernel_sha256=6923dd1bc0460082c5d55a831908c24a282860b7f1cd6c2b79cf1bc8857c639c
+kernel_size=12345678
+initrd_sha256=09e6c018d2c8c4903308613dd1b72484d57eadf12ec50ddc8f52e5accce470f2
+initrd_size=34567890
+cmdline=console=ttyS0 quiet glassine.system=PARTUUID=0f3e26a1-5c7b-4a55-9b8d-2c4f6e8a1b3d glassine.userdata=PARTUUID=6d1a5e2b-8c4f-4b3a-a9e7-1f2d3c4b5a69 glassine.img=1abb421e678cbd3b
+initramfs=0123456789ab@00000000deadbeef
+check=8b2082c77a0541d8195f6f04df61e22b731cb7cda167ccc4de6bbd1f8f1254a8

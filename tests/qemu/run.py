@@ -773,6 +773,49 @@ def load_option(label: str, hd: tuple, path: str) -> bytes:
     return struct.pack("<I", 7) + body
 
 
+def splash_file() -> bytes:
+    """A default splash (boot-partition.md, "The image format"): 2 x 2 pixels, raw."""
+    payload = b"\x40" * 16
+    head = b"GLSPLASH" + struct.pack("<HHIIIIIIIQI", 1, 0, 2, 2, 0, 0, 1, 0, 0, len(payload), zlib_crc(payload))
+    return head + struct.pack("<I", zlib_crc(head)) + b"\0" * 8 + payload
+
+
+def zlib_crc(b: bytes) -> int:
+    import zlib
+
+    return zlib.crc32(b) & 0xFFFFFFFF
+
+
+def newc(entries) -> bytes:
+    """A newc archive as glassine-bootimg-pack makes it: owner 0:0, mtime 0."""
+    out = bytearray()
+    for ino, (name, mode, data) in enumerate(entries + [("TRAILER!!!", 0, b"")], 1):
+        nb = name.encode() + b"\0"
+        fields = (ino, mode, 0, 0, 1, 0, len(data), 0, 0, 0, 0, len(nb), 0)
+        out += b"070701" + b"".join(b"%08X" % f for f in fields) + nb
+        out += b"\0" * (-len(out) % 4) + data
+        out += b"\0" * (-len(out) % 4)
+    return bytes(out)
+
+
+def want_initrd(arts: dict) -> bytes:
+    """The kernel set's initrd as boot-partition.md assembles it."""
+    out = b""
+    for part in (arts["microcode-amd"], arts["microcode-intel"], arts["initramfs"]):
+        out += part + b"\0" * (-len(part) % 4)
+    out += newc([("etc", 0o40755, b""), ("etc/glassine-boot", 0o40755, b""), ("etc/glassine-boot/board.conf", 0o100644, arts["board"])])
+    return out + arts["boot-modules"]
+
+
+def record_keys(b: bytes) -> dict:
+    """A record's keys if it is valid (its check line right), else {}."""
+    body, sep, last = b.rstrip(b"\n").rpartition(b"\n")
+    body += sep
+    if not last.startswith(b"check=") or last[6:].decode() != hashlib.sha256(body).hexdigest():
+        return {}
+    return dict(line.split("=", 1) for line in body.decode().splitlines())
+
+
 def make_release(d: Path, files: dict, small: bool) -> dict:
     """The release folder on the stick, and its artifacts' bytes by role."""
     d.mkdir(parents=True)
@@ -785,11 +828,24 @@ def make_release(d: Path, files: dict, small: bool) -> dict:
     shutil.copyfile(files["vmlinuz-virt"], d / "vmlinuz")
     (d / "initramfs").write_bytes(b"test initramfs\n" * 4096)
     (d / "loader.efi").write_bytes(placeholder.efi_app())
+    # the parts of the kernel set's initrd, the recovery image, the splash
+    (d / "intel-ucode.img").write_bytes(b"intel microcode\n" * 33 + b"x")
+    (d / "amd-ucode.img").write_bytes(b"amd microcode\n" * 21 + b"yz")
+    (d / "board.conf").write_bytes(b"ROOT_LAYOUT=deployments\nCMDLINE=console=ttyS0\n")
+    (d / "boot-modules.cpio.gz").write_bytes(gzip.compress(b"boot modules\n" * 100, mtime=0))
+    (d / "recovery.efi").write_bytes(b"test recovery image\n" * 2048)
+    (d / "default.gspl").write_bytes(splash_file())
     arts = {
         "base": ("base.img", "btrfs-pool-image", 200 * MIB if small else 2 * GIB),
         "kernel": ("vmlinuz", "efi-kernel", 256 * MIB),
         "initramfs": ("initramfs", "initramfs", None),
         "boot-loader": ("loader.efi", "efi-application", None),
+        "microcode-intel": ("intel-ucode.img", "cpio", None),
+        "microcode-amd": ("amd-ucode.img", "cpio", None),
+        "board": ("board.conf", "board-conf", None),
+        "boot-modules": ("boot-modules.cpio.gz", "cpio-gz", None),
+        "recovery": ("recovery.efi", "efi-kernel", None),
+        "splash": ("default.gspl", "glassine-splash", None),
     }
     m, out = {}, {}
     for role, (file, kind, least) in arts.items():
@@ -798,8 +854,11 @@ def make_release(d: Path, files: dict, small: bool) -> dict:
         e = {"file": file, "sha256": hashlib.sha256(b).hexdigest(), "size": len(b), "kind": kind}
         if least:
             e["min_partition_bytes"] = least
-        if role == "kernel":
+        if role in ("kernel", "recovery"):
             e["cmdline"] = "console=ttyS0"
+            e["release"] = "6.18.63-0-virt"
+        if role == "initramfs":
+            e["identity"] = "0123456789ab@00000000deadbeef"
         m[role] = e
     (d / "release.json").write_text(json.dumps({"release_format": 1, "artifacts": m}, indent=1) + "\n")
     return out
@@ -971,12 +1030,25 @@ def install_case(name, args, boot, files, work: Path):
 
     check(fat_file("EFI/glassine/loader.efi") == arts["boot-loader"], "the loader at \\EFI\\glassine\\loader.efi")
     check(fat_file("EFI/BOOT/BOOTX64.EFI") == arts["boot-loader"], "and at the removable-media path")
-    lr = (fat_file("glassine/loader.rec") or b"").decode()
-    ident = f"glassine.system=PARTUUID={sysp[3]} glassine.userdata=PARTUUID={datap[3]}"
-    check(ident in lr, f"the kernel set's command line names the system and userdata by PARTUUID: {lr}")
-    kid = next((x[8:] for x in lr.splitlines() if x.startswith("default=")), "")
-    check(fat_file(f"glassine/{kid}/vmlinuz") == arts["kernel"], "the first kernel set's kernel")
-    check(fat_file(f"glassine/{kid}/initrd") == arts["initramfs"], "and its initramfs")
+    slot_a, slot_b = fat_file("glassine/loader.a") or b"", fat_file("glassine/loader.b") or b""
+    check(len(slot_a) == 16384 and slot_a == slot_b, f"both slots of the loader record, 16384 bytes each and the same: {len(slot_a)} {len(slot_b)}")
+    lr = record_keys(slot_a)
+    check(lr.get("seq") == "1" and lr.get("unmarked") == "0" and lr.get("deploys") == "0" and "provisional" not in lr, f"the loader record checks, seq=1: {lr}")
+    kid = lr.get("default", "")
+    sd = f"glassine/sets/{kid}"
+    initrd = want_initrd(arts)
+    check(kid == hashlib.sha256(f"{hashlib.sha256(arts['kernel']).hexdigest()}\n{hashlib.sha256(initrd).hexdigest()}\nconsole=ttyS0\n".encode()).hexdigest()[:16], f"the set's id is its three lines' sum: {kid}")
+    check(fat_file(f"{sd}/vmlinuz") == arts["kernel"], "the first kernel set's kernel")
+    check(fat_file(f"{sd}/initrd") == initrd, "and its initrd: microcode, the initramfs, the board, the boot modules")
+    sr = fat_file(f"{sd}/set.rec") or b""
+    check(lr.get("default_rec") == hashlib.sha256(sr).hexdigest(), "the loader record names the set's record by its sum")
+    sk = record_keys(sr)
+    ident = f"glassine.system=PARTUUID={sysp[3]} glassine.userdata=PARTUUID={datap[3]} glassine.img={kid}"
+    check(sk.get("cmdline") == f"console=ttyS0 {ident}", f"the kernel set's command line names the system and userdata by PARTUUID: {sk}")
+    rd = f"glassine/recovery/{lr.get('recovery', '')}"
+    check(lr.get("recovery") and fat_file(f"{rd}/vmlinuz") == arts["recovery"], "the recovery image")
+    check(lr.get("recovery_rec") == hashlib.sha256(fat_file(f"{rd}/set.rec") or b"x").hexdigest(), "and its record, named by its sum")
+    check(fat_file("glassine/splash/default.gspl") == arts["splash"], "the default splash")
     bootimg.unlink()
 
     # Windows kept: its entries and partitions byte for byte

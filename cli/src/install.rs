@@ -496,11 +496,9 @@ pub fn install_cmd(args: &[String]) -> Result<ExitCode, String> {
     for s in &p.steps {
         let base = s.id.split('.').next().unwrap_or(&s.id);
         let Some(st) = d.steps.iter().find(|x| x.id == base) else { continue };
-        for k in ["artifact", "initramfs", "loader"] {
-            if let Some(r) = st.params.get(k).and_then(|v| v.as_str())
-                && !roles.iter().any(|x| x == r)
-            {
-                roles.push(r.to_string());
+        for r in glassine_installer::pc_execute::step_roles(st, &artifacts.manifest)? {
+            if !roles.contains(&r) {
+                roles.push(r);
             }
         }
     }

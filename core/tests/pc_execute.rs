@@ -18,6 +18,7 @@ use glassine_installer::facts::{Cpu, FACTS_FORMAT, GlassineFacts, InstallerDisk,
 use glassine_installer::fat;
 use glassine_installer::format1::Description;
 use glassine_installer::lock::sha256_hex;
+use glassine_installer::pc_boot;
 use glassine_installer::pc_execute::{DiskId, Machine, PcEdge, PcJob, run};
 use glassine_installer::pcfacts::{self, DiskInfo, EfiVars};
 use glassine_installer::plan::{Input, plan};
@@ -424,20 +425,47 @@ fn image(len: usize, seed: u8) -> Vec<u8> {
     (0..len).map(|i| (i as u32).wrapping_mul(2654435761).rotate_left(seed as u32) as u8).collect()
 }
 
+/// A default splash of 2 × 2 pixels, raw.
+fn splash_file() -> Vec<u8> {
+    let payload = [0x40u8; 16];
+    let mut b = vec![0u8; 64];
+    b[0..8].copy_from_slice(b"GLSPLASH");
+    b[8..10].copy_from_slice(&1u16.to_le_bytes());
+    b[12..16].copy_from_slice(&2u32.to_le_bytes());
+    b[16..20].copy_from_slice(&2u32.to_le_bytes());
+    b[28..32].copy_from_slice(&1u32.to_le_bytes());
+    b[40..48].copy_from_slice(&16u64.to_le_bytes());
+    b[48..52].copy_from_slice(&table::crc32(&payload).to_le_bytes());
+    let c = table::crc32(&b[0..52]);
+    b[52..56].copy_from_slice(&c.to_le_bytes());
+    b.extend_from_slice(&payload);
+    b
+}
+
+const BOARD_CONF: &[u8] = b"ROOT_LAYOUT=deployments\nCMDLINE=console=ttyS0\n";
+
+/// The release: the step's three roles and every part of the boot
+/// partition (two microcode archives, the board, boot modules, the
+/// recovery image, the splash).
 fn release() -> MemorySource {
-    let files: [(&str, Vec<u8>, &str); 4] = [
-        ("base", image(3 * MIB as usize + 512, 3), "btrfs-pool-image"),
-        ("kernel", image(2 * MIB as usize + 77, 5), "efi-kernel"),
-        ("initramfs", image(MIB as usize + 3, 7), "initramfs"),
-        ("boot-loader", image(70_000, 9), "efi-application"),
+    let files: Vec<(&str, &str, Vec<u8>, &str)> = vec![
+        ("base", "base.img", image(3 * MIB as usize + 512, 3), "btrfs-pool-image"),
+        ("kernel", "kernel.img", image(2 * MIB as usize + 77, 5), "efi-kernel"),
+        ("initramfs", "initramfs.img", image(MIB as usize + 3, 7), "initramfs"),
+        ("boot-loader", "boot-loader.img", image(70_000, 9), "efi-application"),
+        ("microcode-intel", "ucode/intel-ucode.img", image(1001, 11), "cpio"),
+        ("microcode-amd", "ucode/amd-ucode.img", image(502, 13), "cpio"),
+        ("board", "board.conf", BOARD_CONF.to_vec(), "board-conf"),
+        ("boot-modules", "boot-modules.cpio.gz", image(7777, 15), "cpio-gz"),
+        ("recovery", "recovery.efi", image(300_001, 17), "efi-kernel"),
+        ("splash", "default.gspl", splash_file(), "glassine-splash"),
     ];
     let mut m = serde_json::Map::new();
     let mut src = MemorySource {
         origin: "test release".into(),
         files: BTreeMap::new(),
     };
-    for (role, b, kind) in files {
-        let file = format!("{role}.img");
+    for (role, file, b, kind) in files {
         let mut e = serde_json::json!({"file": file, "sha256": sha256_hex(&b), "size": b.len(), "kind": kind});
         if role == "base" {
             e["min_partition_bytes"] = serde_json::json!(32 * MIB);
@@ -447,14 +475,56 @@ fn release() -> MemorySource {
             e["release"] = serde_json::json!("6.18.63-0-lts");
             e["min_partition_bytes"] = serde_json::json!(20 * MIB);
         }
+        if role == "initramfs" {
+            e["identity"] = serde_json::json!("0123456789ab@00000000deadbeef");
+        }
+        if role == "recovery" {
+            e["cmdline"] = serde_json::json!("console=ttyS0 quiet");
+            e["release"] = serde_json::json!("6.18.63-0-lts");
+        }
         m.insert(role.into(), e);
-        src.files.insert(file, b);
+        src.files.insert(file.into(), b);
     }
     src.files.insert(
         "release.json".into(),
         serde_json::to_vec(&serde_json::json!({"release_format": 1, "artifacts": m})).unwrap(),
     );
     src
+}
+
+/// The kernel set's initrd as boot-partition.md assembles it, made here
+/// independently of the installer: microcode by file name, the initramfs,
+/// the board archive, the boot modules, each at a multiple of 4.
+fn want_initrd(src: &MemorySource) -> Vec<u8> {
+    let mut out: Vec<u8> = vec![];
+    for f in ["ucode/amd-ucode.img", "ucode/intel-ucode.img", "initramfs.img"] {
+        out.extend_from_slice(&src.files[f]);
+        out.resize(out.len().next_multiple_of(4), 0);
+    }
+    // the board archive, as glassine-bootimg-pack's newc() makes it
+    let mut board = vec![];
+    let conf = &src.files["board.conf"];
+    for (ino, (name, mode, data)) in [
+        ("etc", 0o40755u32, &b""[..]),
+        ("etc/glassine-boot", 0o40755, b""),
+        ("etc/glassine-boot/board.conf", 0o100644, conf.as_slice()),
+        ("TRAILER!!!", 0, b""),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let f = [ino as u32 + 1, mode, 0, 0, 1, 0, data.len() as u32, 0, 0, 0, 0, name.len() as u32 + 1, 0];
+        board.extend_from_slice(b"070701");
+        board.extend(f.iter().flat_map(|x| format!("{x:08X}").into_bytes()));
+        board.extend_from_slice(name.as_bytes());
+        board.push(0);
+        board.resize(board.len().next_multiple_of(4), 0);
+        board.extend_from_slice(data);
+        board.resize(board.len().next_multiple_of(4), 0);
+    }
+    out.extend_from_slice(&board);
+    out.extend_from_slice(&src.files["boot-modules.cpio.gz"]);
+    out
 }
 
 struct Case {
@@ -561,26 +631,59 @@ fn installed(m: &Sim, c: &Case) -> Installed {
     let loader = &c.src.files["boot-loader.img"];
     assert_eq!(fat::read::file(&vol, "EFI/glassine/loader.efi").as_ref(), Some(loader));
     assert_eq!(fat::read::file(&vol, "EFI/BOOT/BOOTX64.EFI").as_ref(), Some(loader));
-    let lr = String::from_utf8(fat::read::file(&vol, "glassine/loader.rec").unwrap()).unwrap();
-    let id = lr.lines().find_map(|l| l.strip_prefix("default=")).unwrap().to_string();
-    let cmdline = lr.lines().find_map(|l| l.strip_prefix("cmdline=")).unwrap();
+    // the loader record: both slots, the same record, seq=1
+    let (sa, sb) = (
+        fat::read::file(&vol, "glassine/loader.a").unwrap(),
+        fat::read::file(&vol, "glassine/loader.b").unwrap(),
+    );
+    assert_eq!(sa.len(), pc_boot::SLOT_BYTES);
+    assert_eq!(sa, sb);
+    let (which, lr, both) = pc_boot::record_in_use(&sa, &sb).unwrap();
+    assert!(which == 0 && both);
+    assert_eq!(lr["seq"], "1");
+    assert_eq!((lr["unmarked"].as_str(), lr["deploys"].as_str(), lr["request"].as_str()), ("0", "0", ""));
+    assert_eq!((lr["previous"].as_str(), lr["trial"].as_str()), ("", ""));
+    for gone in ["provisional", "default_record", "kernel", "initrd", "cmdline", "default_record_sha256"] {
+        assert!(!lr.contains_key(gone), "{gone}");
+    }
+    let id = lr["default"].clone();
+    let initrd = want_initrd(&c.src);
+    let kernel = &c.src.files["kernel.img"];
     assert_eq!(
-        cmdline,
+        id,
+        sha256_hex(format!("{}\n{}\nconsole=ttyS0\n", sha256_hex(kernel), sha256_hex(&initrd)).as_bytes())[..16]
+    );
+    let dir = format!("glassine/sets/{id}");
+    assert_eq!(fat::read::file(&vol, &format!("{dir}/vmlinuz")).as_ref(), Some(kernel));
+    assert_eq!(fat::read::file(&vol, &format!("{dir}/initrd")).as_ref(), Some(&initrd));
+    let kr = fat::read::file(&vol, &format!("{dir}/set.rec")).unwrap();
+    assert_eq!(lr["default_rec"], sha256_hex(&kr));
+    let k = pc_boot::parse_record(&kr).unwrap();
+    assert_eq!(k["id"], id);
+    assert_eq!(k["release"], "6.18.63-0-lts");
+    assert_eq!(k["initrd_sha256"], sha256_hex(&initrd));
+    assert_eq!(k["initrd_size"], initrd.len().to_string());
+    assert_eq!(k["initramfs"], "0123456789ab@00000000deadbeef");
+    assert!(!k.contains_key("seeded") && !k.contains_key("provisional"));
+    assert_eq!(
+        k["cmdline"],
         format!(
             "console=ttyS0 glassine.system=PARTUUID={} glassine.userdata=PARTUUID={} glassine.img={id}",
             system.2, userdata.2
         )
     );
-    assert_eq!(
-        fat::read::file(&vol, &format!("glassine/{id}/vmlinuz")).as_ref(),
-        Some(&c.src.files["kernel.img"])
-    );
-    assert_eq!(
-        fat::read::file(&vol, &format!("glassine/{id}/initrd")).as_ref(),
-        Some(&c.src.files["initramfs.img"])
-    );
-    let kr = String::from_utf8(fat::read::file(&vol, &format!("glassine/{id}/set.rec")).unwrap()).unwrap();
-    assert!(kr.contains("release=6.18.63-0-lts\n") && kr.contains("seeded=1\n"), "{kr}");
+    // the recovery image, in the form of a kernel set without an initrd
+    let rid = lr["recovery"].clone();
+    let rdir = format!("glassine/recovery/{rid}");
+    assert_eq!(fat::read::file(&vol, &format!("{rdir}/vmlinuz")).as_ref(), Some(&c.src.files["recovery.efi"]));
+    assert!(fat::read::file(&vol, &format!("{rdir}/initrd")).is_none());
+    let rr = fat::read::file(&vol, &format!("{rdir}/set.rec")).unwrap();
+    assert_eq!(lr["recovery_rec"], sha256_hex(&rr));
+    let r = pc_boot::parse_record(&rr).unwrap();
+    assert_eq!((r["initrd_sha256"].as_str(), r["initrd_size"].as_str()), ("", ""));
+    assert!(r["cmdline"].starts_with("console=ttyS0 quiet glassine.system=PARTUUID=") && r["cmdline"].ends_with(&format!("glassine.img={rid}")));
+    // the splash
+    assert_eq!(fat::read::file(&vol, "glassine/splash/default.gspl"), Some(splash_file()));
     // userdata: not formatted by the installer (boot 009)
     assert_eq!(d.sha(userdata.0, 4096), d.sha(DISK - 4096 * 2, 4096), "userdata's start is as it was: zero");
     // our entry: first, the others after it in their order and unchanged
@@ -731,6 +834,63 @@ fn a_power_cut_in_any_write_resumes_to_the_same_machine() {
     }
 }
 
+/// A cut while slot b of the loader record is written: the volume is whole
+/// and slot a is the one valid slot, the record in use; the resumed run
+/// ends as an uncut one.
+#[test]
+fn a_cut_in_the_loader_records_second_slot_leaves_the_first_valid() {
+    let (c, done) = reference(blank_machine, &[]);
+    let want = state(&done);
+    let boot = installed(&done, &c).boot;
+    let k = done
+        .log
+        .iter()
+        .rposition(|(d, o, l)| *d == 0 && *l == pc_boot::SLOT_BYTES && *o >= boot.0 && *o < boot.0 + boot.1)
+        .unwrap()
+        + 1;
+    let mut m = blank_machine();
+    m.faults.cut_at_write = Some(k);
+    let mut rec = record(&c);
+    let mut e = with_backup();
+    go(&c, &mut rec, &mut m, &mut e).expect_err("the cut stops the run");
+    let vol = m.disks[0].bytes(boot.0, boot.1);
+    let a = fat::read::file(&vol, "glassine/loader.a").expect("the volume is whole");
+    let b = fat::read::file(&vol, "glassine/loader.b").unwrap();
+    assert!(pc_boot::read_slot(&a).is_some());
+    assert!(pc_boot::read_slot(&b).is_none(), "half of slot b over zeros isn't valid");
+    let (which, keys, both) = pc_boot::record_in_use(&a, &b).unwrap();
+    assert!(which == 0 && !both && keys["seq"] == "1");
+    let mut m = m.restarted();
+    let mut rec = Record::parse(e.saved.as_ref().unwrap()).unwrap();
+    assert!(matches!(go(&c, &mut rec, &mut m, &mut e), Ok(Outcome::WaitingForAcceptance { .. })));
+    assert!(state(&m) == want);
+}
+
+/// A release without the board's configuration (and no assembled initrd),
+/// or with a splash the loader would skip, stops the run before any write.
+#[test]
+fn a_release_that_cant_make_the_boot_partition_stops_before_any_write() {
+    for spoil in ["board", "splash"] {
+        let mut m = blank_machine();
+        let mut c = case(&mut m.clone(), &[]);
+        let mut j: serde_json::Value = serde_json::from_slice(&c.src.files["release.json"]).unwrap();
+        if spoil == "board" {
+            j["artifacts"].as_object_mut().unwrap().remove("board");
+        } else {
+            let mut b = splash_file();
+            b[70] ^= 1;
+            j["artifacts"]["splash"]["sha256"] = sha256_hex(&b).into();
+            c.src.files.insert("default.gspl".into(), b);
+        }
+        c.src.files.insert("release.json".into(), serde_json::to_vec(&j).unwrap());
+        let mut rec = record(&c);
+        let mut e = with_backup();
+        let s = go(&c, &mut rec, &mut m, &mut e).unwrap_err();
+        assert!(s.why.contains(if spoil == "board" { "no board" } else { "payload CRC" }), "{s}");
+        assert!(m.log.is_empty(), "{spoil}: nothing is written");
+    }
+}
+
 #[test]
 fn a_cut_at_any_save_resumes_to_the_same_machine() {
     let (c, done) = reference(windows_machine, &[]);
@@ -769,7 +929,8 @@ fn a_write_that_reads_back_otherwise_stops_the_step_and_a_retry_finishes() {
         let s = match go(&c, &mut rec, &mut m, &mut e) {
             Err(s) => s,
             // a write a later one covers whole (the boot partition's
-            // cleared boot sector, rewritten last): nothing wrong is left
+            // cleared boot sector and slot b, rewritten last): nothing
+            // wrong is left
             Ok(_) => {
                 assert!(state(&m) == want, "corrupt write {k} went unnoticed and stayed");
                 overwritten += 1;
@@ -786,7 +947,7 @@ fn a_write_that_reads_back_otherwise_stops_the_step_and_a_retry_finishes() {
         assert!(matches!(r, Ok(Outcome::WaitingForAcceptance { .. })), "write {k}: {r:?}");
         assert!(state(&m) == want, "corrupt write {k}");
     }
-    assert!(overwritten <= 2, "{overwritten} of {disk_writes} corrupt writes went unnoticed");
+    assert!(overwritten <= 3, "{overwritten} of {disk_writes} corrupt writes went unnoticed");
 }
 
 #[test]

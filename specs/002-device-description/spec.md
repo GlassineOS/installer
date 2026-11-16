@@ -302,7 +302,7 @@ pinned to,
 ### What an installation does
 
 - **FR-019**: `[[artifacts]]` lists what the installation writes that doesn't come from the
-  device, by role (the base, the kernel, the initramfs a PC's kernel set starts with,
+  device, by role (the base, the kernel, the GlassineOS initramfs of a PC's kernel set,
   the boot loader, the recovery, the partition layout), never by version or address: the installer's release supplies each role and
   checks its integrity. A size is marked unknown until the release supplies it.
 - **FR-019a**: The installer's release has a manifest, a JSON object whose
@@ -330,7 +330,19 @@ pinned to,
   paths), rounded up to a whole MiB. A `kernel` that starts as a kernel set may also state `cmdline`, the
   command line it starts with before the installation adds its identities, and
   `release`, the kernel's release; a PC's `base` is of kind `btrfs-pool-image`, the
-  system partition's whole file system as one image.
+  system partition's whole file system as one image. For a PC's boot partition
+  (boot's [boot-partition.md](https://github.com/GlassineOS/boot/blob/main/docs/boot-partition.md))
+  the manifest also names, by role, the parts of the kernel set's initramfs: the CPU
+  microcode archives (`microcode` and roles `microcode-<name>`, taken in the byte order
+  of their file names), `board` (the board's `board.conf`, which the installer packs as
+  the board archive) and `boot-modules` (the kernel's boot-modules archive), after the
+  step's `initramfs` (which may state `identity`, recorded in the set's record). An
+  `initramfs` of kind `kernel-set-initrd` is the whole initramfs as the release
+  assembled it, and the release then names none of the parts; otherwise `board` is
+  required. `recovery` (with `cmdline` and `release`, and `recovery-initrd` where its
+  initramfs isn't built in) is the recovery image and `splash` the default splash; both
+  are written when the release has them, a splash only when it checks as the loader
+  checks it. The installer lists every role it will write for the person to confirm.
 - **FR-020**: `[[capabilities]]` states each capability the installed device has (choose a
   kernel, a one-shot trial boot, a recovery, keep the stock system, ...): `have`, `lack`, or
   `needs` (with what), each with `verified`. The ids are shared by all descriptions.
