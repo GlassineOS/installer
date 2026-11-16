@@ -4,3 +4,5 @@
 /.cargo-home
 /web/node_modules
 /web/pkg
+__pycache__/
+*.pyc
