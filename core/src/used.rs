@@ -111,7 +111,7 @@ fn bit_ranges(bits: &[u8], n: u64, first: u64, unit: u64, base: u64, out: &mut V
     while i < n {
         let byte = bits[(i / 8) as usize];
         // whole bytes at once where they are all set or all clear
-        if i % 8 == 0 && i + 8 <= n && (byte == 0 || byte == 0xff) {
+        if i.is_multiple_of(8) && i + 8 <= n && (byte == 0 || byte == 0xff) {
             match (byte, run) {
                 (0xff, None) => run = Some(i),
                 (0, Some(s)) => {
@@ -192,8 +192,7 @@ const EXT_INCOMPAT_64BIT: u32 = 0x80;
 const EXT_INCOMPAT_CSUM_SEED: u32 = 0x2000;
 /// filetype, extents, 64bit, mmp, flex_bg, ea_inode, dirdata, csum_seed,
 /// largedir, inline_data, encrypt, casefold
-const EXT_INCOMPAT_KNOWN: u32 =
-    0x2 | 0x40 | 0x80 | 0x100 | 0x200 | 0x400 | 0x1000 | 0x2000 | 0x4000 | 0x8000 | 0x10000 | 0x20000;
+const EXT_INCOMPAT_KNOWN: u32 = 0x2 | 0x40 | 0x80 | 0x100 | 0x200 | 0x400 | 0x1000 | 0x2000 | 0x4000 | 0x8000 | 0x10000 | 0x20000;
 const EXT_RO_SPARSE_SUPER: u32 = 0x1;
 const EXT_RO_GDT_CSUM: u32 = 0x10;
 const EXT_RO_METADATA_CSUM: u32 = 0x400;
@@ -259,7 +258,7 @@ fn ext(w: &mut Window) -> Result<Vec<(u64, u64)>, String> {
     let bpg = le32(&sb, 0x20) as u64;
     let ipg = le32(&sb, 0x28) as u64;
     let inode_size = if le32(&sb, 0x4c) >= 1 { le16(&sb, 0x58) as u64 } else { 128 };
-    if bpg == 0 || bpg != le32(&sb, 0x24) as u64 || bpg > 8 * bs || bpg % 8 != 0 || first > 1 || blocks <= first {
+    if bpg == 0 || bpg != le32(&sb, 0x24) as u64 || bpg > 8 * bs || !bpg.is_multiple_of(8) || first > 1 || blocks <= first {
         return full("an impossible group size");
     }
     if blocks.checked_mul(bs).is_none_or(|b| b > w.size) {
@@ -827,7 +826,7 @@ fn fat_entry(t: &[u8], bits: u64, c: u64) -> u32 {
     match bits {
         12 => {
             let x = le16(t, (c * 3 / 2) as usize);
-            (if c % 2 == 0 { x & 0xfff } else { x >> 4 }) as u32
+            (if c.is_multiple_of(2) { x & 0xfff } else { x >> 4 }) as u32
         }
         16 => le16(t, (c * 2) as usize) as u32,
         _ => le32(t, (c * 4) as usize) & 0x0fff_ffff,
@@ -837,7 +836,9 @@ fn fat_entry(t: &[u8], bits: u64, c: u64) -> u32 {
 fn fat(w: &mut Window) -> Result<Vec<(u64, u64)>, String> {
     let full = |why: &str| Err(format!("vfat: {why}: kept whole"));
     let head = read_vec(w, 0, 512)?;
-    let Some(p) = fat_bpb(&head, w.size) else { return full("an impossible boot sector") };
+    let Some(p) = fat_bpb(&head, w.size) else {
+        return full("an impossible boot sector");
+    };
     let entries_bytes = ((p.clusters + 2) * p.bits).div_ceil(8);
     if entries_bytes > p.fat_sectors * p.bps {
         return full("its FAT is too small for its clusters");
@@ -929,7 +930,7 @@ mod tests {
     fn bit_runs() {
         let mut v = vec![];
         bit_ranges(&[0b0000_0110, 0xff, 0x01], 20, 10, 4, 100, &mut v);
-        assert_eq!(v, vec![(100 + 11 * 4, 100 + 12 * 4 + 4 * 1), (100 + 18 * 4, 100 + 27 * 4)]);
+        assert_eq!(v, vec![(100 + 11 * 4, 100 + 13 * 4), (100 + 18 * 4, 100 + 27 * 4)]);
         assert_eq!(count_clear(&[0b0000_0110, 0xff, 0x01], 20), 20 - 2 - 8 - 1);
     }
 

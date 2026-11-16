@@ -165,14 +165,37 @@ texts the description provides.
 - **FR-009**: By default the plan backs up every disk it writes to as one full image per
   disk: the disk's partition table and all its partitions, so that any damage can be
   undone, not only what the plan replaces.
-  - Each image is stored compressed. It holds only the used blocks where the file system
-    lets the installer tell which those are, and every block elsewhere.
-  - Each image is verified by reading it back before the first write.
+  - Each image is stored compressed. It holds the partition table's copies, everything
+    outside the partitions, and every partition whole, except for the free space of the
+    file systems the installer reads (ext2/3/4, btrfs, NTFS, FAT12/16/32): of those it
+    holds the blocks their own allocation metadata marks as used. A file system it
+    doesn't read, or one whose metadata fails a check (a checksum, a free count, two
+    copies that must agree) or that wasn't shut down cleanly (a journal or log not yet
+    replayed, a volume marked dirty, Windows' Fast Startup), is held whole. When unsure,
+    the image holds more, never less.
+  - Blocks that read as zeros are recorded as zeros rather than stored.
+  - Each image is verified before the first write: the stored copy is read back and
+    compared with the disk read again, range by range.
+  - "Restoring the disk" (FR-009b) gives back the same file systems: every block that was
+    in use and every metadata block reads as it did, as do the partition table and
+    everything outside the partitions. The free space inside the file systems is not
+    preserved and may hold other bytes afterwards.
   - Each image is stored somewhere other than the disks the plan changes: the person's
     computer, the installer's removable media, or another disk the person chose.
   - Disks the plan doesn't write to aren't imaged, and stay untouched.
   - The plan shows, before the person confirms, each image's disk, its size and where it
     goes.
+- **FR-009b**: On a PC, the installer restores a backup made by FR-009 onto the disk it was
+  made of, or onto another disk of the same size and sector size, after the person
+  confirms it by name. It refuses a disk in use (a file system mounted, swap) or the disk
+  the backup is on.
+  - The whole stored copy is checked against its manifest before the first write.
+  - Each range is written only where the disk differs from it, then read back. The
+    primary partition table's region is written last.
+  - The firmware's boot entries and boot order the backup holds are put back. Boot
+    entries added since stay, outside the boot order.
+  - A restore that is cut off is run again and goes on where the disk still differs.
+  - Backups of the earlier format (the disk's every byte) are restored as well.
 - **FR-009a**: The backup can be switched off, on a PC and on a device, so that an
   installation also works with little free space. Switching it off is a choice of its own
   with its consequence stated (no way back to the maker's system, no repair from the
@@ -287,6 +310,37 @@ texts the description provides.
   values, stored off those disks (FR-009).
 - **Installation record**: what was installed, on what, with which versions.
 
+## The PC backup (an owned format, versioned)
+
+A PC backup is a folder:
+
+- `manifest.json`, written last: `backup_format` (2), `kind` (`pc`), the firmware's boot
+  settings file with its SHA-256, and for each disk its identity (index, size, logical
+  sector size, kind, model), its image's file name, the SHA-256 of the image's stream, and
+  what the image holds (bytes of data, bytes of zeros, free bytes left out, the number of
+  records, and for each partition its file system and whether it was held by its used
+  blocks or whole, with why).
+- `efivars.json`: the firmware's boot entries and boot order, name to hex.
+- `disk<N>.img.gz`: the image's stream, gzip-compressed. A stream longer than one file on
+  the backup's storage may be (FAT32: 4 GiB) goes on in `disk<N>.img.gz.1`, `.2`, …; the
+  files in that order are one compressed stream.
+
+The image's stream (integers little-endian):
+
+- a header: the bytes `GLIMG` and a zero byte, the image format (16 bits, 2), the disk's
+  size (64 bits), its logical sector size (32 bits);
+- records in increasing disk order, none overlapping, each a tag byte, an offset and a
+  length (64 bits each): `D` is followed by that many bytes and their SHA-256 (at most
+  16 MiB a record); `Z` by nothing, the range read as zeros;
+- an end record `E` whose offset field is the number of data bytes and whose length field
+  the number of records before it.
+
+A range no record names was free space of a file system. A restore writes every `D` and
+`Z` range and leaves the rest of the disk as it finds it. Format 1 (an earlier version of
+this installer) stored the disk's every byte as the stream, with no header, and the
+manifest's SHA-256 was the disk's; it has no `image` field. A change an older reader would
+misread raises `backup_format`.
+
 ## Success criteria
 
 - **SC-001**: People who have never used a command line install GlassineOS on a supported
@@ -296,8 +350,10 @@ texts the description provides.
   comparing the machine before and after.
 - **SC-003**: With an interruption injected after every step of the plan, every run ends
   in one of the three states of Scenario 4.
-- **SC-004**: Going back to stock restores every partition byte-identical to the full
-  backup.
+- **SC-004**: Going back to stock restores the partition table, everything outside the
+  partitions and every block in use or holding metadata byte-identical to the backup; every
+  file system checks clean and holds the same files with the same contents. Free space
+  inside the file systems is not part of this.
 - **SC-005**: The Note Air and a UEFI PC are installed by the same flow. Neither has a
   screen or check the other lacks, apart from the texts of their descriptions.
 

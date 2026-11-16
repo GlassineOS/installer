@@ -912,7 +912,10 @@ fn the_image_keeps_only_what_is_in_use_and_a_restore_brings_the_machine_back() {
         // A kept or replaced Windows: the install wrote only outside the old
         // file systems' used blocks or over partitions the image keeps whole.
         assert_eq!(disk_sha(&m), disk_sha(&before), "{choices:?}: the disk as it was");
-        assert_eq!(m.vars.get(&efivar::global_name("BootOrder")), before.vars.get(&efivar::global_name("BootOrder")));
+        assert_eq!(
+            m.vars.get(&efivar::global_name("BootOrder")),
+            before.vars.get(&efivar::global_name("BootOrder"))
+        );
         for (k, v) in &before.vars {
             assert_eq!(m.vars.get(k), Some(v), "{k}");
         }
@@ -928,14 +931,20 @@ fn the_image_keeps_only_what_is_in_use_and_a_restore_brings_the_machine_back() {
 fn a_restore_cut_at_any_write_is_run_again_and_ends_the_same() {
     let (m0, e0) = installed_with_backup(windows_machine, &[]);
     let mut m = m0.clone();
-    let mut e = Edge { backup: e0.backup.clone(), ..Default::default() };
+    let mut e = Edge {
+        backup: e0.backup.clone(),
+        ..Default::default()
+    };
     restore(&mut m, &mut e).unwrap();
     let (want, writes) = (state(&m), m.writes);
     assert!(writes > 3, "{writes} writes");
     for k in 1..=writes {
         let mut m = m0.clone();
         m.faults.cut_at_write = Some(k);
-        let mut e = Edge { backup: e0.backup.clone(), ..Default::default() };
+        let mut e = Edge {
+            backup: e0.backup.clone(),
+            ..Default::default()
+        };
         restore(&mut m, &mut e).expect_err("the cut stops the restore");
         let mut m = m.restarted();
         restore(&mut m, &mut e).unwrap_or_else(|s| panic!("cut at write {k}, then: {s}"));
@@ -951,7 +960,10 @@ fn a_restore_write_that_reads_back_otherwise_stops_and_a_rerun_finishes() {
     let (m0, e0) = installed_with_backup(windows_machine, &[]);
     let mut m = m0.clone();
     m.faults.corrupt_write = Some(2);
-    let mut e = Edge { backup: e0.backup.clone(), ..Default::default() };
+    let mut e = Edge {
+        backup: e0.backup.clone(),
+        ..Default::default()
+    };
     let s = restore(&mut m, &mut e).unwrap_err();
     assert!(s.contains("read back otherwise"), "{s}");
     m.faults = Faults::default();
@@ -963,7 +975,10 @@ fn a_restore_write_that_reads_back_otherwise_stops_and_a_rerun_finishes() {
 fn a_spoiled_backup_is_refused_before_any_write() {
     for spoil in ["image", "manifest"] {
         let (mut m, e0) = installed_with_backup(windows_machine, &[]);
-        let mut e = Edge { backup: e0.backup.clone(), ..Default::default() };
+        let mut e = Edge {
+            backup: e0.backup.clone(),
+            ..Default::default()
+        };
         let b = e.backup.as_mut().unwrap();
         if spoil == "image" {
             let img = b.get_mut("disk0.img").unwrap();

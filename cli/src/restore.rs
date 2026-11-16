@@ -21,7 +21,10 @@ pub fn restore_cmd(args: &[String]) -> Result<ExitCode, String> {
     let backup = PathBuf::from(o.one("--backup").ok_or(format!("restore needs --backup DIR\n\n{USAGE}"))?);
     let root = PathBuf::from(o.one("--root").map(String::as_str).unwrap_or("/"));
     let disk = match o.one("--disk") {
-        Some(d) => Some(d.parse::<u32>().map_err(|_| format!("--disk {d}: a disk's number (as inspect --pc lists it)"))?),
+        Some(d) => Some(
+            d.parse::<u32>()
+                .map_err(|_| format!("--disk {d}: a disk's number (as inspect --pc lists it)"))?,
+        ),
         None => None,
     };
     run(&root, &backup, disk)
@@ -44,7 +47,10 @@ fn run(root: &Path, backup: &Path, disk: Option<u32>) -> Result<ExitCode, String
     let target = disk.unwrap_or(bd.disk.index);
     let abs = std::fs::canonicalize(backup).map_err(|e| format!("{}: {e}", backup.display()))?;
     if glassine_installer_pc::disk_of(root, &abs) == Some(target) {
-        return Err(format!("the backup ({}) is on disk {target}, the disk it would be written to", backup.display()));
+        return Err(format!(
+            "the backup ({}) is on disk {target}, the disk it would be written to",
+            backup.display()
+        ));
     }
     let mut m = LinuxMachine::new(root, target)?;
     let now = m
@@ -93,7 +99,11 @@ fn run(root: &Path, backup: &Path, disk: Option<u32>) -> Result<ExitCode, String
                 "restored: {} bytes written, {} already in place; boot settings written: {}",
                 r.written_bytes,
                 r.same_bytes,
-                if r.variables_written.is_empty() { "none".to_string() } else { r.variables_written.join(", ") }
+                if r.variables_written.is_empty() {
+                    "none".to_string()
+                } else {
+                    r.variables_written.join(", ")
+                }
             );
             Ok(ExitCode::SUCCESS)
         }

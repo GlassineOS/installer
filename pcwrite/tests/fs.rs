@@ -26,7 +26,17 @@ use std::process::Command;
 
 const DISK: u64 = 512 * MIB;
 const TOOLS: &[&str] = &[
-    "mkfs.fat", "fsck.fat", "mcopy", "mkfs.ext4", "e2fsck", "debugfs", "mkfs.btrfs", "btrfs", "mkntfs", "ntfscp", "ntfscat",
+    "mkfs.fat",
+    "fsck.fat",
+    "mcopy",
+    "mkfs.ext4",
+    "e2fsck",
+    "debugfs",
+    "mkfs.btrfs",
+    "btrfs",
+    "mkntfs",
+    "ntfscp",
+    "ntfscat",
     "ntfsfix",
 ];
 

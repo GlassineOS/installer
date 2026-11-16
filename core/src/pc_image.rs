@@ -183,9 +183,8 @@ fn rec(tag: u8, off: u64, len: u64) -> [u8; REC] {
 }
 
 fn is_zero(b: &[u8]) -> bool {
-    let w = b.chunks_exact(8);
-    let rest = w.remainder();
-    w.into_iter().all(|c| u64::from_ne_bytes(c.try_into().unwrap()) == 0) && rest.iter().all(|x| *x == 0)
+    let (words, rest) = b.as_chunks::<8>();
+    words.iter().all(|c| u64::from_ne_bytes(*c) == 0) && rest.iter().all(|x| *x == 0)
 }
 
 /// Writes the image of `disk` into the stored file `file` and checks it:
@@ -429,7 +428,11 @@ impl Parser {
             if b.len() < REC {
                 break;
             }
-            let (tag, off, len) = (b[0], u64::from_le_bytes(b[1..9].try_into().unwrap()), u64::from_le_bytes(b[9..17].try_into().unwrap()));
+            let (tag, off, len) = (
+                b[0],
+                u64::from_le_bytes(b[1..9].try_into().unwrap()),
+                u64::from_le_bytes(b[9..17].try_into().unwrap()),
+            );
             if tag == b'E' {
                 self.end = Some((off, len));
                 used += REC;
@@ -511,7 +514,11 @@ pub fn manifest<E: PcEdge>(edge: &mut E) -> Result<(BackupManifest, String), Str
 }
 
 fn parser_for(bd: &BackupDisk, format: i64) -> Parser {
-    if format == 1 { Parser::v1(bd.disk.size) } else { Parser::new(bd.disk.size, bd.disk.sector) }
+    if format == 1 {
+        Parser::v1(bd.disk.size)
+    } else {
+        Parser::new(bd.disk.size, bd.disk.sector)
+    }
 }
 
 /// Checks the whole stored copy of one disk against its manifest entry.
