@@ -67,7 +67,9 @@ async function openSession(route, q) {
   if (machine) {
     s.report = await records.inspect(machine);
     const rec = s.report.recognition;
-    if (s.report.supported) s.plan = await records.plan(machine, input);
+    // A recognised machine has a plan, also when the plan is refused (Secure Boot on, a disk
+    // too small): the plan screen then gives the reasons.
+    if (s.report.supported || (rec.result === 'match' && s.report.plan)) s.plan = await records.plan(machine, input);
     // The description names the machine only when it matched; a candidate's texts still say
     // how to reach the mode it needs.
     const own = (s.plan && s.plan.description) || (rec.result === 'match' ? rec.device : null);

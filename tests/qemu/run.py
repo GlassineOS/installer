@@ -15,13 +15,22 @@ plan with --pc and prints their records. The host asserts:
   installer's run only);
 - the general PC description fits; every disk and system is listed; the
   installer's own disk is named and refused as a target; a disk too small for
-  the release's least system partition (the release manifest fixture on the
-  stick) is refused with the space it lacks;
-- a control run that writes one disk byte and one variable is caught.
+  GlassineOS's partitions (the description's sizes; the release manifest
+  fixture on the stick states a least that fits them) is refused with the
+  space it lacks;
+- a control run that writes one disk byte and one variable is caught;
+- with Secure Boot on (OVMF's Secure Boot build, a key made for the run
+  enrolled, the guest's kernel signed with it) the check reads it as on and
+  every plan is refused with the reason and how to switch it off, writing
+  nothing (boot 010 FR-036, SC-016); without it (the other cases) it reads off;
+- the same firmware refuses to start an unsigned program from the stick and
+  starts the signed one (SC-016: Secure Boot on starts no unsigned medium).
 
-Needs: qemu-system-x86_64, OVMF, sgdisk, mkfs.ext4, mkfs.fat, mcopy,
-unsquashfs, sha256sum. Downloads (pinned, hash-checked) go to --cache.
-Runs without KVM if there is none (slower)."""
+Needs: qemu-system-x86_64, OVMF (with its Secure Boot build for those cases),
+sgdisk, mkfs.ext4, mkfs.fat, mcopy, mmd, unsquashfs, openssl, sbsign,
+virt-fw-vars. Downloads (pinned, hash-checked) go to --cache. The keys are
+made in --work for each run and never kept. Runs without KVM if there is none
+(slower)."""
 
 import argparse
 import hashlib
@@ -34,6 +43,7 @@ import sys
 import threading
 import time
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -51,6 +61,14 @@ FILES = {
 }
 # Modules the guest loads that the initramfs lacks; their dependencies come too.
 MODULES = ["sd_mod", "nvme", "efivarfs", "usb-storage", "xhci-pci", "virtio_blk", "vfat"]
+
+# OVMF's Secure Boot build: it needs SMM, and an enrolled key to enforce.
+OVMF_SECBOOT_CANDIDATES = [
+    ("/usr/share/OVMF/OVMF_CODE_4M.secboot.fd", "/usr/share/OVMF/OVMF_VARS_4M.fd"),
+    ("/usr/share/edk2/x64/OVMF_CODE.secboot.4m.fd", "/usr/share/edk2/x64/OVMF_VARS.4m.fd"),
+]
+# The owner GUID the run's key is enrolled under (any GUID will do).
+KEY_OWNER = "6b2b5e1c-1f3e-4b55-9a5e-2c4f1d5e7a10"
 
 OVMF_CANDIDATES = [
     ("/usr/share/OVMF/OVMF_CODE_4M.fd", "/usr/share/OVMF/OVMF_VARS_4M.fd"),
@@ -200,8 +218,14 @@ def make_blank(p: Path, size: int):
     sparse(p, size)
 
 
+# The disks that take GlassineOS have its 26 GiB free: the boot (2 GiB) and
+# system (16 GiB) partitions and userdata's least (8 GiB), as
+# devices/uefi-pc.toml sizes them.
+NEEDS = 26 * GIB
+
+
 def make_linux(p: Path, work: Path):
-    sparse(p, 24 * GIB)
+    sparse(p, 40 * GIB)
     run("sgdisk", "-n1:1MiB:+512MiB", "-t1:ef00", "-c1:EFI system partition", "-n2:0:+8GiB", "-t2:8304", "-c2:root", p)
     off, size = part_start(p, 1)
     run("mkfs.fat", "-F", "32", "--offset", off // 512, p, size // 1024)
@@ -221,7 +245,7 @@ def make_linux(p: Path, work: Path):
 
 
 def make_windows(p: Path):
-    sparse(p, 24 * GIB)
+    sparse(p, 40 * GIB)
     run(
         "sgdisk",
         "-n1:1MiB:+100MiB", "-t1:ef00", "-c1:EFI system partition",
@@ -248,19 +272,23 @@ def make_stick(p: Path, binary: Path):
 
 # Each disk: (file, how QEMU attaches it, its size, what is on it).
 CASES = {
-    "blank": [("nvme", "blank16")],
+    "blank": [("nvme", "blank32")],
     "linux": [("virtio", "linux")],
     "windows": [("sata", "windows")],
     "small": [("virtio", "small")],
-    "two-disks": [("nvme", "linux"), ("sata", "blank16")],
-    "control": [("virtio", "blank16")],
+    "two-disks": [("nvme", "linux"), ("sata", "blank32")],
+    "control": [("virtio", "blank32")],
+    "secure-boot-on": [("sata", "windows")],
+    "secure-boot-medium": [],
 }
+# The cases on OVMF's Secure Boot build, with the run's key enrolled.
+SECURE = {"secure-boot-on", "secure-boot-medium"}
 KIND = {"nvme": "nvme", "virtio": "virtio", "sata": "sata"}
 
 
 def build_disk(what: str, p: Path, work: Path):
-    if what == "blank16":
-        make_blank(p, 16 * GIB)
+    if what == "blank32":
+        make_blank(p, 32 * GIB)
     elif what == "small":
         make_blank(p, 4 * GIB)
     elif what == "linux":
@@ -269,10 +297,39 @@ def build_disk(what: str, p: Path, work: Path):
         make_windows(p)
 
 
+def digest(p: Path) -> str:
+    """A sha256 of the file's bytes that reads only its data: its size, then
+    each data region's offset and bytes. The holes of a sparse file read as
+    zeros, so equal digests mean equal bytes (a write, even of zeros into a
+    hole, changes the regions and so the digest)."""
+    h = hashlib.sha256()
+    with open(p, "rb") as f:
+        size = os.fstat(f.fileno()).st_size
+        h.update(b"size %d\n" % size)
+        pos = 0
+        while pos < size:
+            try:
+                start = os.lseek(f.fileno(), pos, os.SEEK_DATA)
+            except OSError:
+                break  # no data after pos
+            end = os.lseek(f.fileno(), start, os.SEEK_HOLE)
+            h.update(b"data %d %d\n" % (start, end))
+            f.seek(start)
+            left = end - start
+            while left:
+                b = f.read(min(left, 8 * MIB))
+                if not b:
+                    break
+                h.update(b)
+                left -= len(b)
+            pos = end
+    return h.hexdigest()
+
+
 def sha(paths):
-    """sha256 of each file, in parallel."""
-    procs = {p: subprocess.Popen(["sha256sum", str(p)], stdout=subprocess.PIPE, text=True) for p in paths}
-    return {p: pr.communicate()[0].split()[0] for p, pr in procs.items()}
+    """The digest of each file, in parallel."""
+    with ThreadPoolExecutor(max_workers=max(1, len(paths))) as ex:
+        return dict(zip(paths, ex.map(digest, paths)))
 
 
 # ---- one machine ----------------------------------------------------------------
@@ -294,7 +351,8 @@ class Guest:
         self.lines.put(None)
 
     def until(self, marker, timeout):
-        """The lines before the one starting with `marker`."""
+        """The lines up to the first holding `marker` (or one of a tuple)."""
+        markers = (marker,) if isinstance(marker, str) else marker
         got, end = [], time.monotonic() + timeout
         while True:
             try:
@@ -307,7 +365,7 @@ class Guest:
                 raise RuntimeError(f"no {marker} within {timeout} s (or QEMU ended)")
             got.append(line)
             # Markers can follow the echo of the host's line or kernel text.
-            if marker in line:
+            if any(m in line for m in markers):
                 return got
             if time.monotonic() > end:
                 raise RuntimeError(f"no {marker} within {timeout} s")
@@ -346,19 +404,29 @@ def records(lines):
     return out
 
 
-def qemu_cmd(args, kernel, initrd, vars_fd, disks, stick, mode):
+def qemu_cmd(args, kernel, initrd, vars_fd, disks, stick, mode, secure=False):
+    code = args.ovmf_secboot_code if secure else args.ovmf_code
     cmd = [
         "qemu-system-x86_64",
-        "-machine", "q35",
+        "-machine", "q35,smm=on" if secure else "q35",
         "-m", "1024",
         "-smp", "2",
         "-accel", "kvm", "-accel", "tcg",
         "-display", "none", "-monitor", "none", "-serial", "stdio",
         "-no-reboot",
-        "-drive", f"if=pflash,format=raw,unit=0,readonly=on,file={args.ovmf_code}",
+        "-drive", f"if=pflash,format=raw,unit=0,readonly=on,file={code}",
         "-drive", f"if=pflash,format=raw,unit=1,file={vars_fd}",
-        "-kernel", str(kernel), "-initrd", str(initrd),
-        "-append", f"console=ttyS0 quiet loglevel=1 panic=-1 glassine.disks={len(disks) + 1} glassine.mode={mode}",
+    ]
+    if secure:
+        cmd += ["-global", "driver=cfi.pflash01,property=secure,value=on"]
+    if kernel:
+        cmd += [
+            "-kernel", str(kernel), "-initrd", str(initrd),
+            "-append", f"console=ttyS0 quiet loglevel=1 panic=-1 glassine.disks={len(disks) + 1} glassine.mode={mode}",
+        ]
+    else:
+        cmd += ["-net", "none"]
+    cmd += [
         "-device", "qemu-xhci,id=xhci",
         "-drive", f"if=none,id=stick,format=raw,file={stick}",
         "-device", "usb-storage,bus=xhci.0,drive=stick,removable=on",
@@ -375,8 +443,62 @@ def qemu_cmd(args, kernel, initrd, vars_fd, disks, stick, mode):
     return cmd
 
 
-def case(name, args, boot, work: Path):
+def secure_boot(args, files, work: Path) -> dict:
+    """A key made for this run, a variable store with it enrolled (PK, KEK
+    and db) and Secure Boot on, and the guest's kernel signed with it."""
+    k = work / "secure-boot"
+    if k.exists():
+        shutil.rmtree(k)
+    k.mkdir(parents=True)
+    key, cert = k / "db.key", k / "db.pem"
+    run("openssl", "req", "-new", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", key, "-out", cert,
+        "-subj", "/CN=GlassineOS installer CI (made for one run)", "-days", "1", stderr=subprocess.DEVNULL)
+    vars_fd = k / "OVMF_VARS.secure.fd"
+    run("virt-fw-vars", "-i", args.ovmf_secboot_vars, "-o", vars_fd,
+        "--set-pk", KEY_OWNER, cert, "--add-kek", KEY_OWNER, cert, "--add-db", KEY_OWNER, cert, "--sb",
+        stderr=subprocess.DEVNULL)
+    signed = k / "vmlinuz-signed"
+    run("sbsign", "--key", key, "--cert", cert, "--output", signed, files["vmlinuz-virt"], stderr=subprocess.DEVNULL)
+    return {"vars": vars_fd, "signed": signed, "unsigned": files["vmlinuz-virt"]}
+
+
+def medium(args, sb, work: Path):
+    """SC-016: with Secure Boot on, the firmware starts the stick's program
+    only when it is signed with an enrolled key. Each stick holds Alpine's
+    kernel as the removable-media program (\\EFI\\BOOT\\BOOTX64.EFI), unsigned
+    and signed, and the firmware's own boot messages tell what it did."""
+    print("case secure-boot-medium:", flush=True)
+    cw = work / "secure-boot-medium"
+    if cw.exists():
+        shutil.rmtree(cw)
+    cw.mkdir(parents=True)
+    for which in ("unsigned", "signed"):
+        stick = cw / f"stick-{which}.img"
+        sparse(stick, 64 * MIB)
+        run("sgdisk", "-n1:1MiB:0", "-t1:ef00", stick)
+        off, size = part_start(stick, 1)
+        run("mkfs.fat", "-F", "32", "--offset", off // 512, stick, size // 1024)
+        run("mmd", "-i", f"{stick}@@{off}", "::/EFI", "::/EFI/BOOT")
+        run("mcopy", "-i", f"{stick}@@{off}", sb[which], "::/EFI/BOOT/BOOTX64.EFI")
+        vars_fd = cw / f"OVMF_VARS-{which}.fd"
+        shutil.copyfile(sb["vars"], vars_fd)
+        g = Guest(qemu_cmd(args, None, None, vars_fd, [], stick, None, secure=True), cw / f"serial-{which}.log")
+        try:
+            # The firmware's boot manager says which it did with the stick.
+            lines = g.until(("starting Boot", "Access Denied"), args.boot_timeout)
+        finally:
+            g.p.kill()
+            g.p.wait()
+        said = [x for x in lines if "BdsDxe" in x]
+        if which == "unsigned":
+            check(any("failed to load" in x and "Access Denied" in x for x in said), f"the unsigned program isn't started: {said}")
+        else:
+            check(any("starting Boot" in x for x in said) and not any("Access Denied" in x for x in said), f"the signed one is: {said}")
+
+
+def case(name, args, boot, work: Path, sb=None):
     print(f"case {name}:", flush=True)
+    secure = name in SECURE
     cw = work / name
     if cw.exists():
         shutil.rmtree(cw)
@@ -389,12 +511,13 @@ def case(name, args, boot, work: Path):
     stick = cw / "stick.img"
     make_stick(stick, args.binary)
     vars_fd = cw / "OVMF_VARS.fd"
-    shutil.copyfile(args.ovmf_vars, vars_fd)
+    shutil.copyfile(sb["vars"] if secure else args.ovmf_vars, vars_fd)
+    kernel = sb["signed"] if secure else boot["kernel"]
     images = [p for _, p in disks] + [stick]
     before_boot = sha(images)
 
     mode = "control" if name == "control" else "check"
-    g = Guest(qemu_cmd(args, boot["kernel"], boot["initrd"], vars_fd, disks, stick, mode), cw / "serial.log")
+    g = Guest(qemu_cmd(args, kernel, boot["initrd"], vars_fd, disks, stick, mode, secure), cw / "serial.log")
     try:
         g.until("@@READY", args.boot_timeout)
         at_ready = sha(images + [vars_fd])
@@ -442,7 +565,8 @@ def case(name, args, boot, work: Path):
     check(bool(sticks) and own.get("index") == sticks[0]["index"] and own.get("by") == "executable", f"the installer's own disk is named: {own}")
     fw = facts.get("firmware", {})
     check(fw.get("kind") == "uefi" and fw.get("variables") == "readable", f"UEFI with a readable variable store: {fw.get('kind')}, {fw.get('variables')}")
-    check(fw.get("secure_boot") == "off", f"secure boot: {fw.get('secure_boot')}")
+    want_sb = "on" if secure else "off"
+    check(fw.get("secure_boot") == want_sb, f"secure boot {want_sb}: {fw.get('secure_boot')}")
     check(facts.get("cpu", {}).get("arch") == "x86-64", "x86-64")
     by_kind = {}
     for d in st["disks"]:
@@ -452,6 +576,20 @@ def case(name, args, boot, work: Path):
         check(KIND[bus] in by_kind, f"a {KIND[bus]} disk is listed")
 
     chk = rec.get("check", (None, None))[1] or {}
+    if secure:
+        # Every plan is refused for Secure Boot alone (a developer's too),
+        # saying why and how to switch it off; the check report says so.
+        sb_reason = lambda p: [r for r in p.get("reasons", []) if r.startswith("Secure Boot is on")]
+        plans = {k: v[1] or {} for k, v in rec.items() if k == "plan" or k.startswith("plan-disk")}
+        for k, p in sorted(plans.items()):
+            if p.get("status") == "refused" and any("the installer runs from" in r for r in p.get("reasons", [])):
+                continue  # the stick: refused for that too
+            r = sb_reason(p)
+            check(p.get("status") == "refused" and bool(r), f"{k} refused for Secure Boot: {p.get('status')} {p.get('reasons')}")
+            check(bool(r) and "set Secure Boot to Disabled" in r[0] and "set-up" in r[0], f"{k} says how to switch it off")
+        check(chk.get("supported") is False and any(r.startswith("Secure Boot is on") for r in chk.get("reasons", [])), "the check report gives the reason")
+        check(chk.get("machine", {}).get("firmware", {}).get("secure_boot") == "on", "the check report shows Secure Boot on")
+        return
     check(chk.get("recognition", {}).get("device") == "uefi-pc", f"the general PC description fits: {chk.get('recognition', {}).get('result')}")
     systems = facts.get("systems", [])
     want_systems = sum(1 for _, w in CASES[name] if w in ("linux", "windows"))
@@ -477,9 +615,11 @@ def case(name, args, boot, work: Path):
         p = rec.get(f"plan-disk{d['index']}", (None, None))[1] or {}
         sp = (p.get("space") or {}).get("disk") or {}
         if what == "small":
-            # The boot partition's fixed 1 GiB and the release's least system partition.
+            # The fixed boot and system partitions and userdata's least; the
+            # release's least system partition fits the fixed one.
             least = json.loads(RELEASE.read_text())["artifacts"]["base"]["min_partition_bytes"]
-            needs, free = GIB + least, d["free"][0] if d["free"] else 0
+            assert least <= 16 * GIB
+            needs, free = NEEDS, d["free"][0] if d["free"] else 0
             check(p.get("status") == "refused", f"the small disk is refused: {p.get('reasons')}")
             check(sp.get("lacks") == needs - free and sp.get("lacks", 0) > 0, f"with the space it lacks: {sp}")
             check(any("too small" in r and "lacks" in r for r in p.get("reasons", [])), "the reason says so")
@@ -506,6 +646,8 @@ def main():
     ap.add_argument("--cache", type=Path, required=True, help="where the downloads are kept")
     ap.add_argument("--ovmf-code", type=Path)
     ap.add_argument("--ovmf-vars", type=Path)
+    ap.add_argument("--ovmf-secboot-code", type=Path, help="OVMF's Secure Boot build (needs SMM)")
+    ap.add_argument("--ovmf-secboot-vars", type=Path, help="an empty variable store for it")
     ap.add_argument("--boot-timeout", type=int, default=600)
     ap.add_argument("--run-timeout", type=int, default=600)
     ap.add_argument("cases", nargs="*", default=list(CASES))
@@ -517,16 +659,31 @@ def main():
                 break
         else:
             sys.exit("no OVMF found: pass --ovmf-code and --ovmf-vars")
-    for tool in ["qemu-system-x86_64", "sgdisk", "mkfs.ext4", "mkfs.fat", "mcopy", "unsquashfs", "sha256sum"]:
+    secure = SECURE & set(args.cases)
+    if secure and not args.ovmf_secboot_code:
+        for c, v in OVMF_SECBOOT_CANDIDATES:
+            if Path(c).exists() and Path(v).exists():
+                args.ovmf_secboot_code, args.ovmf_secboot_vars = Path(c), Path(v)
+                break
+        else:
+            sys.exit("no OVMF Secure Boot build found: pass --ovmf-secboot-code and --ovmf-secboot-vars")
+    tools = ["qemu-system-x86_64", "sgdisk", "mkfs.ext4", "mkfs.fat", "mcopy", "unsquashfs"]
+    if secure:
+        tools += ["mmd", "openssl", "sbsign", "virt-fw-vars"]
+    for tool in tools:
         if not shutil.which(tool):
             sys.exit(f"{tool} is missing")
     print("kvm:", "yes" if os.access("/dev/kvm", os.R_OK | os.W_OK) else "no (tcg, slow)", flush=True)
     args.work.mkdir(parents=True, exist_ok=True)
     files = fetch(args.cache)
     boot = {"kernel": files["vmlinuz-virt"], "initrd": initramfs(files, args.work)}
+    sb = secure_boot(args, files, args.work) if secure else None
     for name in args.cases:
         try:
-            case(name, args, boot, args.work)
+            if name == "secure-boot-medium":
+                medium(args, sb, args.work)
+            else:
+                case(name, args, boot, args.work, sb)
         except Exception as e:
             check(False, f"case {name}: {e}")
         for p in (args.work / name).glob("*.img"):

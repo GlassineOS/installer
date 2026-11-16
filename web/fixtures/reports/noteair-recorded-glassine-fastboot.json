@@ -159,6 +159,7 @@
     "the install state needs the device in glassine",
     "the install state can't be told in this mode; restart the device into glassine, or say which state it is in"
   ],
+  "notes": [],
   "capabilities": [
     {
       "id": "start-kernel",

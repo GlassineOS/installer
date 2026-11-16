@@ -104,8 +104,10 @@ export const GOLDEN_PLANS = {
   'pc-windows-replace-no-backup': { machine: 'pc-windows', input: { choices: { 'systems.1': 'replace', backup: 'off' }, developer: true } },
   'pc-two-disks-first': { machine: 'pc-two-disks', input: { developer: true } },
   'pc-two-disks-second': { machine: 'pc-two-disks', input: { choices: { 'target-disk': 'disk1' }, developer: true } },
-  'pc-small-disk-no-release': { machine: 'pc-small-disk', input: { developer: true } },
-  'pc-release-small-disk': { machine: 'pc-small-disk', input: { developer: true, release: 'base-8gib' } },
+  'pc-small-disk': { machine: 'pc-small-disk', input: { developer: true, release: 'base-8gib' } },
+  'pc-release-too-big': { machine: 'pc-windows', input: { developer: true, release: 'pc-too-big' } },
+  'pc-secure-boot-on': { machine: 'pc-secure-boot-on', input: { developer: true } },
+  'pc-secure-boot-unknown': { machine: 'pc-secure-boot-unknown', input: { developer: true } },
   'noteair-release-too-big': { machine: 'noteair-stock-fastboot', input: { hardware: { 'emergency-cable': true }, developer: true, release: 'base-8gib' } },
   'noteair-developer': { machine: 'noteair-stock-fastboot', input: { developer: true } },
   'noteair-developer-cable-yes': { machine: 'noteair-stock-fastboot', input: { hardware: { 'emergency-cable': true }, developer: true } },
@@ -115,7 +117,7 @@ export const GOLDEN_PLANS = {
 export const REPORTS = [
   'noteair-stock-fastboot', 'noteair-stock-adb', 'noteair-prepared-fastboot', 'noteair-conflict-fastboot',
   'unknown-fastboot', 'pc-windows', 'pc-windows-other-model', 'pc-two-disks', 'noteair-recorded-glassine-fastboot',
-  'pc-small-disk',
+  'pc-small-disk', 'pc-secure-boot-on', 'pc-secure-boot-unknown',
 ];
 
 const cache = new Map();

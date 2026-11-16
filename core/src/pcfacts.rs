@@ -169,6 +169,8 @@ pub struct EfiVars {
     /// `none`, `not-mounted` or `readable`.
     pub store: String,
     pub vars: Vec<(String, Vec<u8>)>,
+    /// Variables the store lists that couldn't be read (same names as `vars`).
+    pub unreadable: Vec<String>,
 }
 
 impl EfiVars {
@@ -176,6 +178,37 @@ impl EfiVars {
         let full = format!("{name}-{}", efivar::GLOBAL);
         self.vars.iter().find(|(n, _)| *n == full).map(|(_, v)| v.as_slice())
     }
+
+    /// A global one-byte flag: `Ok(None)` when the store doesn't have it,
+    /// `Err` when it has it but it couldn't be read or isn't a flag.
+    fn global_flag(&self, name: &str) -> Result<Option<bool>, ()> {
+        let full = format!("{name}-{}", efivar::GLOBAL);
+        if self.unreadable.contains(&full) {
+            return Err(());
+        }
+        match self.global(name) {
+            None => Ok(None),
+            Some(b) => efivar::flag(b).map(Some).ok_or(()),
+        }
+    }
+}
+
+/// Secure Boot's state from the store (boot 010 FR-036): `on` while the
+/// firmware enforces it (`SecureBoot` = 1); `setup` when it doesn't and has
+/// no platform key (`SetupMode` = 1: it starts any loader until keys are
+/// enrolled); `off` otherwise, also when the firmware has no `SecureBoot`
+/// variable (a firmware without Secure Boot). `None` (unknown) when the
+/// store can't be read or `SecureBoot` can't be.
+pub fn secure_boot(v: &EfiVars) -> Option<String> {
+    if v.store != "readable" {
+        return None;
+    }
+    let state = match v.global_flag("SecureBoot").ok()? {
+        Some(true) => "on",
+        _ if v.global_flag("SetupMode") == Ok(Some(true)) => "setup",
+        _ => "off",
+    };
+    Some(state.into())
 }
 
 /// The firmware's facts: UEFI (with what its variables say) or not.
@@ -189,17 +222,7 @@ pub fn firmware(uefi: bool, v: &EfiVars) -> (Firmware, Vec<efivar::LoadOption>) 
             vec![],
         );
     }
-    let readable = v.store == "readable";
-    let secure_boot = readable.then(|| {
-        if v.global("SetupMode").and_then(efivar::flag) == Some(true) {
-            "setup"
-        } else if v.global("SecureBoot").and_then(efivar::flag) == Some(true) {
-            "on"
-        } else {
-            "off"
-        }
-        .to_string()
-    });
+    let secure_boot = secure_boot(v);
     let mut entries = Vec::new();
     let mut options = Vec::new();
     let suffix = format!("-{}", efivar::GLOBAL);

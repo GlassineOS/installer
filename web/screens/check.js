@@ -2,7 +2,8 @@
 // Check: what the machine is, its state, what it can do with GlassineOS, what an installation
 // would do. From the check report; the plan record, where there is one, for the details.
 // The report decides the variant: supported, not supported (no description matches), signals
-// that contradict, or a machine that has to be reached in another mode to be recognised.
+// that contradict, a machine that has to be reached in another mode to be recognised, or a
+// recognised machine whose plan is refused as it is (Secure Boot on, a disk too small).
 
 import { html, Admonition, Actions, Page, Caps, CapRow, Table, Cross, Owed, saveJson } from '../lib/parts.js';
 import { CAPABILITY, CAPABILITY_STATUS, STATE, CONNECTION, MODE, cap, list, human } from '../lib/words.js';
@@ -59,6 +60,7 @@ function Supported({ s }) {
   const r = s.report, p = s.plan, st = STATE[r.recognition.state];
   const e = p && erase(s);
   return html`
+    ${(r.notes || []).length ? html`<${Admonition} label="Good to know" id="check-notes">${r.notes.map((x) => html`<p>${x}</p>`)}</${Admonition}>` : null}
     <section class="ins-stack">
       <h2 class="ins-h2">Its state now</h2>
       <div class="ins-card ins-card--strong"><span class="ins-card__title">${st ? st.name : r.recognition.state}</span><p>${st ? st.body : ''}</p></div>
@@ -119,6 +121,18 @@ function NotSupported({ s }) {
     </section><${ShareReport} s=${s} />`;
 }
 
+// Recognised, with a plan that is refused as the machine is: the core's reasons, each with its
+// way out (spec 001 FR-016b: Secure Boot on; a disk too small).
+function Refused({ s }) {
+  const r = s.report;
+  return html`<section class="ins-stack">
+    <${Admonition} kind="warning" seal="G" label="Can’t be installed as it is" title="What has to change first" id="check-refused">
+      <ul class="ins-stack">${r.reasons.map((x) => html`<li>${cap(x)}.</li>`)}</ul>
+    </${Admonition}>
+    ${(r.notes || []).length ? html`<${Admonition} label="Good to know" id="check-notes">${r.notes.map((x) => html`<p>${x}</p>`)}</${Admonition}>` : null}
+  </section>`;
+}
+
 // Recognised only once it is reached in another mode (or its state only there).
 function OtherMode({ s }) {
   const rec = s.report.recognition, d = s.candidate, T = d ? d.texts : null;
@@ -134,17 +148,20 @@ export function Check({ s }) {
   const r = s.report, got = useDevice(s);
   if (!r) return html`<${Page} s=${s} step="check" eyebrow="Check" title="No machine yet"><p><a class="il-link" href=${s.link('start')}>Start again</a></p></${Page}>`;
   const rec = r.recognition, pc = s.m.kind === 'pc';
-  const variant = r.supported ? 'supported' : rec.result === 'none' || rec.result === 'conflict' ? 'not' : 'mode';
+  const variant = r.supported ? 'supported' : rec.result === 'none' || rec.result === 'conflict' ? 'not'
+    : rec.result === 'match' && r.plan ? 'refused' : 'mode';
   const name = s.m.name;
   const title = {
     supported: pc ? 'This PC can run GlassineOS' : `This is ${s.m.the}`,
     not: rec.result === 'conflict' ? 'This device doesn’t match its description' : 'GlassineOS doesn’t support this device yet',
     mode: rec.result === 'match' ? `The installer can’t tell what is on ${s.m.the} yet` : `${cap(s.m.the)} has to be restarted to be recognised`,
+    refused: `GlassineOS can’t go on ${s.m.the} as it is`,
   }[variant];
   const lead = {
     supported: 'GlassineOS supports it. Here is what it is now, and what an installation would keep, back up, replace and create.',
     not: rec.result === 'conflict' ? `Some of what it reports matches ${name ? 'the ' + name : 'a description'}, some doesn’t. The installer goes by the hardware and treats it as unsupported. Nothing was changed.` : 'The check is done and nothing was changed. Here is what the installer found, and what is missing.',
     mode: `It answered in a mode where the installer can’t see everything it needs. ${rec.needs_modes.length ? 'Restart it into the mode below and check again.' : ''} Nothing was changed.`,
+    refused: 'The installer recognises it, but the installation is refused until what is below changes. Nothing was changed.',
   }[variant];
   const unchanged = pc ? 'the PC starts as before.' : 'the device starts its system as before.';
   const facts = factRows(s), tech = techRows(s);
@@ -156,6 +173,7 @@ export function Check({ s }) {
   const buttons = variant === 'supported'
     ? [{ label: 'Make the plan', href: s.link('plan'), primary: true, id: 'plan' }, { label: 'Save this report', onClick: () => saveJson('glassine-check-report.json', r) }, { label: 'Stop here', href: s.link('start'), push: true }]
     : variant === 'mode' ? [{ label: 'Reach it again', href: s.link('reach'), primary: !open, id: 'reach-again' }, { label: 'Stop here', href: s.link('start'), push: true, id: 'stop' }]
+    : variant === 'refused' ? [{ label: 'See the plan', href: s.link('plan'), id: 'plan' }, { label: 'Save this report', onClick: () => saveJson('glassine-check-report.json', r) }, { label: 'Stop here', href: s.link('start'), primary: !open, push: true, id: 'stop' }]
     : [{ label: 'Close the installer', href: s.link('start'), primary: !open, id: 'stop' }];
   return html`<${Page} s=${s} step="check" eyebrow=${variant === 'supported' ? 'Check · done, nothing was changed' : 'Check · nothing was changed'} title=${title} lead=${lead}>
     <section class="ins-stack">
@@ -163,10 +181,10 @@ export function Check({ s }) {
       <${Table} rows=${facts} />
       ${tech.length ? html`<details class="il-details"><summary>Technical details</summary><${Table} mono rows=${tech} /></details>` : null}
     </section>
-    ${variant === 'supported' ? html`<${Supported} s=${s} />` : variant === 'not' ? html`<${NotSupported} s=${s} />` : html`<${OtherMode} s=${s} />`}
+    ${variant === 'supported' ? html`<${Supported} s=${s} />` : variant === 'not' ? html`<${NotSupported} s=${s} />` : variant === 'refused' ? html`<${Refused} s=${s} />` : html`<${OtherMode} s=${s} />`}
     <${DeviceCard} s=${s} dev=${dev} />
     <${Actions}
-      next=${variant === 'supported' ? 'The plan: every step in order, with what you can choose. Still nothing is written.' : variant === 'mode' ? 'Restart it as above, then reach it again.' : 'Nothing more to do here.'}
+      next=${variant === 'supported' ? 'The plan: every step in order, with what you can choose. Still nothing is written.' : variant === 'mode' ? 'Restart it as above, then reach it again.' : variant === 'refused' ? 'Change what is above, then run the check again.' : 'Nothing more to do here.'}
       out=${open ? html`${out} <span id="left-in-usb-mode">${LEFT_IN_USB_MODE}</span>` : out}
       buttons=${open ? [restartButton(s, dev, variant !== 'supported'), ...buttons] : buttons} />
   </${Page}>`;

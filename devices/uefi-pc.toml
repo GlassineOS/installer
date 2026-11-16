@@ -85,8 +85,14 @@ select = { role = "free-space" }
 class = "create"
 
 [[partitions]]
-select = { names = ["glassine-boot", "glassine-system"] }
+select = { names = ["glassine-boot", "glassine-system", "glassine-userdata"] }
 class = "create"
+
+# The person's data (boot 001's userdata): the deployments' own layers, home,
+# Flatpak data and the hibernate file. The installer creates it empty; the
+# installed system makes its file system (ext4) at its first start.
+[data_partition]
+name = "glassine-userdata"
 
 # Every disk the installation writes to is backed up whole first: its
 # partition table and every partition, as one image (installer 001 FR-009).
@@ -188,12 +194,30 @@ job = "install"
 kind = "create-partitions"
 mode = "local"
 after = ["back-up", "remove-system"]
+# Sizes (installer 002 FR-014a, FR-019a; boot 010 FR-029):
+# - glassine-boot: 2 GiB, refused when the release's kernel needs more there
+#   (its least is the boot partition's rule of 002 FR-019a: three kernel sets,
+#   two recovery images, the splash and its override, as much again free).
+#   2 GiB holds that while three kernel sets and two recovery images together
+#   stay within 956 MiB: 2 x (3 sets + 2 recoveries + 64 MiB for the splash
+#   and override at 32 MiB each) + 8 MiB for FAT32's tables and the loader at
+#   its two paths <= 2048 MiB. 1 GiB would allow only 444 MiB, less than three
+#   sets of a PC kernel with its firmware and two recoveries may need.
+# - glassine-system: 16 GiB, refused when the release's base needs more (its
+#   least, 002 FR-019a, already counts four kept updates); fixed, because the
+#   data partition follows it and it can't grow later, so it leaves room for
+#   later, larger bases.
+# - glassine-userdata: the rest of the free space, at least 8 GiB: room for
+#   the deployments' layers, a home and a Flatpak runtime or two. The
+#   hibernate file goes there too, so a PC with much memory wants more.
+# So a disk needs at least 26 GiB free for GlassineOS.
 params.partitions = [
-  { name = "glassine-boot", size = "1GiB", role = "esp" },
-  { name = "glassine-system", size = "rest-of-free-space", at_least = "release:base", role = "system" },
+  { name = "glassine-boot", size = "2GiB", at_least = "release:kernel", role = "esp" },
+  { name = "glassine-system", size = "16GiB", at_least = "release:base", role = "system" },
+  { name = "glassine-userdata", size = "rest-of-free-space", at_least = "8GiB" },
 ]
 writes = ["role:partition-table"]
-creates = ["role:free-space", "glassine-boot", "glassine-system"]
+creates = ["role:free-space", "glassine-boot", "glassine-system", "glassine-userdata"]
 done = [{ key = "storage.partition.glassine-system", present = true, mode = "local" }]
 escape.failure = { leaves = "previous-system-starts", way_out = { step = "back-up" } }
 escape.interruption = { leaves = "installer-can-finish", way_out = { step = "write-base" } }
@@ -251,10 +275,10 @@ untried = "the PC backend isn't built yet"
 name = "PC"
 
 [texts.modes]
-local = "Start the PC from the USB stick with the installer: switch it on and choose the stick in the firmware's boot menu."
+local = "Start the PC from the USB stick with the installer: switch it on and choose the stick in the firmware's boot menu. Secure Boot must be off in the firmware's set-up: with it on, the firmware doesn't start the stick, and wouldn't start GlassineOS."
 
 [texts.choices]
-target-disk = "The disk GlassineOS goes on. It uses the free space there."
+target-disk = "The disk GlassineOS goes on. It uses the free space there, at least 26 GiB."
 systems = "What happens to this operating system."
 
 [texts.options]
@@ -264,7 +288,7 @@ systems = "What happens to this operating system."
 [texts.steps]
 back-up = "Back up every disk GlassineOS changes, whole, and the firmware's boot entries, then check the backup by reading it back."
 remove-system = "Delete the operating system you chose to replace."
-create-partitions = "Make room for GlassineOS in the free space."
+create-partitions = "Make GlassineOS's partitions in the free space: its boot partition, its system and the partition for your files."
 write-base = "Put GlassineOS on its new partition."
 write-boot = "Put the GlassineOS kernel and boot loader on its boot partition."
 add-boot-entry = "Add GlassineOS to the firmware's boot menu and start it first."

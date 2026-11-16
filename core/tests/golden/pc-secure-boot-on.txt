@@ -1,7 +1,7 @@
 Plan (dry run) for PC
 State: stock. Job: install.
 Status: refused
-  - disk 0 is too small: GlassineOS needs 9.0 GiB there and it has 6.0 GiB free; it lacks 3.0 GiB (3221225472 bytes)
+  - Secure Boot is on: the firmware would refuse to start GlassineOS, whose loader isn't signed for it. Switch it off in the firmware's set-up: restart the PC and open the set-up with the key it names while it starts (often F2, F10, Del or Esc; from Windows: Settings, System, Recovery, Advanced startup, Restart now, then Troubleshoot, Advanced options, UEFI Firmware Settings), set Secure Boot to Disabled (often under Boot or Security), save, and run the check again. Nothing else in the set-up needs changing. If Windows on this PC encrypts its disk (BitLocker or device encryption), have its recovery key at hand: Windows may ask for it after the change
 
 Choices:
   target-disk = first (default)
@@ -14,13 +14,14 @@ Systems:
 
 Partitions:
   partition table (replace): writes
-  disk 0 free space (create, 6.0 GiB): creates
+  disk 0 free space (create, 200.0 GiB): creates
   glassine-boot (create): creates, writes
   glassine-system (create): creates, writes
+  glassine-userdata (create): creates
   4 other partitions are only read, into the backup; 1 are not touched.
 
 Backup (default), to the installer's USB stick, checked by reading it back before the first write:
-  disk 0 (nvme, 64.0 GiB), whole: the partition table and every partition; at most 64.0 GiB, stored compressed; only the used blocks where the file system tells them, every block elsewhere
+  disk 0 (nvme, 512.0 GiB), whole: the partition table and every partition; at most 512.0 GiB, stored compressed; only the used blocks where the file system tells them, every block elsewhere
   You can switch it off (choice backup = off). Without the backup there is no way back to the maker's system and no repair from the backup. The values unique to the device are still kept.
 
 How the machine starts:
@@ -28,14 +29,15 @@ How the machine starts:
   boot-order (firmware-boot-order): back-up, change
 
 Space on the computer:
-  backup 68.0 KiB plus images of at most 64.0 GiB
+  backup 68.0 KiB plus images of at most 512.0 GiB
   artifacts 0 B plus base, kernel of unknown size
   at least 68.0 KiB
 
-Space on disk 0: GlassineOS needs 9.0 GiB, it has 6.0 GiB free; it lacks 3.0 GiB
+Space on disk 0: GlassineOS needs 26.0 GiB, it has 200.0 GiB free
 
 Least sizes from the release:
-  glassine-system (for the base): at least 8.0 GiB
+  glassine-boot (for the kernel): 2.0 GiB; what the release asks is not known yet
+  glassine-system (for the base): 16.0 GiB; what the release asks is not known yet
 
 Afterwards the device:
   have start-kernel [untried]
@@ -48,7 +50,7 @@ Steps:
      if it fails: previous-system-starts via step back-up
      if cut off after it: previous-system-starts via step back-up
   2. create-partitions (create-partitions, in local) [untried, safe stop]
-     Make room for GlassineOS in the free space.
+     Make GlassineOS's partitions in the free space: its boot partition, its system and the partition for your files.
      if it fails: previous-system-starts via step back-up
      if cut off after it: installer-can-finish via step write-base
   3. write-base (write-base, in local) [untried, safe stop]

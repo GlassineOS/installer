@@ -299,6 +299,7 @@ fn boot_entries_and_secure_boot_from_efivars() {
             (format!("SecureBoot-{g}"), vec![6, 0, 0, 0, 1]),
             (format!("SetupMode-{g}"), vec![6, 0, 0, 0, 0]),
         ],
+        unreadable: vec![],
     };
     let (f, opts) = pcfacts::firmware(true, &vars);
     assert_eq!(f.kind, "uefi");
@@ -317,9 +318,36 @@ fn boot_entries_and_secure_boot_from_efivars() {
         &pcfacts::EfiVars {
             store: "not-mounted".into(),
             vars: vec![],
+            unreadable: vec![],
         },
     );
     assert_eq!((f.secure_boot, f.variables.as_deref()), (None, Some("not-mounted")));
     let (f, _) = pcfacts::firmware(false, &pcfacts::EfiVars::default());
     assert_eq!(f.kind, "bios");
+}
+
+/// Secure Boot's state (boot 010 FR-036): on only while `SecureBoot` says so;
+/// set-up mode; off, also without the variable; unknown when it can't be read.
+#[test]
+fn secure_boot_states() {
+    let g = efivar::GLOBAL;
+    let sb = |vars: &[(&str, &[u8])], unreadable: &[&str]| {
+        pcfacts::secure_boot(&pcfacts::EfiVars {
+            store: "readable".into(),
+            vars: vars.iter().map(|(n, b)| (format!("{n}-{g}"), b.to_vec())).collect(),
+            unreadable: unreadable.iter().map(|n| format!("{n}-{g}")).collect(),
+        })
+    };
+    let (on, off): (&[u8], &[u8]) = (&[6, 0, 0, 0, 1], &[6, 0, 0, 0, 0]);
+    assert_eq!(sb(&[("SecureBoot", on), ("SetupMode", off)], &[]).as_deref(), Some("on"));
+    assert_eq!(sb(&[("SecureBoot", off), ("SetupMode", on)], &[]).as_deref(), Some("setup"));
+    assert_eq!(sb(&[("SecureBoot", off), ("SetupMode", off)], &[]).as_deref(), Some("off"));
+    // A firmware without Secure Boot has no such variable.
+    assert_eq!(sb(&[("BootOrder", &[7, 0, 0, 0, 1, 0])], &[]).as_deref(), Some("off"));
+    // Listed but not readable, or too short to be a flag: unknown.
+    assert_eq!(sb(&[("SetupMode", off)], &["SecureBoot"]), None);
+    assert_eq!(sb(&[("SecureBoot", &[6, 0, 0, 0])], &[]), None);
+    // SetupMode unreadable doesn't hide an enforced Secure Boot.
+    assert_eq!(sb(&[("SecureBoot", on)], &["SetupMode"]).as_deref(), Some("on"));
+    assert_eq!(sb(&[("SecureBoot", off)], &["SetupMode"]).as_deref(), Some("off"));
 }

@@ -166,7 +166,8 @@ async function main() {
         const got = await checkPage('check', `#/check?machine=${r}`, null, `check--report-${r}`);
         const rep = JSON.parse(fs.readFileSync(path.join(ROOT, 'web/fixtures/reports', r + '.json'), 'utf8'));
         const want = rep.supported ? /can run GlassineOS|^This is /m
-          : rep.recognition.result === 'none' ? /doesn’t support this device/ : rep.recognition.result === 'conflict' ? /doesn’t match its description/ : /restarted to be recognised|can’t tell/;
+          : rep.recognition.result === 'none' ? /doesn’t support this device/ : rep.recognition.result === 'conflict' ? /doesn’t match its description/
+          : rep.recognition.result === 'match' && rep.plan ? /can’t go on .* as it is/ : /restarted to be recognised|can’t tell/;
         assert.match(got.text, want);
         // only a description that matched names the machine
         if (rep.recognition.result !== 'match') for (const d of ['Onyx Boox Note Air']) assert.ok(!got.chip.includes(d) && !got.text.includes('the ' + d), `names ${d}, which it didn’t match`);
@@ -281,14 +282,36 @@ async function main() {
 
   await test('a least size no release states yet is shown as not known yet', async () => {
     const rows = async () => page.evaluate(() => document.body.innerText);
-    await go(page, '#/plan?plan=pc-small-disk-no-release');
-    assert.match(await rows(), /On disk 0\s+1\.0 GiB and GlassineOS’s system partition, whose size is not known yet, of 6\.0 GiB free/);
+    await go(page, '#/plan?plan=pc-windows-keep');
+    assert.match(await rows(), /On disk 0\s+26\.0 GiB, of 200\.0 GiB free/);
+    assert.match(await rows(), /GlassineOS’s boot partition\s+2\.0 GiB; what this release needs there is not known yet/);
+    assert.match(await rows(), /GlassineOS’s system partition\s+16\.0 GiB; what this release needs there is not known yet/);
     await go(page, '#/plan?plan=noteair-developer');
     assert.match(await rows(), /GlassineOS’s system partition\s+3\.0 GiB; what this release needs there is not known yet/);
     assert.ok(!/null|undefined|NaN/.test(await rows()), 'a size that isn’t known shows as a word');
     // A release that states more than the fixed partition holds: refused, with the core's reason.
     await go(page, '#/plan?plan=noteair-release-too-big');
     assert.match(await page.$eval('#refused', (x) => x.textContent), /System_b is too small for this release: its base needs at least 8\.0 GiB there and it is 3\.0 GiB/);
+    await go(page, '#/plan?plan=pc-release-too-big');
+    assert.match(await page.$eval('#refused', (x) => x.textContent), /Glassine-boot is too small for this release: its kernel needs at least 3\.0 GiB there and it is 2\.0 GiB/);
+    // A disk without room for the fixed partitions and userdata's least: refused with what it lacks.
+    await go(page, '#/plan?plan=pc-small-disk');
+    assert.match(await page.$eval('#refused', (x) => x.textContent), /Disk 0 is too small: GlassineOS needs 26\.0 GiB there and it has 6\.0 GiB free/);
+  });
+
+  await test('Secure Boot on: refused with the reason and how to switch it off; unknown is said, not refused', async () => {
+    await go(page, '#/plan?plan=pc-secure-boot-on');
+    const t = await page.$eval('#refused', (x) => x.textContent);
+    assert.match(t, /Secure Boot is on: the firmware would refuse to start GlassineOS/);
+    assert.match(t, /set Secure Boot to Disabled/);
+    await go(page, '#/plan?plan=pc-secure-boot-unknown');
+    assert.strictEqual(await page.$('#refused'), null, 'an unknown Secure Boot state refuses');
+    assert.match(await page.$eval('#notes', (x) => x.textContent), /Secure Boot's state is unknown here/);
+    // The check says the same before any plan.
+    await go(page, '#/check?machine=pc-secure-boot-on');
+    assert.match(await page.$eval('#check-refused', (x) => x.textContent), /Secure Boot is on/);
+    await go(page, '#/check?machine=pc-secure-boot-unknown');
+    assert.match(await page.$eval('#check-notes', (x) => x.textContent), /Secure Boot's state is unknown here/);
   });
 
   await test('the disk GlassineOS goes on: each fixed disk, and the plan of the one chosen', async () => {

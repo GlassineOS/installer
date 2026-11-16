@@ -294,8 +294,10 @@ pinned to,
   step creates for the system (`role = "system"`). The installed system's
   [glassine-deploy](https://github.com/GlassineOS/boot/blob/main/docs/deployments.md)
   configuration takes from it, and from that system partition, where the two
-  partitions are and what stays free (FR-030). A description without it names no data
-  partition, and nothing is derived from it.
+  partitions are and what stays free (FR-030), except where the installer makes the
+  partitions (a PC): there the system finds both by the identities the installer writes
+  into the boot entry's command line (001 FR-012a), so nothing is derived from it. A
+  description without it names no data partition, and nothing is derived from it.
 
 ### What an installation does
 
@@ -320,7 +322,12 @@ pinned to,
   base's size as received on btrfs (its used bytes, not the compressed send stream), plus
   64 MiB for each of 4 kept updates, plus the kernel modules' size, all × 1.25 for the
   file system's metadata and slack; at least 1 GiB, rounded up to a whole MiB. The
-  person's home and Flatpak data are on the data partition and don't count.
+  person's home and Flatpak data are on the data partition and don't count. For `kernel`
+  where it goes to a boot partition of files (a PC, boot 010 FR-029), the rule is: three
+  kernel sets (kernel, initramfs and command line each), two recovery images, and the boot
+  splash and its one-time override at their largest (32 MiB each, boot 011 FR-004), all
+  twice over, plus the file system's own room (its tables, and the loader at its two
+  paths), rounded up to a whole MiB.
 - **FR-020**: `[[capabilities]]` states each capability the installed device has (choose a
   kernel, a one-shot trial boot, a recovery, keep the stock system, ...): `have`, `lack`, or
   `needs` (with what), each with `verified`. The ids are shared by all descriptions.
@@ -379,7 +386,7 @@ pinned to,
   description holds (the device-data list of FR-018; where the description keeps another
   system, the slot that system starts from, which is the slot the step that retires it
   marks unbootable when the person chooses not to keep it; where it names a data
-  partition (FR-018c), glassine-deploy's device part: the system partition, the data
+  partition (FR-018c) that the system finds by name, glassine-deploy's device part: the system partition, the data
   partition and the space kept free at its end, at
   `/usr/share/glassine/deploy.conf.device`, which the device's package puts into
   `/etc/glassine/deploy.conf` with its own settings) is derived from the

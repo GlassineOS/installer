@@ -5,8 +5,10 @@
   "mode": "local",
   "state": "stock",
   "job": "install",
-  "status": "ready",
-  "reasons": [],
+  "status": "refused",
+  "reasons": [
+    "Secure Boot is on: the firmware would refuse to start GlassineOS, whose loader isn't signed for it. Switch it off in the firmware's set-up: restart the PC and open the set-up with the key it names while it starts (often F2, F10, Del or Esc; from Windows: Settings, System, Recovery, Advanced startup, Restart now, then Troubleshoot, Advanced options, UEFI Firmware Settings), set Secure Boot to Disabled (often under Boot or Security), save, and run the check again. Nothing else in the set-up needs changing. If Windows on this PC encrypts its disk (BitLocker or device encryption), have its recovery key at hand: Windows may ask for it after the change"
+  ],
   "developer_may": false,
   "questions": [],
   "choices": [
@@ -56,7 +58,7 @@
       "actions": [
         "creates"
       ],
-      "size": 6442450944,
+      "size": 214748364800,
       "loses_files": false,
       "steps": [
         "create-partitions"
@@ -89,6 +91,18 @@
       "steps": [
         "create-partitions",
         "write-base"
+      ]
+    },
+    {
+      "partition": "glassine-userdata",
+      "class": "create",
+      "actions": [
+        "creates"
+      ],
+      "size": null,
+      "loses_files": false,
+      "steps": [
+        "create-partitions"
       ]
     }
   ],
@@ -128,11 +142,11 @@
         "disk": "disk 0",
         "index": 0,
         "kind": "nvme",
-        "disk_size": 68719476736,
+        "disk_size": 549755813888,
         "holds": "the partition table and every partition",
         "stored": "compressed; only the used blocks where the file system tells them, every block elsewhere",
         "estimate": "at-most",
-        "estimate_bytes": 68719476736,
+        "estimate_bytes": 549755813888,
         "mode": "local",
         "means": "block-read",
         "check": "read-back-compare",
@@ -153,7 +167,7 @@
   },
   "space": {
     "backup_bytes": 69632,
-    "backup_at_most": 68719476736,
+    "backup_at_most": 549755813888,
     "backup_unknown": [],
     "artifact_bytes": 0,
     "artifacts_unknown": [
@@ -164,17 +178,24 @@
     "exact": false,
     "disk": {
       "disk": 0,
-      "free": 6442450944,
-      "needs": 1073741824,
+      "free": 214748364800,
+      "needs": 27917287424,
       "lacks": 0,
-      "exact": false
+      "exact": true
     },
     "minimums": [
+      {
+        "partition": "glassine-boot",
+        "role": "kernel",
+        "at_least": null,
+        "size": 2147483648,
+        "lacks": 0
+      },
       {
         "partition": "glassine-system",
         "role": "base",
         "at_least": null,
-        "size": null,
+        "size": 17179869184,
         "lacks": 0
       }
     ]
@@ -307,5 +328,6 @@
     "write-boot",
     "add-boot-entry"
   ],
-  "left_out": []
+  "left_out": [],
+  "notes": []
 }
