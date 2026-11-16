@@ -19,7 +19,7 @@
 #![cfg(target_os = "linux")]
 
 mod edge;
-pub use edge::DirEdge;
+pub use edge::{DirEdge, SEGMENT};
 
 use glassine_installer::pc_execute::{DiskId, Machine};
 use glassine_installer_pc::{DiskName, disk_names};
