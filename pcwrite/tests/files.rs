@@ -107,8 +107,14 @@ fn release(dir: &Path) {
         ("kernel", 2 * MIB as usize + 77, "efi-kernel", 5),
         ("initramfs", MIB as usize + 3, "initramfs", 7),
         ("boot-loader", 70_000, "efi-application", 9),
+        ("board", 0, "board-conf", 0),
     ] {
-        let b = image(len, seed);
+        let b = if role == "board" {
+            b"CMDLINE=console=ttyS0\n".to_vec()
+        } else {
+            image(len, seed)
+        };
+        let len = b.len();
         let file = format!("{role}.img");
         fs::write(dir.join(&file), &b).unwrap();
         let mut e = serde_json::json!({"file": file, "sha256": sha256_hex(&b), "size": len, "kind": kind});
@@ -205,8 +211,10 @@ fn a_tree_of_files_is_installed_with_its_backup_and_other_disks_untouched() {
         fat::read::file(vol, "EFI/BOOT/BOOTX64.EFI").unwrap(),
         fs::read(rel.join("boot-loader.img")).unwrap()
     );
-    let lr = String::from_utf8(fat::read::file(vol, "glassine/loader.rec").unwrap()).unwrap();
-    assert!(lr.contains(&format!("glassine.system=PARTUUID={}", sys.guid.as_deref().unwrap())), "{lr}");
+    let lr = String::from_utf8(fat::read::file(vol, "glassine/loader.a").unwrap()).unwrap();
+    let id = lr.lines().find_map(|l| l.strip_prefix("default=")).unwrap();
+    let sr = String::from_utf8(fat::read::file(vol, &format!("glassine/sets/{id}/set.rec")).unwrap()).unwrap();
+    assert!(sr.contains(&format!("glassine.system=PARTUUID={}", sys.guid.as_deref().unwrap())), "{sr}");
     // the firmware: ours first, the shell after it, unchanged
     let vars = root.join("sys/firmware/efi/efivars");
     let order = efivar::number_list(&fs::read(vars.join(efivar::global_name("BootOrder"))).unwrap());

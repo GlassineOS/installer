@@ -1,0 +1,10 @@
+format=1
+id=714c2000398993cc
+release=6.18.63-0-lts
+kernel_sha256=8c585378513f5f7a2e1456ee54042605fdb890392becefadd2ab180fd02fb341
+kernel_size=23456789
+initrd_sha256=
+initrd_size=
+cmdline=quiet glassine.system=PARTUUID=0f3e26a1-5c7b-4a55-9b8d-2c4f6e8a1b3d glassine.userdata=PARTUUID=6d1a5e2b-8c4f-4b3a-a9e7-1f2d3c4b5a69 glassine.img=714c2000398993cc
+initramfs=
+check=eafc543df5f671786577da2e5e00087722412f0452af539e99d3c99e2a068f55

@@ -198,9 +198,8 @@ texts the description provides.
   It gives each the standard partition type for its role (userdata, which has none: the
   Linux file-system type), records each one's unique partition ID in the installation
   record, and writes the system partition's and userdata's IDs into the first kernel
-  set's command line ([boot 010](https://github.com/GlassineOS/boot/blob/main/specs/010-x86-boot/spec.md)
-  FR-005) as the identity keys of [boot 001](https://github.com/GlassineOS/boot/blob/main/specs/001-deployments/spec.md)
-  (FR-020). No disk goes into a base's or a deployment's file system table. Where a
+  set's command line ([boot 010](https://github.com/GlassineOS/boot/blob/main/specs/010-uefi-deployments/spec.md)
+  FR-005) as the identity keys of boot's [command line](https://github.com/GlassineOS/boot/blob/main/docs/boot.md#command-line-keys). No disk goes into a base's or a deployment's file system table. Where a
   device's partitions have fixed names, its description names them instead and no keys
   are written. The recovery rebuilds a lost boot entry from the installation record.
   The installer leaves every partition the plan doesn't remove where it was, with its
@@ -210,10 +209,14 @@ texts the description provides.
   disk (not from a cache) and compared before the next begins: the backup (FR-009) or,
   with it switched off, the firmware's boot entries and boot order kept beside the
   record; the partition table, its backup copy before its primary; the system
-  partition, as the release's prepared image; the boot partition, a new file system
-  holding the boot loader at its own path and at the firmware's removable-media path,
-  the first kernel set and the loader's record naming it, its boot sector written last;
-  then the firmware boot entry. Userdata is left for the first start (FR-012b).
+  partition, as the release's prepared image; the boot partition, a new file system laid
+  out as boot's [boot-partition.md](https://github.com/GlassineOS/boot/blob/main/docs/boot-partition.md)
+  gives it, holding the boot loader at its own path and at the firmware's removable-media
+  path, the first kernel set (its initramfs assembled from the release's parts), the
+  release's recovery image and default splash where it has them, and both slots of the
+  loader record naming them, the same record in each; its boot sector is written after
+  everything but the record's second slot, which goes last, so a cut leaves either no
+  file system or one valid slot; then the firmware boot entry. Userdata is left for the first start (FR-012b).
   - Before the first write the installer keeps, beside the record, the disk's partition
     table as it was and the unique IDs it gives the new partitions, so a resumed step
     writes the same bytes, and it refuses a disk whose table is neither that one nor

@@ -36,7 +36,7 @@ use crate::fat;
 use crate::format1::{Condition, Description, Step};
 use crate::lock::sha256_hex;
 use crate::ops::{Evidence, OpError, hex, hex_sha, parse_size};
-use crate::pc_boot::{self, Content, KernelSet};
+use crate::pc_boot::{self, BootFiles, Content, KernelSet, Part};
 use crate::pc_table::{self, NewPart, NewSize, PcTable, Source};
 use crate::plan::{BACKUP_CHOICE, PartAt};
 use crate::record::{Backup, Outcome as Done, Record, Result_, StepState};
@@ -455,19 +455,18 @@ impl<M: Machine, E: PcEdge, S: ArtifactSource> Exec<'_, M, E, S> {
         Ok(out)
     }
 
-    /// The artifact roles a step uses.
-    fn roles_of(st: &Step) -> Vec<String> {
-        ["artifact", "initramfs", "loader"]
-            .iter()
-            .filter_map(|k| st.params.get(*k).and_then(|v| v.as_str()).map(String::from))
-            .collect()
+    /// The artifact roles a step uses: its parameters', and for the boot
+    /// partition the release's parts of it (`pc_boot::boot_roles`).
+    fn roles_of(&self, st: &Step) -> Result<Vec<String>, String> {
+        step_roles(st, &self.artifacts.manifest)
     }
 
     async fn check_artifacts(&mut self, order: &[String]) -> Result<(), Stopped> {
         let mut roles = BTreeSet::new();
         for id in order {
             if self.record.state(id) != StepState::Done {
-                roles.extend(Self::roles_of(self.step(id)?));
+                let st = self.step(id)?;
+                roles.extend(self.roles_of(st).map_err(stop)?);
             }
         }
         for role in roles {
@@ -487,6 +486,15 @@ impl<M: Machine, E: PcEdge, S: ArtifactSource> Exec<'_, M, E, S> {
                 .verify(&role, &mut |n| edge.progress(&format!("check {role}"), n, a.size))
                 .await
                 .map_err(|e| stop(e.to_string()))?;
+        }
+        // The boot partition's files can be made (command line, records,
+        // splash) before anything is written: the identities' length is fixed.
+        for id in order {
+            let st = self.step(id)?.clone();
+            if self.record.state(id) != StepState::Done && st.kind == "write-boot-files" {
+                let any = "00000000-0000-0000-0000-000000000000";
+                self.boot_files(&st, any, any).await.map_err(|e| stop(format!("{id}: {}", e.why)))?;
+            }
         }
         Ok(())
     }
@@ -536,7 +544,7 @@ impl<M: Machine, E: PcEdge, S: ArtifactSource> Exec<'_, M, E, S> {
             return self.record_found_done(id, st, "its done conditions hold").await;
         }
         let mut summary = self.d.texts.steps.get(&st.id).cloned().unwrap_or_else(|| st.kind.clone());
-        for role in Self::roles_of(st) {
+        for role in self.roles_of(st).map_err(|e| self.fail(st, e, false, false))? {
             if let Some(a) = self.record.artifacts.iter().find(|a| a.role == role) {
                 summary += &format!(" [{role} sha256 {}]", a.sha256);
             }
@@ -1165,11 +1173,106 @@ impl<M: Machine, E: PcEdge, S: ArtifactSource> Exec<'_, M, E, S> {
         Ok(ev)
     }
 
-    async fn write_boot(&mut self, _id: &str, st: &Step, d: &DiskId) -> Result<Evidence, OpError> {
-        let part = crate::ops::param(st, "partition")?.to_string();
+    /// The boot partition's files for this installation's partitions:
+    /// reads the release's parts once (the assembled `initrd`'s sum, the
+    /// board's configuration, the splash, which must check).
+    async fn boot_files(&mut self, st: &Step, system: &str, userdata: &str) -> Result<BootFiles, OpError> {
         let kernel = crate::ops::param(st, "artifact")?.to_string();
         let initramfs = crate::ops::param(st, "initramfs")?.to_string();
         let loader = crate::ops::param(st, "loader")?.to_string();
+        let roles = pc_boot::boot_roles(&self.artifacts.manifest, &kernel, &initramfs, &loader).map_err(OpError::before)?;
+        let art = |a: &Artifacts<S>, r: &str| a.artifact(r).map_err(|e| OpError::before(e.to_string()));
+        let (k, l) = (art(self.artifacts, &kernel)?, art(self.artifacts, &loader)?);
+        let man = self.artifacts.manifest.clone();
+        let entry = |r: &str| man.artifacts.get(r).cloned().unwrap_or_default();
+        let (krel, irel) = (entry(&kernel), entry(&initramfs));
+        // The kernel set's initrd: as the release hands it over, or assembled.
+        let (initrd, content) = if roles.assembled {
+            let i = art(self.artifacts, &initramfs)?;
+            ((i.sha256, i.size), Content::Artifact(initramfs.clone()))
+        } else {
+            let board_role = roles.board.clone().unwrap_or_default();
+            let board = read_small(self.artifacts, &board_role, pc_boot::BOARD_MAX).await?;
+            let mut sizes = BTreeMap::new();
+            for r in roles.all() {
+                sizes.insert(r.clone(), art(self.artifacts, &r)?.size);
+            }
+            let parts = pc_boot::initrd_parts(&roles, &board, &|r| sizes.get(r).copied().unwrap_or(0));
+            let mut h = Sha256::new();
+            let mut n = 0u64;
+            for p in &parts {
+                match p {
+                    Part::Bytes(b) => {
+                        h.update(b);
+                        n += b.len() as u64;
+                    }
+                    Part::Role(r) => n += hash_role(self.artifacts, r, &mut h).await?,
+                }
+            }
+            ((hex(&h.finalize()), n), Content::Parts(parts))
+        };
+        let set = KernelSet::new(
+            (&k.sha256, k.size),
+            Some((&initrd.0, initrd.1)),
+            krel.cmdline.as_deref().unwrap_or(""),
+            system,
+            userdata,
+            krel.release.as_deref().unwrap_or(""),
+            irel.identity.as_deref().unwrap_or(""),
+        )
+        .map_err(OpError::before)?;
+        let recovery = match &roles.recovery {
+            None => None,
+            Some(r) => {
+                let ra = art(self.artifacts, r)?;
+                let rrel = entry(r);
+                let ri = match &roles.recovery_initrd {
+                    Some(x) => Some(art(self.artifacts, x)?),
+                    None => None,
+                };
+                let rset = KernelSet::new(
+                    (&ra.sha256, ra.size),
+                    ri.as_ref().map(|i| (i.sha256.as_str(), i.size)),
+                    rrel.cmdline.as_deref().unwrap_or(""),
+                    system,
+                    userdata,
+                    rrel.release.as_deref().unwrap_or(""),
+                    roles.recovery_initrd.as_deref().map(entry).and_then(|e| e.identity).as_deref().unwrap_or(""),
+                )
+                .map_err(|e| OpError::before(format!("the recovery image: {e}")))?;
+                Some((rset, r.clone(), roles.recovery_initrd.clone()))
+            }
+        };
+        let splash = match &roles.splash {
+            None => None,
+            Some(r) => {
+                let b = read_small(self.artifacts, r, pc_boot::SPLASH_MAX).await?;
+                pc_boot::check_splash(&b).map_err(|e| OpError::before(format!("the release's {r}: {e}: not written")))?;
+                Some((r.clone(), b.len() as u64))
+            }
+        };
+        if set.id == recovery.as_ref().map(|r| r.0.id.clone()).unwrap_or_default() {
+            return Err(OpError::before("the recovery image and the kernel set are the same set"));
+        }
+        pc_boot::files(
+            &arch_of(self.d),
+            (&loader, l.size),
+            &set,
+            &kernel,
+            content,
+            recovery.as_ref(),
+            splash.as_ref().map(|(r, n)| (r.as_str(), *n)),
+        )
+        .map_err(OpError::before)
+    }
+
+    /// Writes the boot partition: no file system there while it is written
+    /// (the boot sector zeroed first), the files, the tables and slot a of
+    /// the loader record, then the boot sector, then slot b (zeroed in the
+    /// first write, so a cut while it is written leaves slot a the one valid
+    /// slot, never a stale record there).
+    async fn write_boot(&mut self, _id: &str, st: &Step, d: &DiskId) -> Result<Evidence, OpError> {
+        let part = crate::ops::param(st, "partition")?.to_string();
         let (start, size, placed) = self.extent(d, &part)?;
         let t = self.placed()?;
         let uuid = |n: &str| t.placed.iter().find(|p| p.name == n).map(|p| p.guid.clone());
@@ -1181,54 +1284,55 @@ impl<M: Machine, E: PcEdge, S: ArtifactSource> Exec<'_, M, E, S> {
             .map(|p| p.name.clone())
             .unwrap_or_else(|| "glassine-userdata".into());
         let userdata = uuid(&data_name).ok_or_else(|| OpError::before(format!("the plan makes no {data_name}")))?;
-        let art = |r: &str| self.artifacts.artifact(r).map_err(|e| OpError::before(e.to_string()));
-        let (k, i, l) = (art(&kernel)?, art(&initramfs)?, art(&loader)?);
-        let rel = self.artifacts.manifest.artifacts.get(&kernel).cloned().unwrap_or_default();
-        let set = KernelSet::new(
-            (&k.sha256, k.size),
-            (&i.sha256, i.size),
-            rel.cmdline.as_deref().unwrap_or(""),
-            &system,
-            &userdata,
-            rel.release.as_deref(),
-        );
-        let arch = arch_of(self.d);
-        let files = pc_boot::files(&set, &loader, l.size, &kernel, &initramfs, &arch).map_err(OpError::before)?;
-        let specs: Vec<fat::FileSpec> = files.iter().map(|(f, _)| f.clone()).collect();
+        let bf = self.boot_files(st, &system, &userdata).await?;
+        let specs: Vec<fat::FileSpec> = bf.files.iter().map(|(f, _)| f.clone()).collect();
         let serial = u32::from_le_bytes(crate::gpt_build::guid_bytes(&placed.guid).map_err(OpError::before)?[0..4].try_into().unwrap());
         let lay = fat::layout(size, d.sector, placed.first, serial, pc_boot::VOLUME_LABEL, &specs).map_err(OpError::before)?;
         let allowed = [(start, start + size)];
         let s = d.sector as usize;
-        // 1. No file system there while it is written: the boot sector and
-        //    its copy zeroed first (a cut leaves no half volume to start).
+        let slot_b = lay.files.len() - 1;
+        let (_, b_off, b_len) = lay.files[slot_b].clone();
+        // 1. No file system there while it is written, and no old slot b.
         let zero = vec![0u8; s];
         for at in [0u64, 6] {
             write_in(&mut *self.m, &allowed, d.index, start + at * d.sector, &zero)?;
         }
+        write_in(&mut *self.m, &allowed, d.index, start + b_off, &vec![0u8; b_len as usize])?;
         self.m.flush(d.index).map_err(OpError::after)?;
-        // 2. The files, the FATs and the directories.
+        // 2. The files but slot b, the FATs and the directories.
         let mut checks: Vec<(u64, u64, [u8; 32])> = vec![];
-        for ((path, off, len), (_, content)) in lay.files.clone().iter().zip(&files) {
+        let mut later = None;
+        for (k, ((path, off, len), (_, content))) in lay.files.iter().zip(&bf.files).enumerate() {
+            let at = start + off;
             match content {
+                Content::Bytes(b) if k == slot_b => later = Some((at, b.clone())),
                 Content::Bytes(b) => {
-                    write_in(&mut *self.m, &allowed, d.index, start + off, b)?;
-                    checks.push((start + off, *len, Sha256::digest(b).into()));
+                    write_in(&mut *self.m, &allowed, d.index, at, b)?;
+                    checks.push((at, *len, Sha256::digest(b).into()));
                 }
                 Content::Artifact(role) => {
-                    let mut r = self.artifacts.reader(role).await.map_err(|e| OpError::before(e.to_string()))?;
-                    let mut buf = vec![0u8; CHUNK];
-                    let mut at = 0u64;
                     let mut h = Sha256::new();
-                    while at < *len {
-                        let n = (CHUNK as u64).min(len - at) as usize;
-                        r.read_at(at, &mut buf[..n]).await.map_err(OpError::after)?;
-                        let chunk = buf[..n].to_vec();
-                        write_in(&mut *self.m, &allowed, d.index, start + off + at, &chunk)?;
-                        h.update(&chunk);
-                        at += n as u64;
+                    stream_role(self.artifacts, &mut *self.m, &allowed, d.index, at, role, &mut h).await?;
+                    checks.push((at, *len, h.finalize().into()));
+                }
+                Content::Parts(parts) => {
+                    let mut h = Sha256::new();
+                    let mut o = at;
+                    for p in parts {
+                        match p {
+                            Part::Bytes(b) => {
+                                write_in(&mut *self.m, &allowed, d.index, o, b)?;
+                                h.update(b);
+                                o += b.len() as u64;
+                            }
+                            Part::Role(r) => o += stream_role(self.artifacts, &mut *self.m, &allowed, d.index, o, r, &mut h).await?,
+                        }
                     }
-                    r.finish().map_err(|e| OpError::after(format!("{path}: {e}")))?;
-                    checks.push((start + off, *len, h.finalize().into()));
+                    let got: [u8; 32] = h.finalize().into();
+                    if o - at != *len || bf.set.initrd.as_ref().map(|i| i.0.as_str()) != Some(hex(&got).as_str()) {
+                        return Err(OpError::after(format!("{path}: the parts written aren't the ones the kernel set names")));
+                    }
+                    checks.push((at, *len, got));
                 }
             }
         }
@@ -1237,23 +1341,31 @@ impl<M: Machine, E: PcEdge, S: ArtifactSource> Exec<'_, M, E, S> {
             checks.push((start + off, b.len() as u64, Sha256::digest(b).into()));
         }
         self.m.flush(d.index).map_err(OpError::after)?;
-        // 3. The boot sector last: from here on the volume is whole.
+        // 3. The boot sector: from here on the volume is whole, with slot a.
         let (roff, rb) = lay.reserved.clone();
         write_in(&mut *self.m, &allowed, d.index, start + roff, &rb)?;
         self.m.flush(d.index).map_err(OpError::after)?;
         checks.push((start + roff, rb.len() as u64, Sha256::digest(&rb).into()));
+        // 4. Slot b, the same record.
+        let (bat, bb) = later.ok_or_else(|| OpError::before("the loader record's slot b is missing"))?;
+        write_in(&mut *self.m, &allowed, d.index, bat, &bb)?;
+        self.m.flush(d.index).map_err(OpError::after)?;
+        checks.push((bat, bb.len() as u64, Sha256::digest(&bb).into()));
         for (off, len, h) in &checks {
             self.read_back(d.index, *off, *len, h)?;
         }
         let mut ev = Evidence::new();
         ev.insert("partition".into(), part);
-        ev.insert("kernel-set".into(), set.id.clone());
-        ev.insert("cmdline".into(), set.cmdline.clone());
+        ev.insert("kernel-set".into(), bf.set.id.clone());
+        ev.insert("cmdline".into(), bf.set.cmdline.clone());
+        if let Some(r) = &bf.recovery {
+            ev.insert("recovery".into(), r.id.clone());
+        }
         ev.insert(
             "loader".into(),
             format!("{} and {}", pc_boot::firmware_path(&specs[0].path), pc_boot::firmware_path(&specs[1].path)),
         );
-        ev.insert("loader-record-sha256".into(), hex_sha(set.loader_record().as_bytes()));
+        ev.insert("loader-record-sha256".into(), hex_sha(bf.loader_record.as_bytes()));
         ev.insert("read-back".into(), format!("{} regions match", checks.len()));
         ev.insert("free-bytes".into(), lay.free_bytes.to_string());
         Ok(ev)
@@ -1344,6 +1456,75 @@ pub const KINDS: &[&str] = &[
     "write-boot-files",
     "add-boot-entry",
 ];
+
+/// The artifact roles a step uses: its parameters', and for a
+/// `write-boot-files` step the release's parts of the boot partition.
+pub fn step_roles(st: &Step, release: &crate::release::Release) -> Result<Vec<String>, String> {
+    let p = |k: &str| st.params.get(k).and_then(|v| v.as_str()).map(String::from);
+    if st.kind == "write-boot-files"
+        && let (Some(k), Some(i), Some(l)) = (p("artifact"), p("initramfs"), p("loader"))
+    {
+        return Ok(pc_boot::boot_roles(release, &k, &i, &l)?.all());
+    }
+    Ok(["artifact", "initramfs", "loader"].iter().filter_map(|k| p(k)).collect())
+}
+
+/// Reads a role's file whole (at most `max` bytes), checked.
+async fn read_small<S: ArtifactSource>(arts: &mut Artifacts<S>, role: &str, max: u64) -> Result<Vec<u8>, OpError> {
+    let a = arts.artifact(role).map_err(|e| OpError::before(e.to_string()))?;
+    if a.size > max {
+        return Err(OpError::before(format!("the release's {role} is {} bytes, at most {max} are read", a.size)));
+    }
+    let mut r = arts.reader(role).await.map_err(|e| OpError::before(e.to_string()))?;
+    let mut b = vec![0u8; a.size as usize];
+    if !b.is_empty() {
+        r.read_at(0, &mut b).await.map_err(OpError::before)?;
+    }
+    r.finish().map_err(|e| OpError::before(e.to_string()))?;
+    Ok(b)
+}
+
+/// Hashes a role's file into `h`, checked; its size.
+async fn hash_role<S: ArtifactSource>(arts: &mut Artifacts<S>, role: &str, h: &mut Sha256) -> Result<u64, OpError> {
+    let mut r = arts.reader(role).await.map_err(|e| OpError::before(e.to_string()))?;
+    let len = r.artifact.size;
+    let mut buf = vec![0u8; CHUNK.min(len as usize)];
+    let mut at = 0u64;
+    while at < len {
+        let n = (CHUNK as u64).min(len - at) as usize;
+        r.read_at(at, &mut buf[..n]).await.map_err(OpError::before)?;
+        h.update(&buf[..n]);
+        at += n as u64;
+    }
+    r.finish().map_err(|e| OpError::before(e.to_string()))?;
+    Ok(len)
+}
+
+/// Streams a role's file to `at` of the disk, checked, hashing it into `h`;
+/// its size.
+async fn stream_role<S: ArtifactSource, M: Machine>(
+    arts: &mut Artifacts<S>,
+    m: &mut M,
+    allowed: &[Range],
+    disk: u32,
+    at: u64,
+    role: &str,
+    h: &mut Sha256,
+) -> Result<u64, OpError> {
+    let mut r = arts.reader(role).await.map_err(|e| OpError::before(e.to_string()))?;
+    let len = r.artifact.size;
+    let mut buf = vec![0u8; CHUNK.min(len as usize)];
+    let mut o = 0u64;
+    while o < len {
+        let n = (CHUNK as u64).min(len - o) as usize;
+        r.read_at(o, &mut buf[..n]).await.map_err(OpError::after)?;
+        write_in(m, allowed, disk, at + o, &buf[..n])?;
+        h.update(&buf[..n]);
+        o += n as u64;
+    }
+    r.finish().map_err(|e| OpError::after(format!("{role}: {e}")))?;
+    Ok(len)
+}
 
 /// The escape of a step, for callers that show it.
 pub fn escape_of(d: &Description, st: &Step, interrupted: bool) -> Escape {
