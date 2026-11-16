@@ -101,6 +101,7 @@
   "reasons": [
     "the installation needs the GlassineOS recovery, which isn't built yet: it is refused until that is there (step write-recovery writes it); a developer may install without it"
   ],
+  "notes": [],
   "capabilities": [
     {
       "id": "start-kernel",

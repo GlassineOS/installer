@@ -111,6 +111,7 @@
   "reasons": [
     "steps create-partitions, write-base, write-boot, add-boot-entry write and haven't been tried on real hardware: only a developer who asks for them may run them"
   ],
+  "notes": [],
   "capabilities": [
     {
       "id": "start-kernel",
@@ -146,7 +147,8 @@
     "creates": [
       "disk 0 free space",
       "glassine-boot",
-      "glassine-system"
+      "glassine-system",
+      "glassine-userdata"
     ],
     "loses_files": [],
     "untouched_partitions": 2,

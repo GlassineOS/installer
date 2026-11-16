@@ -411,49 +411,129 @@ fn a_format_1_description_has_no_full_backup() {
 
 const GIB: u64 = 1 << 30;
 
-/// 002 FR-014a, FR-019a: the system partition's least size is the release's;
-/// a disk that can't give it is refused with what it lacks, worked out from it.
+/// 002 FR-014a, FR-019a: on a PC the boot (2 GiB) and system (16 GiB)
+/// partitions are fixed and userdata takes the rest, at least 8 GiB: a disk
+/// that can't give 26 GiB is refused with what it lacks, release or not.
 #[test]
-fn a_disk_too_small_for_the_release_is_refused() {
+fn a_disk_too_small_for_glassine_is_refused() {
     let mut i = input(&[], &[], true);
     i.release = Some(release("base-8gib"));
-    let p = run("pc-release-small-disk", "pc-small-disk", i);
+    let p = run("pc-small-disk", "pc-small-disk", i);
     assert_eq!(p.status, Status::Refused);
     let d = p.space.disk.as_ref().unwrap();
-    // The boot partition's 1 GiB and the release's 8 GiB for the base.
-    assert_eq!((d.needs, d.free, d.lacks, d.exact), (9 * GIB, 6 * GIB, 3 * GIB, true));
+    assert_eq!((d.needs, d.free, d.lacks, d.exact), (26 * GIB, 6 * GIB, 20 * GIB, true));
     assert!(
-        p.reasons.iter().any(|r| r.contains("disk 0 is too small") && r.contains("it lacks 3.0 GiB")),
+        p.reasons.iter().any(|r| r.contains("disk 0 is too small") && r.contains("it lacks 20.0 GiB")),
         "{:?}",
         p.reasons
     );
-    let m = &p.space.minimums[0];
+    // The release's base fits the fixed system partition.
+    let m = p.space.minimums.iter().find(|m| m.role == "base").unwrap();
     assert_eq!(
-        (m.partition.as_str(), m.role.as_str(), m.at_least, m.size),
-        ("glassine-system", "base", Some(8 * GIB), None)
+        (m.partition.as_str(), m.at_least, m.size, m.lacks),
+        ("glassine-system", Some(8 * GIB), Some(16 * GIB), 0)
+    );
+    // Without a release it is refused the same: the sizes are the description's.
+    let p = plan_pc("pc-small-disk", &input(&[], &[], true));
+    assert_eq!(p.space.disk.as_ref().unwrap().lacks, 20 * GIB);
+}
+
+/// Without a release (a dry run, a test) the least sizes aren't known yet:
+/// they never refuse, and the plan says they aren't known.
+#[test]
+fn without_a_release_the_least_is_not_known_yet() {
+    let p = plan_pc("pc-windows", &input(&[], &[], true));
+    assert_eq!(p.status, Status::Ready, "{:?}", p.reasons);
+    assert!(p.space.minimums.iter().all(|m| m.at_least.is_none()));
+    let roles: Vec<&str> = p.space.minimums.iter().map(|m| m.role.as_str()).collect();
+    assert_eq!(roles, ["kernel", "base"]);
+    let txt = render(&p, Some(&valid(&pc())));
+    assert!(
+        txt.contains("glassine-system (for the base): 16.0 GiB; what the release asks is not known yet"),
+        "{txt}"
+    );
+    assert!(
+        txt.contains("glassine-boot (for the kernel): 2.0 GiB; what the release asks is not known yet"),
+        "{txt}"
+    );
+    // A release that doesn't state them is the same.
+    let mut i = input(&[], &[], true);
+    i.release = Some(glassine_installer::release::Release::parse(r#"{"release_format": 1, "artifacts": {"kernel": {}}}"#).unwrap());
+    assert_eq!(plan_pc("pc-windows", &i).status, Status::Ready);
+}
+
+/// 002 FR-019a, boot 010 FR-029: a release whose kernel needs more than the
+/// boot partition, or whose base needs more than the system partition, is
+/// refused with what each lacks.
+#[test]
+fn a_release_that_outgrows_the_pc_partitions_is_refused() {
+    let mut i = input(&[], &[], true);
+    i.release = Some(release("pc-too-big"));
+    let p = run("pc-release-too-big", "pc-windows", i);
+    assert_eq!(p.status, Status::Refused);
+    let lacks: Vec<(&str, u64)> = p.space.minimums.iter().map(|m| (m.partition.as_str(), m.lacks)).collect();
+    assert_eq!(lacks, [("glassine-boot", GIB), ("glassine-system", 4 * GIB)]);
+    assert!(
+        p.reasons.iter().any(|r| r.contains("glassine-boot is too small for this release")),
+        "{:?}",
+        p.reasons
+    );
+    assert!(
+        p.reasons.iter().any(|r| r.contains("glassine-system is too small for this release")),
+        "{:?}",
+        p.reasons
     );
 }
 
-/// Without a release (a dry run, a test) the least isn't known yet: it never
-/// refuses, and the disk's space is only "at least".
+/// 001 FR-012, FR-012a: the PC plan creates the boot, system and userdata
+/// partitions; userdata is the description's data partition (002 FR-018c).
 #[test]
-fn without_a_release_the_least_is_not_known_yet() {
-    let p = run("pc-small-disk-no-release", "pc-small-disk", input(&[], &[], true));
+fn the_pc_plan_creates_userdata() {
+    let p = plan_pc("pc-windows", &input(&[], &[], true));
+    let created: Vec<&str> = p
+        .partitions
+        .iter()
+        .filter(|x| x.actions.iter().any(|a| a == "creates"))
+        .map(|x| x.partition.as_str())
+        .collect();
+    assert!(created.contains(&"glassine-userdata"), "{created:?}");
+    assert_eq!(valid(&pc()).data_partition.unwrap().name, "glassine-userdata");
+}
+
+/// Boot 010 FR-036, SC-016: with Secure Boot on the install is refused, for a
+/// developer too, with the reason and how to switch it off; set-up mode and
+/// an unknown state are said and don't refuse.
+#[test]
+fn secure_boot_on_refuses_a_pc_install() {
+    let p = run("pc-secure-boot-on", "pc-secure-boot-on", input(&[], &[], true));
+    assert_eq!(p.status, Status::Refused);
+    assert!(!p.developer_may);
+    assert_eq!(p.reasons, [glassine_installer::plan::SECURE_BOOT_ON]);
+    let r = &p.reasons[0];
+    assert!(r.contains("Secure Boot is on") && r.contains("set Secure Boot to Disabled"), "{r}");
+    // Off: no word of it.
+    let p = plan_pc("pc-windows", &input(&[], &[], true));
+    assert!(p.notes.is_empty() && p.reasons.is_empty(), "{:?} {:?}", p.notes, p.reasons);
+    // Unknown (the variables can't be read): said, never refused for it.
+    let p = run("pc-secure-boot-unknown", "pc-secure-boot-unknown", input(&[], &[], true));
     assert_eq!(p.status, Status::Ready, "{:?}", p.reasons);
-    let d = p.space.disk.as_ref().unwrap();
-    assert_eq!((d.needs, d.lacks, d.exact), (GIB, 0, false));
-    assert_eq!(p.space.minimums[0].at_least, None);
-    let txt = render(&p, Some(&valid(&pc())));
-    assert!(txt.contains("glassine-system (for the base): not known yet"), "{txt}");
-    // A release that doesn't state it is the same.
-    let mut i = input(&[], &[], true);
-    i.release = Some(glassine_installer::release::Release::parse(r#"{"release_format": 1, "artifacts": {"kernel": {}}}"#).unwrap());
+    assert_eq!(p.notes, [glassine_installer::plan::SECURE_BOOT_UNKNOWN]);
+    // Set-up mode starts any loader: said, not refused.
+    let mut f = facts("pc-windows");
+    f.firmware.as_mut().unwrap().secure_boot = Some("setup".into());
     let ds = [valid(&pc())];
     let refs: Vec<&Description> = ds.iter().collect();
-    let f = facts("pc-small-disk");
-    let p = plan(&refs, &f, &recognize(&refs, &f), &i);
+    let p = plan(&refs, &f, &recognize(&refs, &f), &input(&[], &[], true));
     assert_eq!(p.status, Status::Ready, "{:?}", p.reasons);
-    assert!(!p.space.disk.unwrap().exact);
+    assert_eq!(p.notes, [glassine_installer::plan::SECURE_BOOT_SETUP]);
+}
+
+/// Plans `input` for the PC facts `facts_name`, with no golden file.
+fn plan_pc(facts_name: &str, i: &Input) -> glassine_installer::plan::Plan {
+    let ds = [valid(&noteair()), valid(&pc())];
+    let refs: Vec<&Description> = ds.iter().collect();
+    let f = facts(facts_name);
+    plan(&refs, &f, &recognize(&refs, &f), i)
 }
 
 /// A fixed partition is checked the same way: a release whose base outgrows

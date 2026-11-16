@@ -272,9 +272,17 @@ pub fn inspect(root: &Path) -> Result<Inspected, String> {
             let Some(base) = n.strip_suffix(&suffix) else { continue };
             let wanted = matches!(base, "SecureBoot" | "SetupMode" | "BootOrder" | "BootCurrent")
                 || (base.len() == 8 && base.starts_with("Boot") && base[4..].chars().all(|c| c.is_ascii_hexdigit()));
-            if wanted && let Ok(bytes) = fs::read(t.path(&format!("{vars_dir}/{n}"))) {
-                ev.vars.push((n, bytes));
+            if !wanted {
+                continue;
             }
+            match fs::read(t.path(&format!("{vars_dir}/{n}"))) {
+                Ok(bytes) => ev.vars.push((n, bytes)),
+                Err(_) => ev.unreadable.push(n),
+            }
+        }
+        if !ev.unreadable.is_empty() {
+            let names: Vec<&str> = ev.unreadable.iter().map(|n| n.strip_suffix(&suffix).unwrap_or(n)).collect();
+            notes.push(format!("the firmware's variables {} are listed but couldn't be read", names.join(", ")));
         }
         if ev.store == "not-mounted" {
             notes.push("the firmware's variables aren't readable here (efivarfs isn't mounted)".into());

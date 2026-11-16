@@ -114,9 +114,14 @@ fn the_derived_files_say_what_the_hand_written_ones_did() {
     assert_eq!(kept_system_slot(&d).unwrap().as_deref(), Some("a"));
 }
 
+/// A PC names a data partition, but its partitions are found by the IDs on
+/// the command line, not by names: no deploy.conf.device.
 #[test]
 fn a_pc_derives_nothing() {
-    assert!(derive(&valid(&pc())).unwrap().is_empty());
+    let d = valid(&pc());
+    assert_eq!(d.data_partition.as_ref().map(|p| p.name.as_str()), Some("glassine-userdata"));
+    let files: Vec<&str> = derive(&d).unwrap().iter().map(|f| f.file).collect();
+    assert!(files.is_empty(), "{files:?}");
 }
 
 #[test]

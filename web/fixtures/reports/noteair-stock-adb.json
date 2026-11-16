@@ -355,6 +355,7 @@
   "reasons": [
     "restart the device into fastboot or fastboot-stock to recognise it"
   ],
+  "notes": [],
   "capabilities": [],
   "plan": null
 }

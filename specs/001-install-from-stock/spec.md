@@ -76,7 +76,9 @@ person confirmed it.
 **When** the person installs,
 **Then** the flow is the one of Scenario 1. The plan states, for every operating system
 found on the PC, whether it is kept and still startable or replaced. Replacing one is never
-the default and is confirmed by name.
+the default and is confirmed by name. GlassineOS gets its own boot, system and data
+partitions in the free space of the disk the person picks. A PC whose firmware enforces
+Secure Boot is refused at the check, with how to switch it off (FR-016b).
 
 ### Scenario 6 – Keep the stock system (P2)
 
@@ -187,10 +189,14 @@ texts the description provides.
   device's list, and the GlassineOS recovery (FR-016a); where the plan keeps another
   system, its recovery stays reachable as the secondary.
 - **FR-012b**: Where the description's steps leave the data partition without a file
-  system (a resize that destroys what is on it), the installed system formats it at its
-  first start. The installer doesn't format it, and the plan says it is emptied.
-- **FR-012a**: Where the installer makes the partitions (a PC), it gives each the standard
-  partition type for its role, records each one's unique partition ID in the installation
+  system (a resize that destroys what is on it, or a new partition), the installed system
+  formats it at its first start. The installer doesn't format it, and the plan says it is emptied.
+- **FR-012a**: Where the installer makes the partitions (a PC), it makes three in the free
+  space of the chosen disk, with the sizes the description gives (002 FR-014a): the boot
+  partition, the system partition and userdata, the data partition of 002 FR-018c, which
+  takes the rest of the free space and has a least size below which the plan is refused.
+  It gives each the standard partition type for its role (userdata, which has none: the
+  Linux file-system type), records each one's unique partition ID in the installation
   record, and writes the system partition's and userdata's IDs into the boot entry's
   command line as the identity keys of [boot 001](https://github.com/GlassineOS/boot/blob/main/specs/001-deployments/spec.md)
   (FR-020). No disk goes into a base's or a deployment's file system table. Where a
@@ -216,6 +222,18 @@ texts the description provides.
   write the recovery, names them and what is missing, says plainly that the device ends
   without the GlassineOS recovery and what its recovery partition holds instead, and goes
   on with the other steps.
+- **FR-016b**: Where the installation makes the firmware start GlassineOS through a
+  firmware boot entry (a PC), the check reads whether the firmware enforces Secure Boot,
+  without writing ([boot 010](https://github.com/GlassineOS/boot/blob/main/specs/010-uefi-deployments/spec.md)
+  FR-036). While it does, the installation is refused, for developers too, with the reason
+  (the firmware would not start GlassineOS) and how to switch it off in the firmware's
+  set-up. In set-up mode (no keys enrolled) the firmware starts GlassineOS: it is installed,
+  and the plan says that enrolling keys later stops GlassineOS from starting. Where the
+  state can't be read (the firmware's variables aren't readable where the check runs), the
+  plan says it is unknown and that GlassineOS starts only with it off, and doesn't refuse
+  for that alone: a wrong guess leaves a firmware that doesn't start GlassineOS while the
+  other systems still start, and the install medium itself doesn't start with Secure Boot
+  on.
 - **FR-017**: The installer runs from Linux, Windows or a browser on a computer connected
   to the device, and on a PC from removable media started on that PC.
 - **FR-018**: The installer reaches a device through the connections its description

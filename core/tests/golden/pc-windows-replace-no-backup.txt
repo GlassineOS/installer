@@ -22,6 +22,7 @@ Partitions:
   disk 0 free space (create, 200.0 GiB): creates
   glassine-boot (create): creates, writes
   glassine-system (create): creates, writes
+  glassine-userdata (create): creates
   2 other partitions are not touched.
 
 Backup: off (your choice).
@@ -37,10 +38,11 @@ Space on the computer:
   artifacts 0 B plus base, kernel of unknown size
   at least 68.0 KiB
 
-Space on disk 0: GlassineOS needs 1.0 GiB plus glassine-system's least size (not known yet), it has 500.7 GiB free
+Space on disk 0: GlassineOS needs 26.0 GiB, it has 500.7 GiB free
 
 Least sizes from the release:
-  glassine-system (for the base): not known yet
+  glassine-boot (for the kernel): 2.0 GiB; what the release asks is not known yet
+  glassine-system (for the base): 16.0 GiB; what the release asks is not known yet
 
 Afterwards the device:
   have start-kernel [untried]
@@ -57,7 +59,7 @@ Steps:
      if it fails: installer-can-undo via step back-up (not possible: the backup is off)
      if cut off after it: installer-can-finish via step create-partitions
   3. create-partitions (create-partitions, in local) [untried, safe stop]
-     Make room for GlassineOS in the free space.
+     Make GlassineOS's partitions in the free space: its boot partition, its system and the partition for your files.
      if it fails: previous-system-starts via step back-up
      if cut off after it: installer-can-finish via step write-base
   4. write-base (write-base, in local) [untried, safe stop]

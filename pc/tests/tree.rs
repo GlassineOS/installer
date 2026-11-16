@@ -89,7 +89,7 @@ fn at(base: u64, w: Vec<(u64, Vec<u8>)>) -> Vec<(u64, Vec<u8>)> {
 fn machine(root: &Path) {
     let lba = |x: u64| x / 512;
     // disk nvme0n1: ESP, MSR, NTFS (signature), recovery (NTFS signature).
-    let size = 64 * GIB;
+    let size = 96 * GIB;
     let mut w = img::gpt(
         size,
         512,
@@ -167,7 +167,7 @@ fn machine(root: &Path) {
     );
 
     // disk vda: another Linux, ESP + ext4.
-    let size = 32 * GIB;
+    let size = 48 * GIB;
     let mut w = img::gpt(
         size,
         512,
@@ -372,27 +372,29 @@ fn the_plan_on_what_it_read() {
         p.reasons
     );
 
-    // Too small: refused with what it lacks.
+    // Too small: refused with what it lacks. The boot (2 GiB) and system
+    // (16 GiB) partitions are fixed and userdata needs at least 8 GiB.
     let p = run(&[("target-disk", "disk3")]);
     assert_eq!(p.status, Status::Refused);
     let sp = p.space.disk.as_ref().unwrap();
-    assert_eq!((sp.disk, sp.needs, sp.free), (3, 9 * GIB, 4 * GIB - 2 * MIB));
-    assert_eq!(sp.lacks, 5 * GIB + 2 * MIB);
+    assert_eq!((sp.disk, sp.needs, sp.free), (3, 26 * GIB, 4 * GIB - 2 * MIB));
+    assert_eq!(sp.lacks, 22 * GIB + 2 * MIB);
     assert!(
         p.reasons.iter().any(|r| r.contains("disk 3 is too small") && r.contains("lacks")),
         "{:?}",
         p.reasons
     );
-    // Without the release that least isn't known yet: not refused for it.
+    // Without the release it is the same: the sizes are the description's,
+    // and only the release's least sizes aren't known yet.
     let mut i = Input {
         developer: true,
         ..Default::default()
     };
     i.choices.insert("target-disk".into(), "disk3".into());
     let p = plan::plan(&ds, &s, &rec, &i);
-    assert_eq!(p.status, Status::Ready, "{:?}", p.reasons);
     let sp = p.space.disk.as_ref().unwrap();
-    assert_eq!((sp.needs, sp.lacks, sp.exact), (GIB, 0, false));
+    assert_eq!((sp.needs, sp.lacks, sp.exact), (26 * GIB, 22 * GIB + 2 * MIB, true));
+    assert!(p.space.minimums.iter().all(|m| m.at_least.is_none()));
 
     // The other Linux's disk: its image is at most the disk less what its
     // file systems report free.
@@ -403,7 +405,7 @@ fn the_plan_on_what_it_read() {
     let disk2 = &s.storage.as_ref().unwrap().disks[2];
     let unused: u64 = disk2.partitions.iter().filter_map(|x| x.fs.as_ref()?.used.map(|u| x.size - u)).sum();
     assert!(unused > 17 * GIB, "{unused}");
-    assert_eq!(img.estimate_bytes, Some(32 * GIB - unused));
+    assert_eq!(img.estimate_bytes, Some(48 * GIB - unused));
 
     // Replacing the system on the installer's disk can't happen: it holds
     // none. The backup to the installer's media while writing to it: refused

@@ -213,11 +213,16 @@ pub fn system_partitions(d: &Description) -> Vec<String> {
 /// conf/deploy.conf.example): `SYSTEM_DEV`, `USERDATA_DEV` and
 /// `USERDATA_RESERVE_KIB`, from the system partition the steps create and the
 /// data partition (FR-018c). `None` when the description names no data
-/// partition.
+/// partition, and on a PC: there the installer writes the partitions' unique
+/// IDs into the boot entry's command line (001 FR-012a) and glassine-deploy
+/// uses the partitions the boot used, never names.
 pub fn deploy_conf(d: &Description) -> Result<Option<String>, String> {
     let Some(data) = &d.data_partition else {
         return Ok(None);
     };
+    if d.backend == "uefi-pc" {
+        return Ok(None);
+    }
     let system = match system_partitions(d).as_slice() {
         [one] => one.clone(),
         [] => return Err("the description names a data partition but no step creates a system partition".into()),
