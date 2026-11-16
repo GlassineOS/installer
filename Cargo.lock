@@ -292,6 +292,7 @@ dependencies = [
  "flate2",
  "glassine-installer",
  "glassine-installer-pc",
+ "glassine-installer-pcwrite",
  "glassine-installer-usb",
  "pollster",
  "serde_json",
@@ -316,6 +317,18 @@ name = "glassine-installer-pc"
 version = "0.1.0"
 dependencies = [
  "glassine-installer",
+ "serde_json",
+]
+
+[[package]]
+name = "glassine-installer-pcwrite"
+version = "0.1.0"
+dependencies = [
+ "flate2",
+ "glassine-installer",
+ "glassine-installer-pc",
+ "libc",
+ "pollster",
  "serde_json",
 ]
 

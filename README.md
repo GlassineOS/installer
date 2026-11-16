@@ -62,9 +62,16 @@ For devices: on a computer connected to them, from Linux, Windows or a browser. 
 on the PC itself, started from removable media.
 
 A PC's write steps (backup, partition table, system and boot partitions, firmware boot
-entry) are in the core's `pc_execute`, run so far only on a simulated machine
-(`core/tests/pc_execute.rs`: a power cut after every write, a write that reads back
-otherwise, a cut at every save of the record, each resumed). Never on a real PC.
+entry) are the core's `pc_execute`; on Linux `pcwrite/` is the only code that writes a PC's
+disk and firmware variables, and `glassine-install install --pc` runs them. They have run on
+a simulated machine (`core/tests/pc_execute.rs`: a power cut after every write, a write that
+reads back otherwise, a cut at every save of the record, each resumed), on a tree of files
+(`pcwrite/tests`) and on virtual UEFI PCs in QEMU with OVMF (`tests/qemu`, the pc-check job:
+a blank disk, a kept Windows, a run cut while it writes and resumed, a backup on a small
+disk; each then starts its new boot entry, which starts a placeholder loader). Never on a
+real PC. Not built yet: the backup images every block of a disk (it doesn't skip the unused
+blocks of the file systems it could read), and the boot loader is a release's
+`boot-loader` artifact, which no release has yet.
 
 ### Setting up the computer once
 
@@ -123,7 +130,8 @@ device connected in fastboot mode with `getvar`, or with `--pc` read the PC they
   device not read this way before, `--only-gpt` first (the usage text gives the order).
   `--find-boot-area-sizes` can leave a programmer hung until the power key is held (#18).
 - `install`, `resume`: carry out the plan, after the person types "install"; `resume` goes on
-  from the record. These write to the device.
+  from the record. These write to the device, or with `--pc` to the PC they run on (its
+  target disk and its firmware's boot entries; never run on a real PC yet).
 - `host-setup` (without `--print`, as root on Linux) writes a udev rules file to this computer.
 
 `emergency-try-program` is a development command, not part of the flow, and is not in the usage.

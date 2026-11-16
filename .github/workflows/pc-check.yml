@@ -5,7 +5,10 @@ name: pc-check
 # byte-identical before and after; a control run that writes must be caught.
 # Secure Boot on (OVMF's Secure Boot build with a key made for the run) is
 # refused by the check, and the firmware starts no unsigned program from the
-# stick (boot 010 FR-036, SC-016).
+# stick (boot 010 FR-036, SC-016). The install cases write: GlassineOS onto a
+# blank disk and beside a kept Windows, and one cut while it writes the base
+# and resumed; each machine then starts from its disk alone, and the firmware
+# must start the new entry, which starts a placeholder loader.
 on: [push, pull_request, workflow_dispatch]
 permissions:
   contents: read
@@ -26,7 +29,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends qemu-system-x86 ovmf gdisk dosfstools e2fsprogs mtools squashfs-tools \
-            openssl sbsigntool python3-virt-firmware
+            openssl sbsigntool python3-virt-firmware btrfs-progs
       - name: KVM, where the runner has it (else QEMU falls back to TCG)
         run: |
           if [ -e /dev/kvm ]; then

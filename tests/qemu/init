@@ -9,6 +9,9 @@
 # disks and the variable store at @@READY and @@DONE; the guest waits for a
 # line from the host at each. glassine.mode=control writes one byte to a
 # disk and one variable instead, so the host can see a write is caught.
+# glassine.mode=install (and resume) mounts the stick read-write and installs
+# on the PC from the release folder the stick holds (the record goes on the
+# stick too), printing the boot variables before and after.
 
 /bin/busybox mkdir -p /usr/bin /usr/sbin /proc /sys /dev /tmp /media/stick
 /bin/busybox --install -s
@@ -45,7 +48,8 @@ for d in $(disks); do
 	case "$(readlink "/sys/block/$d")" in *"/usb"*) stick=$d ;; esac
 done
 part=$(ls -d /sys/block/"$stick"/"$stick"* 2>/dev/null | head -n 1)
-mount -t vfat -o ro "/dev/${part##*/}" /media/stick || echo "@@FAIL the stick didn't mount"
+case "$mode" in install | resume) how=rw ;; *) how=ro ;; esac
+mount -t vfat -o "$how" "/dev/${part##*/}" /media/stick || echo "@@FAIL the stick didn't mount"
 B=/media/stick/glassine-install
 R=/media/stick/release.json
 
@@ -62,7 +66,41 @@ emit() {
 	sed 's/^/@@ERR /' /tmp/err
 }
 
-if [ "$mode" = control ]; then
+V=/sys/firmware/efi/efivars
+G=8be4df61-93ca-11d2-aa0d-00e098032b8c
+vars() {
+	for f in "$V"/Boot*-"$G"; do
+		[ -e "$f" ] && echo "@@VAR $1 ${f##*/} $(od -An -tx1 -v "$f" | tr -d ' \n')"
+	done
+}
+log() {
+	name=$1
+	shift
+	echo "@@BEGIN log-$name"
+	"$@"
+	echo "@@EXIT $?"
+	echo "@@END log-$name"
+}
+S=/media/stick
+
+if [ "$mode" = install ] || [ "$mode" = resume ]; then
+	if [ "$mode" = install ] && [ -f "$S/seed.sh" ]; then
+		sh "$S/seed.sh" || echo "@@FAIL seeding the boot entries"
+	fi
+	vars before
+	emit facts-before "$B" inspect --pc --json
+	mkdir -p "$S/rec"
+	if [ "$mode" = install ]; then
+		# shellcheck disable=SC2046 # one argument per line
+		log install sh -c "echo install | $B install --pc --description $S/uefi-pc.toml --release-dir $S/release --record $S/rec/record.json --developer $(tr '\n' ' ' <"$S/install-args") 2>&1"
+	else
+		log resume sh -c "$B resume --record $S/rec/record.json 2>&1"
+	fi
+	sync
+	vars after
+	emit facts-after "$B" inspect --pc --json
+	sync
+elif [ "$mode" = control ]; then
 	target=
 	for d in $(disks); do [ "$d" != "$stick" ] && target=$d && break; done
 	printf 'X' | dd of="/dev/$target" bs=1 seek=1048576 conv=notrunc,fsync 2>/dev/null
