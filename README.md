@@ -175,6 +175,14 @@ Plan write nothing to any machine; Back up and Install (`web/screens/backup.js`,
 what the command line's `emergency-read` and `install` do, over WebUSB, and write into folders the
 person picks.
 
+For a PC, the start screen leads to `#/drive` (spec 005), in any browser: the newest installer
+drive GlassineOS/images publishes, read from GitHub's list of releases (the only request the
+screens make to another site), the browser's own download of it, the check of the downloaded
+file on this computer against the size and SHA-256 that list names (`web/lib/drive.js`,
+`web/lib/sha256.js`), and how to write it with an imaging program and start the PC from it. The
+page writes no stick: a browser can't. It reads only the list: GitHub's release files can't be
+read by a page on another site, so the person picks the downloaded file for the check.
+
 The published site is `make web-site`: the screens and `web/pkg`, nothing else from the
 repository.
 

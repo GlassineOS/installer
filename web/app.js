@@ -30,8 +30,9 @@ import { Resume } from './screens/resume.js';
 import { Installed } from './screens/installed.js';
 import { Done } from './screens/done.js';
 import { LiveInstall } from './screens/run.js';
+import { Drive } from './screens/drive.js';
 
-export const SCREENS = { start: Start, reach: Reach, check: Check, plan: Plan, supply: Supply, confirm: Confirm, backup: Backup, install: Install, verify: Verify, resume: Resume, installed: Installed, done: Done };
+export const SCREENS = { start: Start, reach: Reach, check: Check, plan: Plan, supply: Supply, confirm: Confirm, backup: Backup, install: Install, verify: Verify, resume: Resume, installed: Installed, done: Done, drive: Drive };
 // Live, Install and Resume are the core's run and its record (screens/run.js); with fixtures they
 // show the boards' moments of a plan.
 const LIVE_SCREENS = { ...SCREENS, install: LiveInstall, resume: LiveInstall };
@@ -172,7 +173,8 @@ function App() {
     }
   }, [view]);
 
-  if (!('usb' in navigator)) return html`<${Start} s=${view.s} state="nowebusb" />`;
+  // Making a PC's drive needs no device access (spec 005): every browser gets it.
+  if (!('usb' in navigator) && view.route !== 'drive') return html`<${Start} s=${view.s} state="nowebusb" />`;
   if (view.error) {
     return html`<${Page} step="start" eyebrow="The installer" title="This page couldn’t be shown">
       <${Admonition} kind="warning" seal="G" label="Error" title="A record couldn’t be read"><p>${String(view.error.message || view.error)}</p><p><strong>Way out:</strong> nothing has happened. <a class="il-link" href="#/start">Start again</a>.</p></${Admonition}>

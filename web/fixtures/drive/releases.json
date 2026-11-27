@@ -1,0 +1,146 @@
+[
+ {
+  "tag_name": "uefi-pc-20261201-1111111111111111",
+  "name": "GlassineOS PC 20261201-1111111111111111",
+  "draft": false,
+  "prerelease": true,
+  "created_at": "2026-12-01T10:00:00Z",
+  "published_at": "2026-12-01T10:00:00Z",
+  "assets": [
+   {
+    "name": "release.json",
+    "size": 2666,
+    "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "content_type": "application/octet-stream",
+    "browser_download_url": "https://github.com/GlassineOS/images/releases/download/uefi-pc-20261201-1111111111111111/release.json"
+   },
+   {
+    "name": "glassine-drive-20261201-1111111111111111.img",
+    "size": 3145745,
+    "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "content_type": "application/octet-stream",
+    "browser_download_url": "https://github.com/GlassineOS/images/releases/download/uefi-pc-20261201-1111111111111111/glassine-drive-20261201-1111111111111111.img"
+   }
+  ]
+ },
+ {
+  "tag_name": "uefi-pc-20261203-2222222222222222",
+  "name": "GlassineOS PC 20261203-2222222222222222",
+  "draft": false,
+  "prerelease": true,
+  "created_at": "2026-12-03T10:00:00Z",
+  "published_at": "2026-12-03T10:00:00Z",
+  "assets": [
+   {
+    "name": "release.json",
+    "size": 2666,
+    "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "content_type": "application/octet-stream",
+    "browser_download_url": "https://github.com/GlassineOS/images/releases/download/uefi-pc-20261203-2222222222222222/release.json"
+   },
+   {
+    "name": "SHA256SUMS",
+    "size": 169,
+    "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "content_type": "application/octet-stream",
+    "browser_download_url": "https://github.com/GlassineOS/images/releases/download/uefi-pc-20261203-2222222222222222/SHA256SUMS"
+   },
+   {
+    "name": "uefi-pc-release.tar.zst",
+    "size": 620068136,
+    "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "content_type": "application/octet-stream",
+    "browser_download_url": "https://github.com/GlassineOS/images/releases/download/uefi-pc-20261203-2222222222222222/uefi-pc-release.tar.zst"
+   },
+   {
+    "name": "glassine-drive-20261203-2222222222222222.img",
+    "size": 3145745,
+    "digest": "sha256:27f3f0120d4a72b66e7b58152c631644bd689231ebd4487469b59226f1be13af",
+    "content_type": "application/octet-stream",
+    "browser_download_url": "https://github.com/GlassineOS/images/releases/download/uefi-pc-20261203-2222222222222222/glassine-drive-20261203-2222222222222222.img"
+   }
+  ]
+ },
+ {
+  "tag_name": "uefi-pc-20261204-3333333333333333",
+  "name": "GlassineOS PC 20261204-3333333333333333",
+  "draft": false,
+  "prerelease": true,
+  "created_at": "2026-12-02T10:00:00Z",
+  "published_at": "2026-12-02T10:00:00Z",
+  "assets": [
+   {
+    "name": "release.json",
+    "size": 2666,
+    "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "content_type": "application/octet-stream",
+    "browser_download_url": "https://github.com/GlassineOS/images/releases/download/uefi-pc-20261204-3333333333333333/release.json"
+   },
+   {
+    "name": "glassine-drive-20261204-3333333333333333.img",
+    "size": 3145745,
+    "digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+    "content_type": "application/octet-stream",
+    "browser_download_url": "https://github.com/GlassineOS/images/releases/download/uefi-pc-20261204-3333333333333333/glassine-drive-20261204-3333333333333333.img"
+   }
+  ]
+ },
+ {
+  "tag_name": "uefi-pc-20261205-4444444444444444",
+  "name": "GlassineOS PC 20261205-4444444444444444",
+  "draft": false,
+  "prerelease": true,
+  "created_at": "2026-12-05T10:00:00Z",
+  "published_at": "2026-12-05T10:00:00Z",
+  "assets": [
+   {
+    "name": "release.json",
+    "size": 2666,
+    "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "content_type": "application/octet-stream",
+    "browser_download_url": "https://github.com/GlassineOS/images/releases/download/uefi-pc-20261205-4444444444444444/release.json"
+   },
+   {
+    "name": "uefi-pc-release.tar.zst",
+    "size": 620068136,
+    "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "content_type": "application/octet-stream",
+    "browser_download_url": "https://github.com/GlassineOS/images/releases/download/uefi-pc-20261205-4444444444444444/uefi-pc-release.tar.zst"
+   }
+  ]
+ },
+ {
+  "tag_name": "uefi-pc-20261206-5555555555555555",
+  "name": "GlassineOS PC 20261206-5555555555555555",
+  "draft": true,
+  "prerelease": true,
+  "created_at": "2026-12-06T10:00:00Z",
+  "published_at": null,
+  "assets": [
+   {
+    "name": "glassine-drive-20261206-5555555555555555.img",
+    "size": 3145745,
+    "digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+    "content_type": "application/octet-stream",
+    "browser_download_url": "https://github.com/GlassineOS/images/releases/download/uefi-pc-20261206-5555555555555555/glassine-drive-20261206-5555555555555555.img"
+   }
+  ]
+ },
+ {
+  "tag_name": "noteair-20261207",
+  "name": "GlassineOS PC 20261207",
+  "draft": false,
+  "prerelease": true,
+  "created_at": "2026-12-07T10:00:00Z",
+  "published_at": "2026-12-07T10:00:00Z",
+  "assets": [
+   {
+    "name": "glassine-drive-noteair.img",
+    "size": 3145745,
+    "digest": "sha256:6666666666666666666666666666666666666666666666666666666666666666",
+    "content_type": "application/octet-stream",
+    "browser_download_url": "https://github.com/GlassineOS/images/releases/download/noteair-20261207/glassine-drive-noteair.img"
+   }
+  ]
+ }
+]

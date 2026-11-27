@@ -1,0 +1,33 @@
+[
+ {
+  "tag_name": "uefi-pc-20261205-4444444444444444",
+  "name": "GlassineOS PC 20261205-4444444444444444",
+  "draft": false,
+  "prerelease": true,
+  "created_at": "2026-12-05T10:00:00Z",
+  "published_at": "2026-12-05T10:00:00Z",
+  "assets": [
+   {
+    "name": "release.json",
+    "size": 2666,
+    "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "content_type": "application/octet-stream",
+    "browser_download_url": "https://github.com/GlassineOS/images/releases/download/uefi-pc-20261205-4444444444444444/release.json"
+   },
+   {
+    "name": "SHA256SUMS",
+    "size": 169,
+    "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "content_type": "application/octet-stream",
+    "browser_download_url": "https://github.com/GlassineOS/images/releases/download/uefi-pc-20261205-4444444444444444/SHA256SUMS"
+   },
+   {
+    "name": "uefi-pc-release.tar.zst",
+    "size": 620068136,
+    "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "content_type": "application/octet-stream",
+    "browser_download_url": "https://github.com/GlassineOS/images/releases/download/uefi-pc-20261205-4444444444444444/uefi-pc-release.tar.zst"
+   }
+  ]
+ }
+]

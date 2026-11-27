@@ -72,7 +72,8 @@ person confirmed it.
 
 ### Scenario 5 – A PC (P1)
 
-**Given** a PC that starts from UEFI, with the installer started from removable media,
+**Given** a PC that starts from UEFI, with the installer started from removable media
+(the installer drive, which the browser installer helps the person make: 005),
 **When** the person installs,
 **Then** the flow is the one of Scenario 1. The plan states, for every operating system
 found on the PC, whether it is kept and still startable or replaced. Replacing one is never
@@ -299,7 +300,9 @@ texts the description provides.
   - Where the volume is on a disk the installation doesn't write to, the plan says so, with
     the same advice, and doesn't refuse.
 - **FR-017**: The installer runs from Linux, Windows or a browser on a computer connected
-  to the device, and on a PC from removable media started on that PC.
+  to the device, and on a PC from removable media started on that PC. The browser installer
+  offers that medium on any computer, checked against its release, with how to write it
+  and start the PC from it (005).
 - **FR-018**: The installer reaches a device through the connections its description
   names, such as its boot loader's own USB protocol or a mode of its stock system. Where a
   boot loader departs from its protocol's standard, the description says how, and the
