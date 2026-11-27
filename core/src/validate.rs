@@ -670,7 +670,7 @@ fn check_device_data(ck: &mut Ck) {
 
 /// The person's data partition (FR-018c): a partition a rule selects, never one
 /// the installation's system goes to, and a size that fits the file the
-/// installed system reads (whole KiB).
+/// installed system reads (whole KiB), and a keep count of 1 or more.
 fn check_data_partition(ck: &mut Ck) {
     let d = ck.d;
     let Some(p) = &d.data_partition else {
@@ -684,6 +684,9 @@ fn check_data_partition(ck: &mut Ck) {
     }
     if p.keep_free_kib().is_none() {
         ck.p("data_partition.keep_free_at_end", "not a size the installed system can read");
+    }
+    if p.keep_updates().is_none() {
+        ck.p("data_partition.keep_updates", "not a whole number of 1 or more");
     }
 }
 

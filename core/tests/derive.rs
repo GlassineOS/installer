@@ -59,8 +59,20 @@ fn the_note_airs_deploy_facts() {
             ["SYSTEM_DEV=/dev/disk/by-partlabel/system_b"],
             ["USERDATA_DEV=/dev/disk/by-partlabel/userdata"],
             ["USERDATA_RESERVE_KIB=16"],
+            ["KEEP_UPDATES=1"],
         ]
     );
+}
+
+/// FR-018c, boot spec 007 FR-002: KEEP_UPDATES from keep_updates; 1 when absent.
+#[test]
+fn keep_updates_is_derived() {
+    let t = mutate(&noteair(), "keep_updates = 1", "keep_updates = 4");
+    let c = deploy_conf(&valid(&t)).unwrap().unwrap();
+    assert!(c.lines().any(|l| l == "KEEP_UPDATES=4"), "{c}");
+    let t = mutate(&noteair(), "keep_updates = 1\n", "");
+    let c = deploy_conf(&valid(&t)).unwrap().unwrap();
+    assert!(c.lines().any(|l| l == "KEEP_UPDATES=1"), "{c}");
 }
 
 #[test]
@@ -75,7 +87,11 @@ fn no_kept_free_space_is_zero() {
 
 #[test]
 fn no_data_partition_no_deploy_conf() {
-    let t = mutate(&noteair(), "[data_partition]\nname = \"userdata\"\nkeep_free_at_end = \"16KiB\"\n", "");
+    let t = mutate(
+        &noteair(),
+        "[data_partition]\nname = \"userdata\"\nkeep_free_at_end = \"16KiB\"\nkeep_updates = 1\n",
+        "",
+    );
     let d = valid(&t);
     assert_eq!(deploy_conf(&d).unwrap(), None);
     assert!(derive(&d).unwrap().iter().all(|f| f.file != "deploy.conf.device"));
