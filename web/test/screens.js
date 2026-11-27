@@ -74,7 +74,9 @@ async function main() {
   };
 
   // A page that records everything that went wrong on it.
-  async function open({ noUsb = false } = {}) {
+  // api: what GitHub's list of releases answers (the drive screen, spec 005): { file } of
+  // web/fixtures/drive/, or { status }. Nothing else may leave the page.
+  async function open({ noUsb = false, api = null } = {}) {
     const page = await browser.newPage();
     await page.setViewport({ width: 1280, height: 1000 });
     const problems = [];
@@ -83,7 +85,11 @@ async function main() {
       const u = new URL(r.url());
       // Nothing is ever sent anywhere: a picked file stays in the page (spec 004 FR-003).
       if (r.method() !== 'GET') problems.push(`a ${r.method()} request: ${r.url()}`);
-      if (u.protocol === 'data:' || u.protocol === 'blob:' || (u.hostname === '127.0.0.1' && u.port === String(server.address().port))) r.continue();
+      if (api && u.hostname === 'api.github.com' && u.pathname === '/repos/GlassineOS/images/releases') {
+        const cors = { 'Access-Control-Allow-Origin': '*' };
+        if (api.status) r.respond({ status: api.status, headers: cors, contentType: 'application/json', body: '{"message":"API rate limit exceeded"}' });
+        else r.respond({ status: 200, headers: cors, contentType: 'application/json', body: fs.readFileSync(path.join(ROOT, 'web/fixtures/drive', api.file + '.json')) });
+      } else if (u.protocol === 'data:' || u.protocol === 'blob:' || (u.hostname === '127.0.0.1' && u.port === String(server.address().port))) r.continue();
       else { problems.push(`request to another site: ${r.url()}`); r.abort(); }
     });
     page.on('console', (m) => { if (m.type() === 'error' || m.type() === 'warn') problems.push(`console ${m.type()}: ${m.text()}`); });
@@ -555,6 +561,151 @@ async function main() {
     await pickFile('known');
     assert.deepStrictEqual(await card(), { verdict: 'known', refused: null });
   });
+
+  // The PC installer drive (spec 005). The list of releases is a recorded one (web/fixtures/drive);
+  // the file the person picks is the synthetic one whose SHA-256 the recorded list names for the
+  // newest drive (DRIVE_SUM), or that file with one byte changed, or cut short.
+  const DRIVE_FILES = fs.mkdtempSync(path.join(os.tmpdir(), 'glassine-drive-'));
+  const driveBytes = Buffer.alloc(3 * 1024 * 1024 + 17);
+  for (let i = 0; i < driveBytes.length; i++) driveBytes[i] = (i * 31 + 7) & 255;
+  const DRIVE_SUM = require('crypto').createHash('sha256').update(driveBytes).digest('hex');
+  const DRIVE_NAME = 'glassine-drive-20261203-2222222222222222.img';
+  fs.writeFileSync(path.join(DRIVE_FILES, 'good.img'), driveBytes);
+  const changed = Buffer.from(driveBytes);
+  changed[2 * 1024 * 1024 + 5] ^= 1;
+  fs.writeFileSync(path.join(DRIVE_FILES, 'changed.img'), changed);
+  fs.writeFileSync(path.join(DRIVE_FILES, 'short.img'), driveBytes.subarray(0, 1024 * 1024));
+  const driveShot = async (p, label) => {
+    if (!SHOTS) return;
+    fs.mkdirSync(SHOTS, { recursive: true });
+    await p.screenshot({ path: path.join(SHOTS, `drive--${label}.png`), fullPage: true });
+  };
+  const openDrive = async (api, opts = {}) => {
+    const o = await open({ api, ...opts });
+    await o.page.goto(base + '#/drive', { waitUntil: 'load' });
+    await o.page.waitForFunction(() => document.documentElement.dataset.ready === 'drive', { timeout: 15000 });
+    await o.page.waitForFunction(() => !document.querySelector('#drive-looking'), { timeout: 10000 });
+    return o;
+  };
+  const pickDriveFile = async (p, name, want) => {
+    await (await p.$('#drive-file')).uploadFile(path.join(DRIVE_FILES, name));
+    await p.waitForFunction((w) => { const c = document.querySelector('#drive-check'); return c && c.dataset.result === w; }, { timeout: 20000 }, want);
+  };
+
+  if (!ONLY || ONLY === 'drive') {
+    await test('drive: the hash in pieces is SHA-256, at every block boundary', async () => {
+      const cases = [0, 1, 55, 56, 63, 64, 65, 119, 120, 128, 1000, 70001].map((n) => {
+        const b = Buffer.alloc(n);
+        for (let i = 0; i < n; i++) b[i] = (i * 13 + 1) & 255;
+        return { n, want: require('crypto').createHash('sha256').update(b).digest('hex') };
+      });
+      const got = await page.evaluate(async (cs) => {
+        const { Sha256 } = await import('/web/lib/sha256.js');
+        return cs.map(({ n }) => {
+          const b = new Uint8Array(n).map((_, i) => (i * 13 + 1) & 255);
+          return [1, 3, 64, 100, 1 << 20].map((step) => { const h = new Sha256(); for (let i = 0; i < n; i += step) h.update(b.subarray(i, i + step)); return h.hex(); });
+        });
+      }, cases);
+      cases.forEach((c, i) => got[i].forEach((g) => assert.strictEqual(g, c.want, `${c.n} bytes`)));
+    });
+
+    await test('drive: the newest published PC release with a drive, from the recorded list', async () => {
+      const read = (f) => JSON.parse(fs.readFileSync(path.join(ROOT, 'web/fixtures/drive', f + '.json'), 'utf8'));
+      const got = await page.evaluate(async (a, b) => { const m = await import('/web/lib/drive.js'); return [m.pickDrive(a), m.pickDrive(b)]; }, read('releases'), read('releases-none'));
+      assert.strictEqual(got[0].state, 'found');
+      // not the newer release without a drive, not the draft, not another machine's
+      assert.strictEqual(got[0].drive.tag, 'uefi-pc-20261203-2222222222222222');
+      assert.strictEqual(got[0].drive.name, DRIVE_NAME);
+      assert.strictEqual(got[0].drive.size, driveBytes.length);
+      assert.strictEqual(got[0].drive.sha256, DRIVE_SUM, 'the recorded list no longer names the synthetic file');
+      assert.strictEqual(got[0].drive.packed, null);
+      assert.deepStrictEqual(got[1], { state: 'none' });
+    });
+
+    await test('drive: the published file is checked, then the writing and starting steps', async () => {
+      const o = await openDrive({ file: 'releases' });
+      const p = o.page;
+      assert.match(await p.$eval('#drive-release', (x) => x.innerText), /20261203-2222222222222222[\s\S]*Published 2026-12-03[\s\S]*glassine-drive-20261203-2222222222222222\.img · 3\.0 MiB/);
+      assert.match(await p.$eval('#drive-download', (a) => a.getAttribute('href')), /\/releases\/download\/uefi-pc-20261203-2222222222222222\/glassine-drive-20261203-2222222222222222\.img$/);
+      assert.ok(await p.$('#drive-check-first'), 'the writing steps before a check');
+      assert.strictEqual(await p.$('#drive-write'), null);
+      await driveShot(p, 'found');
+      await pickDriveFile(p, 'good.img', 'match');
+      assert.strictEqual(await p.$eval('li[data-drive-step="check"]', (x) => x.dataset.state), 'done');
+      assert.ok((await p.$eval('#drive-check', (x) => x.innerText)).includes(DRIVE_SUM.match(/.{8}/g).join(' ')));
+      assert.ok(await p.$('#drive-write'));
+      assert.ok(await p.$('#drive-secure-boot'));
+      assert.deepStrictEqual(await p.$$eval('#drive-imagers [data-imager]', (x) => x.map((e) => e.dataset.imager)), ['etcher', 'fmw', 'rpi']);
+      // dd on Linux only, with the file's own name
+      await p.evaluate(() => document.querySelector('input[name="drive-system"][value="linux"]').click());
+      await p.waitForSelector('#drive-dd');
+      assert.strictEqual(await p.$eval('#drive-dd-line pre', (x) => x.textContent), `sudo dd if=${DRIVE_NAME} of=/dev/sdX bs=4M conv=fsync status=progress`);
+      await driveShot(p, 'match');
+      await p.evaluate(() => document.querySelector('input[name="drive-system"][value="windows"]').click());
+      await p.waitForFunction(() => !document.querySelector('#drive-dd'));
+      // the page never writes a stick, nor says it did
+      const t = await p.evaluate(() => document.body.innerText);
+      assert.ok(!/\b(written to|writing the stick|stick is ready)\b/i.test(t), 'speaks of a write it can’t make');
+      assert.deepStrictEqual(o.problems, []);
+      await p.close();
+    });
+
+    await test('drive: a wrong checksum is reported, and writing is not shown as the next step', async () => {
+      const o = await openDrive({ file: 'releases' });
+      const p = o.page;
+      await pickDriveFile(p, 'changed.img', 'differs');
+      const card = await p.$eval('#drive-check', (x) => x.innerText);
+      assert.match(card, /Not the published file/);
+      assert.ok(card.includes(DRIVE_SUM.match(/.{8}/g).join(' ')), 'the published checksum isn’t shown next to the file’s');
+      assert.ok(await p.$('#drive-dont-write'));
+      assert.strictEqual(await p.$('#drive-write'), null, 'the writing steps for a file that doesn’t match');
+      assert.strictEqual(await p.$('#drive-start'), null, 'the starting steps for a file that doesn’t match');
+      assert.notStrictEqual(await p.$eval('li[data-drive-step="check"]', (x) => x.dataset.state), 'done');
+      assert.strictEqual(await p.$$eval('li[data-drive-step][data-state="done"]', (x) => x.length), 0);
+      assert.match(await p.$eval('.ins-next', (x) => x.innerText), /Download the file again/);
+      await driveShot(p, 'differs');
+      // a cut-off download: the size says so before any reading
+      await pickDriveFile(p, 'short.img', 'short');
+      assert.match(await p.$eval('#drive-check', (x) => x.innerText), /Not the whole file[\s\S]*1\.0 MiB, the published file 3\.0 MiB/);
+      assert.ok(await p.$('#drive-dont-write'));
+      // the published file after a wrong one: on again
+      await pickDriveFile(p, 'good.img', 'match');
+      assert.strictEqual(await p.$('#drive-dont-write'), null);
+      assert.deepStrictEqual(o.problems, []);
+      await p.close();
+    });
+
+    await test('drive: none published, or the list refused: said, with where the releases are, nothing to download', async () => {
+      let o = await openDrive({ file: 'releases-none' });
+      assert.match(await o.page.$eval('#drive-none', (x) => x.innerText), /No stick is published yet[\s\S]*github\.com\/GlassineOS\/images\/releases/);
+      assert.strictEqual(await o.page.$('#drive-download'), null);
+      assert.deepStrictEqual(o.problems, []);
+      await o.page.close();
+      o = await openDrive({ status: 403 });
+      assert.match(await o.page.$eval('#drive-error', (x) => x.innerText), /couldn’t be read[\s\S]*try again later/i);
+      assert.strictEqual(await o.page.$('#drive-download'), null);
+      await driveShot(o.page, 'refused');
+      // the refusal itself is the recorded answer; nothing else went wrong
+      assert.deepStrictEqual(o.problems.filter((x) => !/api\.github\.com|status of 403/.test(x)), []);
+      await o.page.close();
+    });
+
+    await test('drive: offered in a browser without WebUSB, and not in the PC’s live session', async () => {
+      const o = await open({ noUsb: true, api: { file: 'releases' } });
+      await o.page.goto(base + '#/start', { waitUntil: 'load' });
+      await o.page.waitForSelector('#nowebusb', { timeout: 10000 });
+      assert.match(await o.page.$eval('#go-drive', (a) => a.getAttribute('href')), /^#\/drive/);
+      await o.page.click('#go-drive');
+      await o.page.waitForSelector('#drive-release', { timeout: 10000 });
+      assert.strictEqual(await o.page.$('#nowebusb'), null);
+      assert.deepStrictEqual(o.problems, []);
+      await o.page.close();
+      await go(page, '#/start');
+      assert.ok(await page.$('#go-drive'));
+      await go(page, '#/start?live=1');
+      assert.strictEqual(await page.$('#go-drive'), null, 'offers a drive on the PC started from one');
+    });
+  }
 
   await page.close();
   await browser.close();

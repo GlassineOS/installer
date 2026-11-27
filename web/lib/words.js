@@ -163,3 +163,72 @@ export function human(n) {
   while (x >= 1024 && u < U.length - 1) { x /= 1024; u++; }
   return u === 0 ? `${n} B` : `${x.toFixed(1)} ${U[u]}`;
 }
+
+// Making the PC installer drive in the browser (spec 005). A browser can't write a USB stick:
+// these words never say or suggest that the page writes it.
+export const DRIVE = {
+  eyebrow: 'A PC',
+  title: 'Make a USB stick for a PC',
+  lead: 'GlassineOS is installed on a PC from a USB stick started on that PC. Here you download the stick’s file and check it. An imaging program then writes it to the stick: a browser can’t write to a USB stick.',
+  need: 'You need',
+  needStick: (gb) => (gb ? `A USB stick of at least ${gb} GB. Everything on it is erased.` : 'A USB stick big enough for the unpacked file. Everything on it is erased.'),
+  needPc: 'A PC with a 64-bit Intel or AMD processor that starts with UEFI, as most PCs made since 2012 do.',
+  needSecureBoot: 'Secure Boot switched off on that PC. Below it says how.',
+  looking: 'Looking for the newest stick…',
+  offline: { title: 'The list of releases couldn’t be read', body: 'This computer got no answer. Check its connection to the internet, then try again.' },
+  refused: { title: 'The list of releases couldn’t be read', body: 'GitHub didn’t give the list just now. It gives a computer only a few lists an hour; try again later.' },
+  none: { title: 'No stick is published yet', body: 'No GlassineOS release for PCs carries a stick’s file yet.' },
+  listed: 'The releases are listed here:',
+  again: 'Try again',
+  steps: ['Download the file', 'Check the file', 'Write it to the USB stick', 'Start the PC from the stick'],
+  release: (base) => `GlassineOS for PCs, ${base}`,
+  published: (date) => `Published ${date}`,
+  unreviewed: 'GlassineOS is unreviewed and has been tested only on virtual PCs. Installing it on a real PC is at your own risk.',
+  download: (size) => `Download (${size})`,
+  downloadNote: 'Your browser saves the file, usually in your Downloads folder.',
+  checkBody: 'When the download is finished, choose the file here. The installer checks on this computer that it is the published file, byte for byte. Nothing is uploaded.',
+  choose: 'Choose the downloaded file…',
+  chooseAgain: 'Choose another file…',
+  checking: (pct) => `Checking the file… ${pct} %`,
+  result: {
+    match: { name: 'The published file', body: 'It is the published file, byte for byte. Write it to the USB stick.' },
+    short: { name: 'Not the whole file', body: (got, want) => `It has ${got}, the published file ${want}. Wait until the download has finished, or download it again.` },
+    long: { name: 'Not the published file', body: (got, want) => `It has ${got}, the published file ${want}. Choose the file you downloaded here.` },
+    differs: { name: 'Not the published file', body: 'Its checksum differs from the published one: it was changed, or the download went wrong.' },
+    unreadable: { name: 'The file couldn’t be read', body: 'Choose it again, or download it again.' },
+  },
+  checksum: 'Checksum',
+  publishedSum: 'Published',
+  dontWrite: { label: 'Don’t write it', title: 'Don’t write this file to a stick', body: 'Download the file again and check it. Nothing has been written anywhere.' },
+  checkFirst: 'Check the file first. The steps appear here when it is the published file.',
+  writeIntro: 'An imaging program writes the file to the stick and erases everything that was on it. Use one of these. They are free.',
+  system: 'This computer runs',
+  systems: { windows: 'Windows', macos: 'macOS', linux: 'Linux' },
+  imagers: [
+    { id: 'etcher', name: 'balenaEtcher', steps: ['Choose Flash from file and pick the checked file.', 'Choose Select target and pick the USB stick.', 'Choose Flash. It checks the stick when it has written it.'] },
+    { id: 'fmw', name: 'Fedora Media Writer', steps: ['Choose Select .iso file and pick the checked file. If it isn’t listed, show all files in the file window.', 'Pick the USB stick, then choose Write.'] },
+    { id: 'rpi', name: 'Raspberry Pi Imager', steps: ['For the operating system choose Use custom and pick the checked file.', 'For the storage pick the USB stick.', 'When it offers to customise the system, say no: that is for Raspberry Pi OS. Then write.'] },
+  ],
+  dd: {
+    name: 'dd, in a terminal',
+    find: 'Plug in the stick and find its name. Its line shows usb, and its size:',
+    write: 'Then write the file. Put the stick’s name in place of sdX, and run the line in the folder with the file. A wrong name erases another disk.',
+    unpack: { xz: 'xz -dc', zst: 'zstd -dc', gz: 'gzip -dc' },
+  },
+  copy: 'Copy',
+  copied: 'Copied',
+  secureBoot: {
+    label: 'Secure Boot',
+    title: 'The PC starts the stick only with Secure Boot off',
+    body: 'GlassineOS’s start program isn’t signed for Secure Boot. With Secure Boot on, the PC doesn’t start the stick: it shows a message or starts its usual system, and nothing on it changes.',
+    how: 'To switch it off, open the PC’s firmware set-up: press its set-up key while it starts, often F2, Del or Esc. Find Secure Boot, usually under Boot or Security, set it to Disabled, save and leave.',
+  },
+  start: [
+    'Plug the stick into the PC and switch the PC on.',
+    'Press its boot menu key while it starts, often F12, F11, F10, F8 or Esc, and choose the USB stick. If it is listed twice, choose the one with UEFI in its name.',
+    'GlassineOS starts from the stick. The installation goes on there: it asks what it needs, and writes nothing to the PC until you confirm.',
+  ],
+  next: { before: 'Download the file, then choose it here for the check.', match: 'Write the file with an imaging program, then start the PC from the stick.', bad: 'Download the file again and check it.', error: 'Try again later. Nothing has happened.', none: 'Nothing, until a stick is published.' },
+  out: 'Close this page. Nothing has been written anywhere.',
+  back: 'Back to the start',
+};
