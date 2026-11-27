@@ -298,10 +298,11 @@ pinned to,
   step creates for the system (`role = "system"`). The installed system's
   [glassine-deploy](https://github.com/GlassineOS/boot/blob/main/docs/deployments.md)
   configuration takes from it, and from that system partition, where the two
-  partitions are, what stays free and how many earlier deployments stay (FR-030), except where the installer makes the
-  partitions (a PC): there the system finds both by the identities the installer writes
-  into the first kernel set's command line (001 FR-012a), so nothing is derived from it
-  but the system partition's size (FR-019a). A
+  partitions are, what stays free and how many earlier deployments stay (FR-030). Where
+  the installer makes the partitions (a PC), the configuration names neither partition:
+  the system finds both by the identities the installer writes into the first kernel
+  set's command line (001 FR-012a), and only what stays free and how many earlier
+  deployments stay are taken from it. A
   description without it names no data partition, and nothing is derived from it.
 
 ### What an installation does
@@ -410,8 +411,9 @@ pinned to,
   description holds (the device-data list of FR-018; where the description keeps another
   system, the slot that system starts from, which is the slot the step that retires it
   marks unbootable when the person chooses not to keep it; where it names a data
-  partition (FR-018c) that the system finds by name, glassine-deploy's device part: the system partition, the data
-  partition, the space kept free at its end and how many earlier deployments it keeps, at
+  partition (FR-018c), glassine-deploy's device part: the system partition and the data
+  partition where the system finds them by name, the space kept free at the data
+  partition's end and how many earlier deployments it keeps, at
   `/usr/share/glassine/deploy.conf.device`, which the device's package puts into
   `/etc/glassine/deploy.conf` with its own settings) is derived from the
   description when the device's package is built, and the build fails when a derived file
