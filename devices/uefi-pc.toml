@@ -6,7 +6,7 @@
 # Nothing here has been run on a real PC yet; the install is proven on
 # QEMU with OVMF only (tests/qemu).
 
-format = 4
+format = 5
 id = "uefi-pc"
 name = "UEFI PC (x86-64)"
 backend = "uefi-pc"
@@ -91,9 +91,12 @@ class = "create"
 
 # The person's data (boot 001's userdata): the deployments' own layers, home,
 # Flatpak data and the hibernate file. The installer creates it empty; the
-# installed system makes its file system (ext4) at its first start.
+# installed system makes its file system (ext4) at its first start. It keeps
+# four earlier deployments for going back (boot spec 007); the system partition
+# is sized for four base updates.
 [data_partition]
 name = "glassine-userdata"
+keep_updates = 4
 
 # Every disk the installation writes to is backed up whole first: its
 # partition table and every partition, as one image (installer 001 FR-009).

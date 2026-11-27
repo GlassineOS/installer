@@ -210,9 +210,9 @@ pub fn system_partitions(d: &Description) -> Vec<String> {
 }
 
 /// The device's part of glassine-deploy's configuration (GlassineOS/boot
-/// conf/deploy.conf.example): `SYSTEM_DEV`, `USERDATA_DEV` and
-/// `USERDATA_RESERVE_KIB`, from the system partition the steps create and the
-/// data partition (FR-018c). `None` when the description names no data
+/// conf/deploy.conf.example): `SYSTEM_DEV`, `USERDATA_DEV`,
+/// `USERDATA_RESERVE_KIB` and `KEEP_UPDATES`, from the system partition the steps
+/// create and the data partition (FR-018c). `None` when the description names no data
 /// partition, and on a PC: there the installer writes the partitions' unique
 /// IDs into the boot entry's command line (001 FR-012a) and glassine-deploy
 /// uses the partitions the boot used, never names.
@@ -231,13 +231,17 @@ pub fn deploy_conf(d: &Description) -> Result<Option<String>, String> {
     let Some(reserve) = data.keep_free_kib() else {
         return Err(format!("data_partition.keep_free_at_end {:?} is not a size", data.keep_free_at_end));
     };
+    let Some(keep) = data.keep_updates() else {
+        return Err(format!("data_partition.keep_updates {:?} is not 1 or more", data.keep_updates));
+    };
     let mut o = String::new();
     comment(
         &mut o,
         &format!(
             "The {}'s facts for glassine-deploy (GlassineOS/boot conf/deploy.conf.example): the \
-             system partition, the person's data partition and the space the first start leaves \
-             free at the data partition's end. The device's package puts these lines into \
+             system partition, the person's data partition, the space the first start leaves \
+             free at the data partition's end and how many earlier deployments it keeps. The \
+             device's package puts these lines into \
              /etc/glassine/deploy.conf with its own settings.",
             d.name
         ),
@@ -249,5 +253,6 @@ pub fn deploy_conf(d: &Description) -> Result<Option<String>, String> {
     o.push_str(&format!("SYSTEM_DEV=/dev/disk/by-partlabel/{system}\n"));
     o.push_str(&format!("USERDATA_DEV=/dev/disk/by-partlabel/{}\n", data.name));
     o.push_str(&format!("USERDATA_RESERVE_KIB={reserve}\n"));
+    o.push_str(&format!("KEEP_UPDATES={keep}\n"));
     Ok(Some(o))
 }

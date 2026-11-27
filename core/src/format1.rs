@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-//! The device description (spec 002), formats 1 to 3: its structure as a
+//! The device description (spec 002), formats 1 to 5: its structure as a
 //! shape for each format (for the walker and the schema) and as typed records
 //! (for everything after; each format only adds to the one before, so one set
 //! of records reads them all).
@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 /// The latest format; a reader reads it and every earlier one (FR-003).
-pub const FORMAT: i64 = 4;
+pub const FORMAT: i64 = 5;
 /// The earliest format a reader reads.
 pub const FIRST_FORMAT: i64 = 1;
 
@@ -383,6 +383,10 @@ pub struct DataPartition {
     /// What stays free at its end, a fixed size (`<n>KiB` and up); none when absent.
     #[serde(default)]
     pub keep_free_at_end: Option<String>,
+    /// How many earlier deployments the installed system keeps for going back
+    /// (format 5, boot spec 007); 1 when absent.
+    #[serde(default)]
+    pub keep_updates: Option<i64>,
 }
 
 impl DataPartition {
@@ -395,6 +399,15 @@ impl DataPartition {
             .iter()
             .find_map(|(u, sh)| v.strip_suffix(u).map(|n| (n, *sh)))?;
         n.parse::<u64>().ok()?.checked_mul(1 << shift)
+    }
+
+    /// `keep_updates` (1 when absent); `None` when it is less than 1.
+    pub fn keep_updates(&self) -> Option<u64> {
+        match self.keep_updates {
+            None => Some(1),
+            Some(n) if n >= 1 => Some(n as u64),
+            Some(_) => None,
+        }
     }
 }
 
@@ -986,7 +999,7 @@ pub fn shape_for(format: i64) -> Table {
     } else {
         table(boot_setting_fields)
     };
-    // From format 4 on (FR-018c).
+    // From format 4 on (FR-018c); keep_updates from format 5 on.
     let data_partition = table(Table::new(
         "the partition that holds the person's data on the installed system (FR-018c)",
         vec![
@@ -1001,7 +1014,18 @@ pub fn shape_for(format: i64) -> Table {
                     "the space the installed system leaves free at its end when it makes the file system there, for what another system keeps there",
                 ),
             ),
-        ],
+        ]
+        .into_iter()
+        .chain((format >= 5).then(|| {
+            opt(
+                "keep_updates",
+                Shape::Int {
+                    min: Some(1),
+                    doc: "how many earlier deployments the installed system keeps for going back; also the base updates the system partition is sized for (1 when absent)".into(),
+                },
+            )
+        }))
+        .collect(),
     ));
     let unit_value = table(Table::new(
         "a value unique to the unit that GlassineOS can't read itself (FR-017)",

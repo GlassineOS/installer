@@ -116,13 +116,13 @@ fn every_problem_at_once() {
 
 #[test]
 fn format_first() {
-    let t = mutate(&noteair(), "format = 4\nid = \"onyx-noteair\"", "id = \"onyx-noteair\"\nformat = 4");
+    let t = mutate(&noteair(), "format = 5\nid = \"onyx-noteair\"", "id = \"onyx-noteair\"\nformat = 5");
     rejects(&t, "format");
 }
 
 #[test]
 fn unknown_format() {
-    na("format = 4", "format = 0", "format");
+    na("format = 5", "format = 0", "format");
 }
 
 #[test]
@@ -134,8 +134,8 @@ fn not_toml() {
 /// nothing of it is read.
 #[test]
 fn newer_format_is_too_new_not_invalid() {
-    let t = mutate(&noteair(), "format = 4", "format = 5\nnew_key_of_format_5 = true");
-    assert!(matches!(load(&t), Loaded::TooNew { format: 5 }));
+    let t = mutate(&noteair(), "format = 5", "format = 6\nnew_key_of_format_6 = true");
+    assert!(matches!(load(&t), Loaded::TooNew { format: 6 }));
 }
 
 /// FR-003: a reader reads every earlier format too.
@@ -211,6 +211,26 @@ fn format_3_has_no_data_partition() {
     rejects(&t, "data_partition");
 }
 
+/// FR-003: format 4 still reads, and what format 5 added isn't in it.
+fn format4() -> String {
+    text("core/tests/fixtures/descriptions/onyx-noteair-format4.toml")
+}
+
+#[test]
+fn format_4_still_reads() {
+    let d = valid(&format4());
+    assert_eq!(d.format, 4);
+    let p = d.data_partition.unwrap();
+    assert_eq!(p.keep_updates, None);
+    assert_eq!(p.keep_updates(), Some(1));
+}
+
+#[test]
+fn format_4_has_no_keep_updates() {
+    let t = mutate(&format4(), "keep_free_at_end = \"16KiB\"\n", "keep_free_at_end = \"16KiB\"\nkeep_updates = 1\n");
+    rejects(&t, "data_partition.keep_updates");
+}
+
 // ---- FR-018c: the person's data partition -----------------------------------------
 
 #[test]
@@ -237,6 +257,19 @@ fn a_data_partition_keeps_a_fixed_size_free() {
         "keep_free_at_end = \"99999999999999999999TiB\"",
         "data_partition.keep_free_at_end",
     );
+}
+
+/// FR-018c: keep_updates is a whole number of 1 or more.
+#[test]
+fn a_data_partition_keeps_one_update_or_more() {
+    na("keep_updates = 1", "keep_updates = 0", "data_partition.keep_updates");
+    na("keep_updates = 1", "keep_updates = -2", "data_partition.keep_updates");
+    na("keep_updates = 1", "keep_updates = \"1\"", "data_partition.keep_updates");
+    na("keep_updates = 1", "keep_updates = 1.5", "data_partition.keep_updates");
+    let d = valid(&mutate(&noteair(), "keep_updates = 1", "keep_updates = 4"));
+    assert_eq!(d.data_partition.unwrap().keep_updates(), Some(4));
+    let d = valid(&mutate(&noteair(), "keep_updates = 1\n", ""));
+    assert_eq!(d.data_partition.unwrap().keep_updates(), Some(1));
 }
 
 #[test]

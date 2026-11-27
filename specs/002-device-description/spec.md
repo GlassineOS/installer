@@ -80,7 +80,7 @@ pinned to,
 ### File and versions
 
 - **FR-001**: A description is one TOML file. Its first key is `format`; this spec is
-  `format = 4`. The format includes its vocabularies: the fact keys signals read, the mode
+  `format = 5`. The format includes its vocabularies: the fact keys signals read, the mode
   kinds, step kinds, boot-setting kinds and capability ids, each with what its parameters
   are.
 - **FR-002**: A reader rejects a description with an unknown key, a missing required key, a
@@ -95,7 +95,8 @@ pinned to,
   | 1      | No `disk` role (FR-016a): each `back-up` and `replace` rule names its own backup, and no job must image whole disks. The classes `read` and `back-up` exist and mean `never-write`. A new partition has no `at_least`, a layout's partitions have no sizes (FR-014a), and device data is only named (FR-018). |
   | 2      | No `[[supplied_files]]` (FR-018b): a mode never needs a file from the person, and the emergency mode's boot ROM facts are not fact keys. |
   | 3      | No `[data_partition]` (FR-018c): a description doesn't say which partition holds the person's data or what stays free at its end. |
-  | 4      | This spec. |
+  | 4      | No `keep_updates` in `[data_partition]` (FR-018c): a device keeps one earlier deployment, and its system partition is sized for four base updates (FR-019a). |
+  | 5      | This spec. |
 - **FR-004**: The format, vocabularies included, is also published as a machine-readable
   schema for each `format`, so editors and the device repositories' own checks validate a
   description completely without the installer. The schema names every key of the format;
@@ -290,13 +291,17 @@ pinned to,
   installed system (`name`, as the installed system finds it in the table), and the space
   that stays free at its end when the installed system makes its file system there
   (`keep_free_at_end`, a fixed size in whole KiB; none when absent), for what another
-  system on the device keeps there. A rule selects it, and it is never the partition a
+  system on the device keeps there, and how many earlier deployments the installed system
+  keeps for going back (`keep_updates`, a whole number of 1 or more; 1 when absent; boot
+  spec 007): a device with little storage keeps one, a device with a lot keeps more. A
+  rule selects it, and it is never the partition a
   step creates for the system (`role = "system"`). The installed system's
   [glassine-deploy](https://github.com/GlassineOS/boot/blob/main/docs/deployments.md)
   configuration takes from it, and from that system partition, where the two
-  partitions are and what stays free (FR-030), except where the installer makes the
+  partitions are, what stays free and how many earlier deployments stay (FR-030), except where the installer makes the
   partitions (a PC): there the system finds both by the identities the installer writes
-  into the first kernel set's command line (001 FR-012a), so nothing is derived from it. A
+  into the first kernel set's command line (001 FR-012a), so nothing is derived from it
+  but the system partition's size (FR-019a). A
   description without it names no data partition, and nothing is derived from it.
 
 ### What an installation does
@@ -320,7 +325,8 @@ pinned to,
   computes it). For `base` the rule is: the system partition holds the base snapshots
   on btrfs, which share most of their blocks, and the kernel modules, so its least is one
   base's size as received on btrfs (its used bytes, not the compressed send stream), plus
-  64 MiB for each of 4 kept updates, plus the kernel modules' size, all × 1.25 for the
+  64 MiB for each of the device's `keep_updates` kept updates (FR-018c; 1 when absent),
+  plus the kernel modules' size, all × 1.25 for the
   file system's metadata and slack; at least 1 GiB, rounded up to a whole MiB. The
   person's home and Flatpak data are on the data partition and don't count. For `kernel`
   where it goes to a boot partition of files (a PC, boot 010 FR-029), the rule is: three
@@ -405,7 +411,7 @@ pinned to,
   system, the slot that system starts from, which is the slot the step that retires it
   marks unbootable when the person chooses not to keep it; where it names a data
   partition (FR-018c) that the system finds by name, glassine-deploy's device part: the system partition, the data
-  partition and the space kept free at its end, at
+  partition, the space kept free at its end and how many earlier deployments it keeps, at
   `/usr/share/glassine/deploy.conf.device`, which the device's package puts into
   `/etc/glassine/deploy.conf` with its own settings) is derived from the
   description when the device's package is built, and the build fails when a derived file
