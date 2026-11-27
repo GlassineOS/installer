@@ -1,0 +1,11 @@
+# The UEFI PC (x86-64)'s facts for glassine-deploy (GlassineOS/boot
+# conf/deploy.conf.example): the space the first start leaves free at the end of the
+# person's data partition and how many earlier deployments it keeps. SYSTEM_DEV and
+# USERDATA_DEV stay unset: the installer writes the two partitions' unique IDs into the
+# boot entry's command line (glassine.system=, glassine.userdata=) and glassine-deploy
+# finds them there. The device's package puts these lines into /etc/glassine/deploy.conf
+# with its own settings.
+# Derived from the device's description (/usr/share/glassine/device.toml) when its
+# package is built: change the description, never this file.
+USERDATA_RESERVE_KIB=0
+KEEP_UPDATES=4

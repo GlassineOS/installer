@@ -2,9 +2,10 @@
 //! The files of the installed system that state a device fact the description
 //! holds (spec 002 FR-030), derived from the description: the device-data list
 //! (FR-018, boot 006 FR-001), the slot of the system an installation keeps next
-//! to GlassineOS, and where glassine-deploy finds the system and the data
-//! partitions (FR-018c). The device's package runs this at its build, so no
-//! such file is written by hand.
+//! to GlassineOS, and glassine-deploy's device facts: where it finds the system
+//! and the data partitions, where they have fixed names, the space kept free and
+//! how many earlier deployments stay (FR-018c). The device's package runs this at
+//! its build, so no such file is written by hand.
 
 use crate::format1::{Description, DeviceDataFile, DeviceDatum};
 
@@ -213,20 +214,23 @@ pub fn system_partitions(d: &Description) -> Vec<String> {
 /// conf/deploy.conf.example): `SYSTEM_DEV`, `USERDATA_DEV`,
 /// `USERDATA_RESERVE_KIB` and `KEEP_UPDATES`, from the system partition the steps
 /// create and the data partition (FR-018c). `None` when the description names no data
-/// partition, and on a PC: there the installer writes the partitions' unique
-/// IDs into the boot entry's command line (001 FR-012a) and glassine-deploy
-/// uses the partitions the boot used, never names.
+/// partition. On a PC it has no `SYSTEM_DEV` and no `USERDATA_DEV`: there the
+/// installer writes the partitions' unique IDs into the boot entry's command line
+/// (001 FR-012a) and glassine-deploy, which leaves both empty when its
+/// configuration doesn't set them, takes them from that command line.
 pub fn deploy_conf(d: &Description) -> Result<Option<String>, String> {
     let Some(data) = &d.data_partition else {
         return Ok(None);
     };
-    if d.backend == "uefi-pc" {
-        return Ok(None);
-    }
-    let system = match system_partitions(d).as_slice() {
-        [one] => one.clone(),
-        [] => return Err("the description names a data partition but no step creates a system partition".into()),
-        more => return Err(format!("the system partition is ambiguous: the steps create {}", more.join(", "))),
+    let by_name = d.backend != "uefi-pc";
+    let system = if by_name {
+        match system_partitions(d).as_slice() {
+            [one] => Some(one.clone()),
+            [] => return Err("the description names a data partition but no step creates a system partition".into()),
+            more => return Err(format!("the system partition is ambiguous: the steps create {}", more.join(", "))),
+        }
+    } else {
+        None
     };
     let Some(reserve) = data.keep_free_kib() else {
         return Err(format!("data_partition.keep_free_at_end {:?} is not a size", data.keep_free_at_end));
@@ -235,14 +239,20 @@ pub fn deploy_conf(d: &Description) -> Result<Option<String>, String> {
         return Err(format!("data_partition.keep_updates {:?} is not 1 or more", data.keep_updates));
     };
     let mut o = String::new();
+    let facts = if by_name {
+        "the system partition, the person's data partition, the space the first start leaves free at \
+         the data partition's end and how many earlier deployments it keeps"
+    } else {
+        "the space the first start leaves free at the end of the person's data partition and how many \
+         earlier deployments it keeps. SYSTEM_DEV and USERDATA_DEV stay unset: the installer writes \
+         the two partitions' unique IDs into the boot entry's command line (glassine.system=, \
+         glassine.userdata=) and glassine-deploy finds them there"
+    };
     comment(
         &mut o,
         &format!(
-            "The {}'s facts for glassine-deploy (GlassineOS/boot conf/deploy.conf.example): the \
-             system partition, the person's data partition, the space the first start leaves \
-             free at the data partition's end and how many earlier deployments it keeps. The \
-             device's package puts these lines into \
-             /etc/glassine/deploy.conf with its own settings.",
+            "The {}'s facts for glassine-deploy (GlassineOS/boot conf/deploy.conf.example): {facts}. \
+             The device's package puts these lines into /etc/glassine/deploy.conf with its own settings.",
             d.name
         ),
     );
@@ -250,8 +260,10 @@ pub fn deploy_conf(d: &Description) -> Result<Option<String>, String> {
         &mut o,
         &format!("Derived from the device's description ({INSTALLED_AT}) when its package is built: change the description, never this file."),
     );
-    o.push_str(&format!("SYSTEM_DEV=/dev/disk/by-partlabel/{system}\n"));
-    o.push_str(&format!("USERDATA_DEV=/dev/disk/by-partlabel/{}\n", data.name));
+    if let Some(system) = system {
+        o.push_str(&format!("SYSTEM_DEV=/dev/disk/by-partlabel/{system}\n"));
+        o.push_str(&format!("USERDATA_DEV=/dev/disk/by-partlabel/{}\n", data.name));
+    }
     o.push_str(&format!("USERDATA_RESERVE_KIB={reserve}\n"));
     o.push_str(&format!("KEEP_UPDATES={keep}\n"));
     Ok(Some(o))

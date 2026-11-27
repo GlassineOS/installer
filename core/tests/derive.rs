@@ -130,14 +130,51 @@ fn the_derived_files_say_what_the_hand_written_ones_did() {
     assert_eq!(kept_system_slot(&d).unwrap().as_deref(), Some("a"));
 }
 
-/// A PC names a data partition, but its partitions are found by the IDs on
-/// the command line, not by names: no deploy.conf.device.
+/// A PC names a data partition, but its partitions are found by the IDs on the
+/// command line, not by names: its deploy.conf.device sets neither SYSTEM_DEV nor
+/// USERDATA_DEV (glassine-deploy leaves both empty and reads the command line), only
+/// the space kept free and how many earlier deployments stay. Nothing else is derived.
 #[test]
-fn a_pc_derives_nothing() {
+fn a_pc_derives_its_deploy_facts_only() {
     let d = valid(&pc());
     assert_eq!(d.data_partition.as_ref().map(|p| p.name.as_str()), Some("glassine-userdata"));
-    let files: Vec<&str> = derive(&d).unwrap().iter().map(|f| f.file).collect();
-    assert!(files.is_empty(), "{files:?}");
+    let files = derive(&d).unwrap();
+    let names: Vec<_> = files.iter().map(|f| (f.file, f.installed_at)).collect();
+    assert_eq!(names, [("deploy.conf.device", "/usr/share/glassine/deploy.conf.device")]);
+    golden("core/tests/golden/uefi-pc.deploy.conf.device", &files[0].content);
+    assert_eq!(entries(&files[0].content), [["USERDATA_RESERVE_KIB=0"], ["KEEP_UPDATES=4"]]);
+    assert!(!files[0].content.contains("by-partlabel"), "{}", files[0].content);
+}
+
+/// The PC's keep_updates and keep_free_at_end go through as the Note Air's do.
+#[test]
+fn a_pcs_deploy_facts_follow_its_description() {
+    let t = mutate(&pc(), "keep_updates = 4", "keep_updates = 2\nkeep_free_at_end = \"1MiB\"");
+    let c = deploy_conf(&valid(&t)).unwrap().unwrap();
+    assert_eq!(entries(&c), [["USERDATA_RESERVE_KIB=1024"], ["KEEP_UPDATES=2"]]);
+    let t = mutate(&pc(), "keep_updates = 4\n", "");
+    let c = deploy_conf(&valid(&t)).unwrap().unwrap();
+    assert!(c.lines().any(|l| l == "KEEP_UPDATES=1"), "{c}");
+}
+
+/// The PC's derived lines read as glassine-deploy sources its configuration: a key
+/// the file doesn't set keeps glassine-deploy's default, so SYSTEM_DEV and
+/// USERDATA_DEV stay empty for the command line to fill.
+#[test]
+fn a_pcs_deploy_facts_leave_the_partitions_empty() {
+    let c = deploy_conf(&valid(&pc())).unwrap().unwrap();
+    let out = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(
+            "SYSTEM_DEV='' USERDATA_DEV='' USERDATA_RESERVE_KIB='' KEEP_UPDATES=1; eval \"$1\"; \
+              printf '%s|%s|%s|%s' \"$SYSTEM_DEV\" \"$USERDATA_DEV\" \"$USERDATA_RESERVE_KIB\" \"$KEEP_UPDATES\"",
+        )
+        .arg("sh")
+        .arg(&c)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "||0|4");
 }
 
 #[test]

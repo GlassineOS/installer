@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 [package]
 name = "glassine-device-files"
-description = "Derives the installed system's device files (device-data list, kept system's slot) from a device description"
+description = "Derives the installed system's device files (device-data list, kept system's slot, glassine-deploy's device facts) from a device description"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
